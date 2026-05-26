@@ -1,0 +1,19 @@
+add_library(libdragon_c SHARED
+    dragon_c.cpp
+)
+
+set_target_properties(libdragon_c PROPERTIES
+    OUTPUT_NAME dragon_c
+)
+
+target_include_directories(libdragon_c
+    PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+)
+
+target_link_libraries(libdragon_c
+    PRIVATE
+    dragon::libdragon
+)
