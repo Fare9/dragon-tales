@@ -67,3 +67,11 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# CLion
+cmake-build-debug/
+.idea/
+
+# Other stuff
+ToDo/
+ANALYZE/
