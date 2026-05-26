@@ -1,6 +1,7 @@
 #include "dragon_c.h"
 
 #include <dragon/Architecture.hpp>
+#include <dragon/Assembler.hpp>
 #include <dragon/BasicBlock.hpp>
 #include <dragon/Configuration.hpp>
 #include <dragon/Disassembler.hpp>
@@ -29,6 +30,34 @@ static dragon::Architecture to_arch(dragon_architecture_t a) {
       return dragon::Architecture::Unknown;
   }
 }
+
+// -- dragon_asm_t — full definition
+struct dragon_asm {
+    dragon::Assembler assembler;
+};
+
+dragon_asm_t* dragon_asm_create(dragon_architecture_t arch) {
+    dragon::Configuration config;
+    return new dragon_asm{ dragon::Assembler(to_arch(arch), config) };
+}
+
+void dragon_asm_destroy(dragon_asm_t* a) { delete a; }
+
+int dragon_asm_valid(const dragon_asm_t* a) {
+    return a && a->assembler.isValid() ? 1 : 0;
+}
+
+uint8_t* dragon_asm_assemble(dragon_asm_t* a, const char* source, size_t* out_len) {
+    if (!a || !source || !out_len) return nullptr;
+    auto bytes = a->assembler.assemble(source);
+    if (bytes.empty()) { *out_len = 0; return nullptr; }
+    auto* buf = new uint8_t[bytes.size()];
+    std::copy(bytes.begin(), bytes.end(), buf);
+    *out_len = bytes.size();
+    return buf;
+}
+
+void dragon_bytes_free(uint8_t* bytes) { delete[] bytes; }
 
 // -- dragon_disasm_t — full definition (incomplete in the C header)
 struct dragon_disasm {

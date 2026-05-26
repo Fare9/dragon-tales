@@ -272,6 +272,45 @@ class Graph:
     def __repr__(self):
         return f'<Graph instructions={len(self)}>'
 
+# ── Assembler ─────────────────────────────────────────────────────────────────
+
+class Assembler:
+    """Assembles source text to raw bytes."""
+
+    def __init__(self, arch=Architecture.X86_64):
+        self._ptr = lib.dragon_asm_create(arch)
+        if self._ptr == ffi.NULL:
+            raise RuntimeError('failed to create assembler')
+
+    def __del__(self):
+        if self._ptr:
+            lib.dragon_asm_destroy(self._ptr)
+            self._ptr = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.__del__()
+
+    @property
+    def is_valid(self):
+        return bool(lib.dragon_asm_valid(self._ptr))
+
+    def assemble(self, source):
+        """Assemble source text and return bytes. Raises RuntimeError on failure."""
+        out_len = ffi.new('size_t *')
+        ptr = lib.dragon_asm_assemble(self._ptr, source.encode(), out_len)
+        if ptr == ffi.NULL:
+            raise RuntimeError('assembly failed')
+        try:
+            return bytes(ffi.buffer(ptr, out_len[0]))
+        finally:
+            lib.dragon_bytes_free(ptr)
+
+    def __repr__(self):
+        return f'<Assembler valid={self.is_valid}>'
+
 # ── top-level helpers ─────────────────────────────────────────────────────────
 
 def disassemble(bytes_data, base_address=0x0,

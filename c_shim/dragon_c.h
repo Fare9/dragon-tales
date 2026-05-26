@@ -113,6 +113,21 @@
   void dragon_instruction_each_callee(const dragon_instruction_t* i,
       void (*cb)(uint64_t addr, void* user), void* user);
 
+  // -- Assembler ----------------------------------------------------------------
+
+  typedef struct dragon_asm dragon_asm_t;
+
+  dragon_asm_t* dragon_asm_create(dragon_architecture_t arch);
+  void          dragon_asm_destroy(dragon_asm_t* a);
+  int           dragon_asm_valid(const dragon_asm_t* a);
+
+  // Assemble source text to raw bytes. Returns a heap-allocated buffer that
+  // the caller must free with dragon_bytes_free(). Returns NULL on failure.
+  uint8_t* dragon_asm_assemble(dragon_asm_t* a, const char* source, size_t* out_len);
+
+  // Free a buffer returned by dragon_asm_assemble.
+  void dragon_bytes_free(uint8_t* bytes);
+
   // -- BasicBlock ----------------------------------------------------------------
 
   void     dragon_block_destroy(dragon_block_t* b);
