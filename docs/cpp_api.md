@@ -19,15 +19,66 @@ Link against `libdragon`.
 
 ## Configuration
 
-`Configuration` groups the settings shared by the disassembler and assembler.
+`Configuration` groups all settings shared by the disassembler and assembler:
+syntax, disassembly strategy, and the LLVM target knobs `cpu` and `features`.
 
 ```cpp
 #include <dragon/Configuration.hpp>
 
 dragon::Configuration config;
-config.syntax               = dragon::Syntax::INTEL;           // default
+config.syntax               = dragon::Syntax::INTEL;                    // default
 config.disassemblyStrategy  = dragon::DisassemblyStrategy::LINEAR_SWEEP; // default
+// config.cpu and config.features default to "" → LLVM "generic" baseline
 ```
+
+### Targeting a specific CPU or ISA revision
+
+`cpu` selects a micro-architecture by name; `features` applies fine-grained
+feature flags on top. Both are forwarded directly to LLVM's `MCSubtargetInfo`.
+
+```cpp
+// ARM32 — enable BX/BLX (requires ARMv4T, not present in the generic baseline)
+dragon::Configuration arm32v5;
+arm32v5.cpu = "arm926ej-s";   // ARMv5TEJ
+
+// ARM32 — target ARMv7-A with NEON via feature flags instead of a CPU name
+dragon::Configuration arm32v7;
+arm32v7.features = "+v7,+neon";
+
+// ARM64 — no special setup needed; the generic AArch64 baseline is complete
+dragon::Configuration arm64;  // cpu and features left empty
+
+// x86-64 — enable AVX-512 for a specific microarchitecture
+dragon::Configuration x86avx512;
+x86avx512.cpu = "skylake-avx512";
+
+// RISC-V 64 — enable multiply, atomics and compressed extensions
+dragon::Configuration rv64mac;
+rv64mac.features = "+m,+a,+c";
+```
+
+**cpu examples by architecture**
+
+| Architecture | CPU string | Enables |
+|---|---|---|
+| ARM32 | `"arm926ej-s"` | ARMv5TEJ — BX, BLX |
+| ARM32 | `"cortex-a8"` | ARMv7-A, Thumb2, NEON, VFPv3 |
+| ARM64 | `"cortex-a53"` | AArch64 baseline |
+| ARM64 | `"apple-m1"` | AArch64 + Apple extensions |
+| x86-64 | `"skylake"` | AVX2, BMI2, AES |
+| x86-64 | `"znver3"` | AMD Zen 3 |
+| RISC-V 64 | `"sifive-u74"` | RV64GC |
+
+**features examples**
+
+| String | Meaning |
+|---|---|
+| `"+v4t"` | ARM32: add BX (ARMv4T) |
+| `"+v7,+neon"` | ARM32: ARMv7 + NEON |
+| `"+sve"` | ARM64: Scalable Vector Extension |
+| `"+avx2"` | x86: AVX2 |
+| `"+m,+a,+c"` | RISC-V: multiply, atomics, compressed |
+| `"+f,+d"` | RISC-V: single- and double-precision FP |
 
 ---
 

@@ -69,6 +69,22 @@ dragon_strategy_t dragon_config_strategy(const dragon_config_t* c) {
   return from_strategy(c->config.disassemblyStrategy);
 }
 
+void dragon_config_set_cpu(dragon_config_t* c, const char* cpu) {
+  if (c) c->config.cpu = cpu ? cpu : "";
+}
+
+const char* dragon_config_cpu(const dragon_config_t* c) {
+  return c ? c->config.cpu.c_str() : "";
+}
+
+void dragon_config_set_features(dragon_config_t* c, const char* features) {
+  if (c) c->config.features = features ? features : "";
+}
+
+const char* dragon_config_features(const dragon_config_t* c) {
+  return c ? c->config.features.c_str() : "";
+}
+
 // -- dragon_asm_t — full definition
 struct dragon_asm {
     dragon::Assembler assembler;

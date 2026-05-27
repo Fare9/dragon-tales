@@ -19,24 +19,27 @@ dragon::Disassembler::Disassembler(Architecture architecture,
   const unsigned syntaxVariant =
           (configuration_.syntax == Syntax::INTEL) ? 1 : 0;
 
+  const std::string &cpu      = configuration_.cpu;
+  const std::string &features = configuration_.features;
+
   switch (architecture) {
     case Architecture::X86_32:
-      impl_->target = internal::initX86(false, syntaxVariant);
+      impl_->target = internal::initX86(false, syntaxVariant, cpu, features);
       break;
     case Architecture::X86_64:
-      impl_->target = internal::initX86(true, syntaxVariant);
+      impl_->target = internal::initX86(true, syntaxVariant, cpu, features);
       break;
     case Architecture::ARM32:
-      impl_->target = internal::initARM(false);
+      impl_->target = internal::initARM(false, cpu, features);
       break;
     case Architecture::ARM64:
-      impl_->target = internal::initARM(true);
+      impl_->target = internal::initARM(true, cpu, features);
       break;
     case Architecture::RISCV32:
-      impl_->target = internal::initRISCV(false);
+      impl_->target = internal::initRISCV(false, cpu, features);
       break;
     case Architecture::RISCV64:
-      impl_->target = internal::initRISCV(true);
+      impl_->target = internal::initRISCV(true, cpu, features);
       break;
     default:
       break;

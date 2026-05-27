@@ -7,10 +7,21 @@
 
 namespace dragon::internal {
 
-/// Initialization function for LLVM objects for ARM both
-/// for 32, and for 64 bits. We only need to call this
-/// function once.
-[[nodiscard]] inline LLVMAssemblerTarget initARMAssembler(bool is64bit) {
+/// Initialize LLVM for ARM/AArch64 assembly and return a populated target.
+/// LLVM registration is performed once via std::call_once — thread safe.
+///
+/// @param is64bit  true for AArch64, false for ARM32.
+/// @param cpu      LLVM CPU name.  Empty → "generic".
+///                 ARM32 examples: "arm926ej-s" (ARMv5TEJ, enables BX/BLX),
+///                                 "cortex-a8"  (ARMv7-A, Thumb2, NEON).
+///                 ARM64 examples: "cortex-a53", "apple-m1".
+/// @param features LLVM feature string.  Empty → defaults implied by cpu.
+///                 ARM32 examples: "+v4t" (adds BX), "+v7,+neon".
+///                 ARM64 examples: "+sve", "+crypto".
+[[nodiscard]] inline LLVMAssemblerTarget initARMAssembler(
+    bool               is64bit,
+    const std::string &cpu      = "",
+    const std::string &features = "") {
   static std::once_flag flag;
   std::call_once(flag, [] {
     LLVMInitializeARMTargetInfo();
@@ -29,7 +40,7 @@ namespace dragon::internal {
   const std::string triple =
           is64bit ? "aarch64-unknown-unknown" : "arm-unknown-unknown";
 
-  return buildAssemblerTarget(triple);
+  return buildAssemblerTarget(triple, cpu.empty() ? "generic" : cpu, features);
 }
 
 } // namespace dragon::internal

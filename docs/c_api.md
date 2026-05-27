@@ -11,7 +11,8 @@ Include `dragon_c.h` and link against `libdragon_c`.
 
 ## Configuration
 
-`dragon_config_t` is an opaque handle that groups syntax and disassembly strategy.
+`dragon_config_t` is an opaque handle that groups syntax, disassembly strategy,
+and the LLVM target knobs `cpu` and `features`.
 It must be destroyed with `dragon_config_destroy` when no longer needed.
 
 ```c
@@ -24,6 +25,44 @@ dragon_strategy_t r = dragon_config_strategy(config);
 
 dragon_config_destroy(config);
 ```
+
+### Targeting a specific CPU or ISA revision
+
+`dragon_config_set_cpu` and `dragon_config_set_features` forward strings
+directly to LLVM's `MCSubtargetInfo`. Both default to `""` (LLVM "generic"
+baseline). Set them before passing the config to a disassembler or assembler.
+
+```c
+// ARM32 — enable BX/BLX (ARMv4T, not present in the generic baseline)
+dragon_config_t* config = dragon_config_create(DRAGON_SYNTAX_INTEL,
+                                               DRAGON_STRATEGY_LINEAR_SWEEP);
+dragon_config_set_cpu(config, "arm926ej-s");   // ARMv5TEJ
+dragon_disasm_t* dis = dragon_disasm_create(DRAGON_ARCH_ARM32, config);
+dragon_config_destroy(config);
+
+// ARM32 — use feature flags instead of a CPU name
+dragon_config_t* config = dragon_config_create(DRAGON_SYNTAX_INTEL,
+                                               DRAGON_STRATEGY_LINEAR_SWEEP);
+dragon_config_set_features(config, "+v7,+neon");
+dragon_disasm_t* dis = dragon_disasm_create(DRAGON_ARCH_ARM32, config);
+dragon_config_destroy(config);
+
+// RISC-V 64 — multiply, atomics, compressed extensions
+dragon_config_t* config = dragon_config_create(DRAGON_SYNTAX_INTEL,
+                                               DRAGON_STRATEGY_LINEAR_SWEEP);
+dragon_config_set_features(config, "+m,+a,+c");
+dragon_disasm_t* dis = dragon_disasm_create(DRAGON_ARCH_RISCV64, config);
+dragon_config_destroy(config);
+```
+
+**API reference**
+
+| Function | Description |
+|---|---|
+| `dragon_config_set_cpu(c, "cortex-a8")` | Set CPU name |
+| `dragon_config_cpu(c)` | Get current CPU name (`""` = generic) |
+| `dragon_config_set_features(c, "+v4t")` | Set feature string |
+| `dragon_config_features(c)` | Get current feature string |
 
 ---
 

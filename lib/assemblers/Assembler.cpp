@@ -41,24 +41,27 @@ dragon::Assembler::Assembler(Architecture architecture,
                              const Configuration &config) :
     architecture_(architecture), configuration_(config),
     impl_(std::make_unique<Impl>()) {
+  const std::string &cpu      = configuration_.cpu;
+  const std::string &features = configuration_.features;
+
   switch (architecture) {
     case Architecture::X86_32:
-      impl_->target = internal::initX86Assembler(false);
+      impl_->target = internal::initX86Assembler(false, cpu, features);
       break;
     case Architecture::X86_64:
-      impl_->target = internal::initX86Assembler(true);
+      impl_->target = internal::initX86Assembler(true, cpu, features);
       break;
     case Architecture::ARM32:
-      impl_->target = internal::initARMAssembler(false);
+      impl_->target = internal::initARMAssembler(false, cpu, features);
       break;
     case Architecture::ARM64:
-      impl_->target = internal::initARMAssembler(true);
+      impl_->target = internal::initARMAssembler(true, cpu, features);
       break;
     case Architecture::RISCV32:
-      impl_->target = internal::initRISCVAssembler(false);
+      impl_->target = internal::initRISCVAssembler(false, cpu, features);
       break;
     case Architecture::RISCV64:
-      impl_->target = internal::initRISCVAssembler(true);
+      impl_->target = internal::initRISCVAssembler(true, cpu, features);
       break;
     default:
       break;

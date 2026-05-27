@@ -48,6 +48,18 @@
   dragon_syntax_t   dragon_config_syntax(const dragon_config_t* c);
   dragon_strategy_t dragon_config_strategy(const dragon_config_t* c);
 
+  // LLVM CPU name forwarded to MCSubtargetInfo (e.g. "cortex-a8", "skylake").
+  // An empty / NULL value keeps the "generic" baseline for the target triple.
+  // ARM32 examples: "arm926ej-s" enables BX/BLX; "cortex-a8" enables Thumb2.
+  void        dragon_config_set_cpu(dragon_config_t* c, const char* cpu);
+  const char* dragon_config_cpu(const dragon_config_t* c);
+
+  // LLVM feature string forwarded to MCSubtargetInfo (e.g. "+v4t", "+avx2").
+  // Comma-separated list; '+' enables a feature, '-' disables it.
+  // ARM32 example: "+v4t" adds the BX instruction; "+v7,+neon" targets ARMv7.
+  void        dragon_config_set_features(dragon_config_t* c, const char* features);
+  const char* dragon_config_features(const dragon_config_t* c);
+
   // -- Graph ---
 
   dragon_graph_t* dragon_graph_create(dragon_architecture_t arch);

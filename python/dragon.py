@@ -321,12 +321,41 @@ class Graph:
 # -- Configuration -------------------------------------------------------------
 
 class Configuration:
-    """Holds syntax and disassembly strategy settings."""
+    """Holds syntax, disassembly strategy, and LLVM target knobs.
 
-    def __init__(self, syntax=Syntax.INTEL, strategy=Strategy.LINEAR_SWEEP):
+    Parameters
+    ----------
+    syntax : Syntax
+        Assembly syntax used for printing (INTEL or ATT).
+    strategy : Strategy
+        Disassembly algorithm (LINEAR_SWEEP or RECURSIVE_TRAVERSAL).
+    cpu : str
+        LLVM CPU name forwarded to MCSubtargetInfo. An empty string selects
+        the "generic" baseline for the target triple, which may omit optional
+        ISA extensions. Examples:
+            "cortex-a8"   -- ARMv7-A with Thumb2 and NEON
+            "arm926ej-s"  -- ARMv5TEJ, enables BX/BLX on ARM32
+            "skylake"     -- x86-64 with AVX2, BMI2, etc.
+            "sifive-u74"  -- RISC-V 64 with M/A/C extensions
+    features : str
+        LLVM feature string forwarded to MCSubtargetInfo. Comma-separated
+        list of features, each prefixed with '+' (enable) or '-' (disable).
+        Combined with those implied by `cpu`. Examples:
+            "+v4t"        -- enable ARMv4T on ARM32 (adds BX instruction)
+            "+v7,+neon"   -- ARMv7 with NEON
+            "+avx2"       -- enable AVX2 on x86
+            "+m,+a,+c"    -- RISC-V multiply, atomics, compressed
+    """
+
+    def __init__(self, syntax=Syntax.INTEL, strategy=Strategy.LINEAR_SWEEP,
+                 cpu='', features=''):
         self._ptr = lib.dragon_config_create(syntax, strategy)
         if self._ptr == ffi.NULL:
             raise RuntimeError('failed to create configuration')
+        if cpu:
+            lib.dragon_config_set_cpu(self._ptr, cpu.encode())
+        if features:
+            lib.dragon_config_set_features(self._ptr, features.encode())
 
     def __del__(self):
         if self._ptr:
@@ -347,8 +376,28 @@ class Configuration:
     def strategy(self):
         return lib.dragon_config_strategy(self._ptr)
 
+    @property
+    def cpu(self):
+        """LLVM CPU name currently set (empty string means 'generic')."""
+        return ffi.string(lib.dragon_config_cpu(self._ptr)).decode()
+
+    @cpu.setter
+    def cpu(self, value):
+        lib.dragon_config_set_cpu(self._ptr, value.encode())
+
+    @property
+    def features(self):
+        """LLVM feature string currently set."""
+        return ffi.string(lib.dragon_config_features(self._ptr)).decode()
+
+    @features.setter
+    def features(self, value):
+        lib.dragon_config_set_features(self._ptr, value.encode())
+
     def __repr__(self):
-        return f'<Configuration syntax={self.syntax} strategy={self.strategy}>'
+        cpu_part = f' cpu={self.cpu!r}' if self.cpu else ''
+        feat_part = f' features={self.features!r}' if self.features else ''
+        return f'<Configuration syntax={self.syntax} strategy={self.strategy}{cpu_part}{feat_part}>'
 
 
 # -- Disassembler --------------------------------------------------------------
