@@ -7,6 +7,9 @@
 
 namespace dragon::internal {
 
+/// Initialization function for LLVM objects for ARM both
+/// for 32, and for 64 bits. We only need to call this
+/// function once.
 [[nodiscard]] inline LLVMAssemblerTarget initARMAssembler(bool is64bit) {
   static std::once_flag flag;
   std::call_once(flag, [] {
@@ -24,7 +27,7 @@ namespace dragon::internal {
   });
 
   const std::string triple =
-      is64bit ? "aarch64-unknown-unknown" : "arm-unknown-unknown";
+          is64bit ? "aarch64-unknown-unknown" : "arm-unknown-unknown";
 
   return buildAssemblerTarget(triple);
 }

@@ -25,8 +25,12 @@
 // Impl — holds the LLVM assembler target state, hidden from the public header
 // -----------------------------------------------------------------------
 
+/// The Impl for Assembler contains the objects to use LLVM
+/// for the assembly process of instructions, as stated in
+/// the documentation, context, backend, and emitter are
+/// recreated per assemble()
 struct dragon::Assembler::Impl {
-  LLVMAssemblerTarget target;
+  LLVMAssemblerTarget target; ///< LLVM objects to create the assemblers.
 };
 
 // -----------------------------------------------------------------------
@@ -73,11 +77,13 @@ dragon::Assembler::Assembler(Assembler &&) noexcept = default;
 // -----------------------------------------------------------------------
 
 bool dragon::Assembler::isValid() const noexcept {
+  // Check minimum information to know if the assembler
+  // has been created properly.
   return impl_ && impl_->target.instrInfo != nullptr;
 }
 
 // -----------------------------------------------------------------------
-// extractTextSection — pull raw bytes from ELF .text
+// extractTextSection - pull raw bytes from ELF .text
 //  This is a needed step because LLVM when it generates bytes from
 //  assemble instructions, it assembles them into an object file, so
 //  we need to extract the bytes from it.
@@ -85,9 +91,14 @@ bool dragon::Assembler::isValid() const noexcept {
 
 static std::vector<std::uint8_t>
 extractTextSection(const llvm::SmallVector<char, 4096> &buffer) {
+  // generate a memory buffer object from the provided data, in that
+  // way, once we have worked with it, we don't need to care about
+  // memory manipulation
   auto memBuffer = llvm::MemoryBuffer::getMemBuffer(
           llvm::StringRef(buffer.data(), buffer.size()), "<dragon-elf>", false);
-
+  // ObjectFile is an agnostic representation of different object files
+  // in our case, here it will be an ELF file created by the assembler
+  // when assembling instructions
   auto objFileOrErr = llvm::object::ObjectFile::createObjectFile(*memBuffer);
   if (!objFileOrErr) {
     llvm::consumeError(objFileOrErr.takeError());
@@ -104,7 +115,7 @@ extractTextSection(const llvm::SmallVector<char, 4096> &buffer) {
     auto contentsOrErr = section.getContents();
     if (!contentsOrErr)
       continue;
-
+    // Return the content of the section as a vector of bytes.
     return {contentsOrErr->bytes_begin(), contentsOrErr->bytes_end()};
   }
   return {};
@@ -119,6 +130,15 @@ dragon::Assembler::assemble(std::string_view text) const {
   if (!isValid())
     return {};
 
+  // For x86, prepend the Intel-syntax directive so the user doesn't have to.
+  // AT&T is the GNU assembler default, so no prefix is needed for ATT.
+  std::string patchedSource;
+  const bool isX86 = architecture_ == Architecture::X86_32 ||
+                     architecture_ == Architecture::X86_64;
+  if (isX86 && configuration_.syntax == Syntax::INTEL)
+    patchedSource = ".intel_syntax noprefix\n";
+  patchedSource += text;
+  // All the LLVM objects depending on the architecture
   const auto &target = impl_->target;
   const std::string &triple = target.triple;
 
@@ -127,7 +147,7 @@ dragon::Assembler::assemble(std::string_view text) const {
           llvm::TargetRegistry::lookupTarget(triple, error);
   if (!llvmTarget)
     return {};
-
+  // Buffer and stream where the assembled code will be written.
   llvm::SmallVector<char, 4096> outputBuffer;
   llvm::raw_svector_ostream outputStream(outputBuffer);
 
@@ -140,7 +160,7 @@ dragon::Assembler::assemble(std::string_view text) const {
   objectFileInfo->initMCObjectFileInfo(*context, false);
   context->setObjectFileInfo(objectFileInfo.get());
 
-  // Backend and emitter consumed by streamer — recreate per call
+  // Backend and emitter consumed by streamer - recreate per call
   llvm::MCTargetOptions targetOptions;
   auto backend =
           std::unique_ptr<llvm::MCAsmBackend>(llvmTarget->createMCAsmBackend(
@@ -168,10 +188,13 @@ dragon::Assembler::assemble(std::string_view text) const {
     return {};
 
   auto srcBuffer = llvm::MemoryBuffer::getMemBuffer(
-          llvm::StringRef(text.data(), text.size()), "<dragon-asm>", false);
+          llvm::StringRef(patchedSource.data(), patchedSource.size()),
+          "<dragon-asm>", false);
   llvm::SourceMgr srcMgr;
   srcMgr.AddNewSourceBuffer(std::move(srcBuffer), llvm::SMLoc());
-
+  // Parser that will be in charge of working with user provided input
+  // backend, emitter, streamer are consumed, and cannot be used anymore
+  // after the run call.
   auto parser = std::unique_ptr<llvm::MCAsmParser>(llvm::createMCAsmParser(
           srcMgr, *context, *streamer, *target.asmInfo));
   if (!parser)

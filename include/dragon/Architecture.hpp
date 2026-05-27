@@ -17,10 +17,11 @@ enum class Architecture : uint8_t {
   ARM32, ///< arm architecture 32 bits
   ARM64, ///< arm architecture 64 bits
   // RISCV family
-  RISCV32,
-  RISCV64,
+  RISCV32, ///< riscv architecture 32 bits
+  RISCV64, ///< riscv architecture 64 bits
 };
 
+/// Get a string representation of the previous architectures.
 constexpr std::string ArchitectureName(Architecture architecture);
 
 } // namespace dragon

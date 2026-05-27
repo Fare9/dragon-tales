@@ -51,7 +51,7 @@ class Instruction {
   [[nodiscard]] bool isTrap() const { return isTrap_; }
   [[nodiscard]] bool hasIndirectTarget() const { return hasIndirectTarget_; }
 
-  // Setters — the disassembler fills these in after initial decode
+  // Setters - the disassembler fills these in after initial decode
   void setBlockStart(bool v) { isBlockStart_ = v; }
   void setFunctionStart(bool v) { isFunctionStart_ = v; }
   void setPrologue(bool v) { isPrologue_ = v; }

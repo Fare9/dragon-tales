@@ -11,7 +11,17 @@
 
 #include <vector>
 
-// -- arch enum mapping
+// -- helpers to convert C++ types back to C enum values
+static dragon_syntax_t from_syntax(dragon::Syntax s) {
+  return s == dragon::Syntax::ATT ? DRAGON_SYNTAX_ATT : DRAGON_SYNTAX_INTEL;
+}
+static dragon_strategy_t from_strategy(dragon::DisassemblyStrategy s) {
+  return s == dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL
+      ? DRAGON_STRATEGY_RECURSIVE_TRAVERSAL
+      : DRAGON_STRATEGY_LINEAR_SWEEP;
+}
+
+// -- enum mappings
 static dragon::Architecture to_arch(dragon_architecture_t a) {
   switch (a) {
     case DRAGON_ARCH_X86_32:
@@ -31,14 +41,42 @@ static dragon::Architecture to_arch(dragon_architecture_t a) {
   }
 }
 
+static dragon::Syntax to_syntax(dragon_syntax_t s) {
+  return s == DRAGON_SYNTAX_ATT ? dragon::Syntax::ATT : dragon::Syntax::INTEL;
+}
+
+// -- dragon_config — full definition
+struct dragon_config {
+  dragon::Configuration config;
+};
+
+dragon_config_t* dragon_config_create(dragon_syntax_t syntax, dragon_strategy_t strategy) {
+  dragon::Configuration cfg;
+  cfg.syntax = to_syntax(syntax);
+  cfg.disassemblyStrategy = (strategy == DRAGON_STRATEGY_RECURSIVE_TRAVERSAL)
+      ? dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL
+      : dragon::DisassemblyStrategy::LINEAR_SWEEP;
+  return new dragon_config{cfg};
+}
+
+void dragon_config_destroy(dragon_config_t* c) { delete c; }
+
+dragon_syntax_t dragon_config_syntax(const dragon_config_t* c) {
+  return from_syntax(c->config.syntax);
+}
+
+dragon_strategy_t dragon_config_strategy(const dragon_config_t* c) {
+  return from_strategy(c->config.disassemblyStrategy);
+}
+
 // -- dragon_asm_t — full definition
 struct dragon_asm {
     dragon::Assembler assembler;
 };
 
-dragon_asm_t* dragon_asm_create(dragon_architecture_t arch) {
-    dragon::Configuration config;
-    return new dragon_asm{ dragon::Assembler(to_arch(arch), config) };
+dragon_asm_t* dragon_asm_create(dragon_architecture_t arch, const dragon_config_t* config) {
+    dragon::Configuration cfg = config ? config->config : dragon::Configuration{};
+    return new dragon_asm{ dragon::Assembler(to_arch(arch), cfg) };
 }
 
 void dragon_asm_destroy(dragon_asm_t* a) { delete a; }
@@ -59,10 +97,10 @@ uint8_t* dragon_asm_assemble(dragon_asm_t* a, const char* source, size_t* out_le
 
 void dragon_bytes_free(uint8_t* bytes) { delete[] bytes; }
 
-// -- dragon_disasm_t — full definition (incomplete in the C header)
+// -- dragon_disasm_t — full definition
 struct dragon_disasm {
-  std::vector<std::uint8_t> image;
-  std::uint64_t image_base;
+  dragon::Architecture arch;
+  dragon::Configuration config;
   dragon::Disassembler disassembler;
 };
 
@@ -145,35 +183,11 @@ void dragon_graph_each_function_address(const dragon_graph_t *g,
 // -- Disassembler
 // --------------------------------------------------------------
 
-dragon_graph_t *dragon_disasm_bytes(dragon_architecture_t arch,
-                                    dragon_strategy_t strategy,
-                                    const uint8_t *bytes, size_t len,
-                                    uint64_t base_address) {
-  dragon::Configuration config;
-  config.disassemblyStrategy =
-          (strategy == DRAGON_STRATEGY_RECURSIVE_TRAVERSAL)
-                  ? dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL
-                  : dragon::DisassemblyStrategy::LINEAR_SWEEP;
-
-  dragon::Disassembler dis(to_arch(arch), config);
-  if (!dis.isValid())
-    return nullptr;
-
-  auto instrs = dis.disassemble({bytes, len}, base_address);
-
-  auto *g = new dragon::Graph(to_arch(arch), config);
-  for (auto &insn: instrs)
-    g->insert(std::move(insn));
-
-  return reinterpret_cast<dragon_graph_t *>(g);
-}
-
 dragon_disasm_t *dragon_disasm_create(dragon_architecture_t arch,
-                                      const uint8_t *image, size_t image_len,
-                                      uint64_t image_base) {
-  dragon::Configuration config;
-  return new dragon_disasm{std::vector(image, image + image_len), image_base,
-                           dragon::Disassembler(to_arch(arch), config)};
+                                      const dragon_config_t *config) {
+  dragon::Configuration cfg = config ? config->config : dragon::Configuration{};
+  dragon::Architecture  a   = to_arch(arch);
+  return new dragon_disasm{a, cfg, dragon::Disassembler(a, cfg)};
 }
 
 void dragon_disasm_destroy(dragon_disasm_t *d) { delete d; }
@@ -182,10 +196,16 @@ int dragon_disasm_valid(const dragon_disasm_t *d) {
   return d && d->disassembler.isValid() ? 1 : 0;
 }
 
-// Stubs — require Disassembler::disassemble_function(address, Graph&) (Step 5)
-void dragon_disasm_function(dragon_disasm_t *, uint64_t, dragon_graph_t *) {}
-void dragon_disasm_all(dragon_disasm_t *, const uint64_t *, size_t,
-                       dragon_graph_t *) {}
+dragon_graph_t *dragon_disasm_disassemble(dragon_disasm_t *d,
+                                          const uint8_t *bytes, size_t len,
+                                          uint64_t base_address) {
+  if (!d || !bytes) return nullptr;
+  auto instrs = d->disassembler.disassemble({bytes, len}, base_address);
+  auto *g = new dragon::Graph(d->arch, d->config);
+  for (auto &insn : instrs)
+    g->insert(std::move(insn));
+  return reinterpret_cast<dragon_graph_t *>(g);
+}
 
 // -- Instruction
 // ---------------------------------------------------------------

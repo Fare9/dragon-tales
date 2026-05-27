@@ -16,12 +16,15 @@ dragon::Disassembler::Disassembler(Architecture architecture,
                                    const Configuration &configuration) :
     architecture_(architecture), configuration_(configuration),
     impl_(std::make_unique<Impl>()) {
+  const unsigned syntaxVariant =
+          (configuration_.syntax == Syntax::INTEL) ? 1 : 0;
+
   switch (architecture) {
     case Architecture::X86_32:
-      impl_->target = internal::initX86(false);
+      impl_->target = internal::initX86(false, syntaxVariant);
       break;
     case Architecture::X86_64:
-      impl_->target = internal::initX86(true);
+      impl_->target = internal::initX86(true, syntaxVariant);
       break;
     case Architecture::ARM32:
       impl_->target = internal::initARM(false);
@@ -49,9 +52,10 @@ bool dragon::Disassembler::isValid() const noexcept {
 
 std::vector<dragon::Instruction>
 dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
-                                  std::uint64_t baseAddress) {
+                                  std::uint64_t baseAddress) const {
   if (!isValid())
     return {};
+  // disassemble is just a wrapper over different disassembly algorithms
   switch (configuration_.disassemblyStrategy) {
     case DisassemblyStrategy::LINEAR_SWEEP:
       return linearSweep(bytes, baseAddress);
@@ -72,20 +76,30 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
 
   const auto status = target.disassembler->getInstruction(
           inst, instSize,
-          llvm::ArrayRef<uint8_t>(bytes.data() + offset, bytes.size() - offset),
+          llvm::ArrayRef(bytes.data() + offset, bytes.size() - offset),
           address + offset, llvm::nulls());
 
   if (status != llvm::MCDisassembler::Success || instSize == 0) {
     offset += 1;
-    return Instruction(address + offset, 0, "", "", {}, false, false, false,
-                       false, false, false);
+    return {address + offset,
+            0,
+            "",
+            "",
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            false};
   }
 
   std::string mnemonic = target.printer->getMnemonic(&inst).first;
-  mnemonic.erase(std::find_if(mnemonic.rbegin(), mnemonic.rend(),
-                              [](unsigned char c) { return !std::isspace(c); })
-                         .base(),
-                 mnemonic.end());
+  mnemonic.erase(
+          std::find_if(mnemonic.rbegin(), mnemonic.rend(),
+                       [](const unsigned char c) { return !std::isspace(c); })
+                  .base(),
+          mnemonic.end());
 
   std::string full;
   llvm::raw_string_ostream stream(full);
@@ -135,7 +149,7 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
 
 std::vector<dragon::Instruction>
 dragon::Disassembler::linearSweep(std::span<const std::uint8_t> bytes,
-                                  std::uint64_t baseAddress) {
+                                  std::uint64_t baseAddress) const {
   std::vector<Instruction> instructions;
   std::size_t offset{0};
   while (offset < bytes.size()) {
@@ -149,7 +163,7 @@ dragon::Disassembler::linearSweep(std::span<const std::uint8_t> bytes,
 
 std::vector<dragon::Instruction>
 dragon::Disassembler::recursiveTraversal(std::span<const std::uint8_t> bytes,
-                                         std::uint64_t baseAddress) {
+                                         std::uint64_t baseAddress) const {
   std::vector<Instruction> instructions;
   std::unordered_set<std::uint64_t> visited;
   std::stack<std::uint64_t> workList;

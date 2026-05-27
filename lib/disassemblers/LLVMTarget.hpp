@@ -28,7 +28,8 @@ struct LLVMTarget {
 namespace dragon::internal {
 
 [[nodiscard]] LLVMTarget buildTarget(const std::string& triple,
-                                     const std::string& cpu      = "generic",
-                                     const std::string& features = "");
+                                     const std::string& cpu          = "generic",
+                                     const std::string& features     = "",
+                                     unsigned           syntaxVariant = 0);
 
 } // namespace dragon::internal

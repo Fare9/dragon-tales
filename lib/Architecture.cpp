@@ -10,6 +10,10 @@ constexpr std::string dragon::ArchitectureName(Architecture architecture) {
       return "arm32";
     case Architecture::ARM64:
       return "arm64";
+    case Architecture::RISCV32:
+      return "riscv32";
+    case Architecture::RISCV64:
+      return "riscv64";
     default:
       return "unknown";
   }

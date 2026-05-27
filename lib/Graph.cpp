@@ -3,26 +3,26 @@
 // -- GraphQueue
 
 void dragon::GraphQueue::enqueue(std::uint64_t addr) {
-  if (processed.count(addr) || pending.count(addr))
+  if (processed.contains(addr) || pending.contains(addr))
     return;
   pending.insert(addr);
   queue.insert(addr);
 }
 
 bool dragon::GraphQueue::is_queued(std::uint64_t addr) const {
-  return queue.count(addr) > 0;
+  return queue.contains(addr);
 }
 bool dragon::GraphQueue::is_pending(std::uint64_t addr) const {
-  return pending.count(addr) > 0;
+  return pending.contains(addr);
 }
 bool dragon::GraphQueue::is_processed(std::uint64_t addr) const {
-  return processed.count(addr) > 0;
+  return processed.contains(addr);
 }
 bool dragon::GraphQueue::is_valid(std::uint64_t addr) const {
-  return valid.count(addr) > 0;
+  return valid.contains(addr);
 }
 bool dragon::GraphQueue::is_invalid(std::uint64_t addr) const {
-  return invalid.count(addr) > 0;
+  return invalid.contains(addr);
 }
 bool dragon::GraphQueue::empty() const { return queue.empty(); }
 
@@ -46,18 +46,17 @@ void dragon::Graph::insert(Instruction insn) {
 }
 
 void dragon::Graph::update(const Instruction &insn) {
-  auto it = listing_.find(insn.address());
-  if (it != listing_.end())
+  if (auto it = listing_.find(insn.address()); it != listing_.end())
     it->second = insn;
 }
 
 const dragon::Instruction *dragon::Graph::get(std::uint64_t address) const {
-  auto it = listing_.find(address);
+  const auto it = listing_.find(address);
   return it != listing_.end() ? &it->second : nullptr;
 }
 
 dragon::Instruction *dragon::Graph::get(std::uint64_t address) {
-  auto it = listing_.find(address);
+  const auto it = listing_.find(address);
   return it != listing_.end() ? &it->second : nullptr;
 }
 
@@ -73,8 +72,7 @@ std::vector<dragon::Instruction *> dragon::Graph::instructions() {
 std::vector<dragon::BasicBlock> dragon::Graph::blocks() {
   std::vector<BasicBlock> result;
   for (std::uint64_t addr: blocks_q.valid) {
-    BasicBlock bb(this, addr);
-    if (bb.isValid())
+    if (BasicBlock bb{this, addr}; bb.isValid())
       result.push_back(std::move(bb));
   }
   return result;

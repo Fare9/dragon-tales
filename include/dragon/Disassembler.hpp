@@ -26,6 +26,10 @@ namespace dragon {
 /// and retrieve a function from an address.
 class Disassembler {
   public:
+  /// Constructor for the disassembler, we need to provide an
+  /// architecture that will internally be used to disassemble
+  /// the bytes using LLVM disassembler. The configuration will
+  /// contain optional values for the output format.
   Disassembler(Architecture architecture, const Configuration &configuration);
   ~Disassembler();
 
@@ -43,8 +47,12 @@ class Disassembler {
     return configuration_;
   }
 
+  /// disassemble will receive as parameters a list of bytes that
+  /// represent the instructions from code, or a .text section, etc.
+  /// baseAddress is used to generate the instructions and to take
+  /// into account things like jumps, and calls, etc.
   [[nodiscard]] std::vector<Instruction>
-  disassemble(std::span<const std::uint8_t> bytes, std::uint64_t baseAddress);
+  disassemble(std::span<const std::uint8_t> bytes, std::uint64_t baseAddress) const;
 
   private:
   struct Impl;
@@ -53,11 +61,11 @@ class Disassembler {
                         std::uint64_t address, std::size_t &offset) const;
 
   std::vector<Instruction> linearSweep(std::span<const std::uint8_t> bytes,
-                                       std::uint64_t baseAddress);
+                                       std::uint64_t baseAddress) const;
 
   std::vector<Instruction>
   recursiveTraversal(std::span<const std::uint8_t> bytes,
-                     std::uint64_t baseAddress);
+                     std::uint64_t baseAddress) const;
 
   Architecture architecture_;
   Configuration configuration_;

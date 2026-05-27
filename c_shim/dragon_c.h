@@ -24,8 +24,14 @@
       DRAGON_STRATEGY_RECURSIVE_TRAVERSAL,
   } dragon_strategy_t;
 
+  typedef enum {
+      DRAGON_SYNTAX_INTEL = 0,
+      DRAGON_SYNTAX_ATT   = 1,
+  } dragon_syntax_t;
+
   // -- Opaque handles ------------------------------------------------------------
 
+  typedef struct dragon_config      dragon_config_t;
   typedef struct dragon_graph       dragon_graph_t;
   typedef struct dragon_disasm      dragon_disasm_t;
   typedef struct dragon_block       dragon_block_t;
@@ -34,6 +40,13 @@
   // dragon_instruction_t is a pointer INTO the graph listing — no destroy needed,
   // valid as long as the owning graph is alive.
   typedef struct dragon_instruction dragon_instruction_t;
+
+  // -- Configuration -------------------------------------------------------------
+
+  dragon_config_t*  dragon_config_create(dragon_syntax_t syntax, dragon_strategy_t strategy);
+  void              dragon_config_destroy(dragon_config_t* c);
+  dragon_syntax_t   dragon_config_syntax(const dragon_config_t* c);
+  dragon_strategy_t dragon_config_strategy(const dragon_config_t* c);
 
   // -- Graph ---
 
@@ -61,27 +74,16 @@
 
   // -- Disassembler --------------------------------------------------------------
 
-  // Simple API: disassemble bytes → returns a graph with instruction listing only.
-  // No block/function structure. Caller destroys the graph.
-  dragon_graph_t* dragon_disasm_bytes(
-      dragon_architecture_t arch,
-      dragon_strategy_t     strategy,
-      const uint8_t*        bytes,
-      size_t                len,
-      uint64_t              base_address);
+  dragon_disasm_t* dragon_disasm_create(dragon_architecture_t arch,
+                                        const dragon_config_t* config);
+  void             dragon_disasm_destroy(dragon_disasm_t* d);
+  int              dragon_disasm_valid(const dragon_disasm_t* d);
 
-  // Graph-populating API: disassembler holds the image internally.
-  dragon_disasm_t* dragon_disasm_create(
-      dragon_architecture_t arch,
-      const uint8_t*        image,
-      size_t                image_len,
-      uint64_t              image_base);
-  void dragon_disasm_destroy(dragon_disasm_t* d);
-  int  dragon_disasm_valid(const dragon_disasm_t* d);
-
-  void dragon_disasm_function(dragon_disasm_t* d, uint64_t address, dragon_graph_t* g);
-  void dragon_disasm_all(dragon_disasm_t* d,
-      const uint64_t* addrs, size_t count, dragon_graph_t* g);
+  // Disassemble raw bytes and return a graph. Caller destroys the graph.
+  dragon_graph_t*  dragon_disasm_disassemble(dragon_disasm_t* d,
+                                             const uint8_t* bytes,
+                                             size_t len,
+                                             uint64_t base_address);
 
   // -- Instruction ---------------------------------------------------------------
 
@@ -117,7 +119,7 @@
 
   typedef struct dragon_asm dragon_asm_t;
 
-  dragon_asm_t* dragon_asm_create(dragon_architecture_t arch);
+  dragon_asm_t* dragon_asm_create(dragon_architecture_t arch, const dragon_config_t* config);
   void          dragon_asm_destroy(dragon_asm_t* a);
   int           dragon_asm_valid(const dragon_asm_t* a);
 

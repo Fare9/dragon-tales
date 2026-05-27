@@ -19,9 +19,9 @@ class Instruction;
 /// instructions to provide them to the user.
 class BasicBlock {
   public:
-  // Constructs a view over the block starting at startAddress.
-  // Walks graph listing to find the terminator. Sets valid_ = false if
-  // the address is not in blocks_q.valid or the block is non-contiguous.
+  /// Constructs a view over the block starting at startAddress.
+  /// Walks graph listing to find the terminator. Sets valid_ = false if
+  /// the address is not in blocks_q.valid or the block is non-contiguous.
   BasicBlock(const Graph *graph, std::uint64_t startAddress);
 
   [[nodiscard]] bool isValid() const { return valid_; }

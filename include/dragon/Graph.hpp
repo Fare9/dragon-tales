@@ -31,6 +31,10 @@ struct GraphQueue {
   std::optional<std::uint64_t> next(); // pops from queue, moves to pending
 };
 
+/// A representation of whole disassembled code, Graph will be
+/// in charge of function generation. Graph also serves as the
+/// container from the instructions, as Functions and Blocks are
+/// only views to those instructions.
 class Graph {
   public:
   Graph(Architecture architecture, const Configuration &config);

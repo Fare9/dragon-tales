@@ -7,6 +7,8 @@
 
 namespace dragon::internal {
 
+/// Initialization function for LLVM objects for Intels both
+/// We only need to call this function once.
 [[nodiscard]] inline LLVMAssemblerTarget initX86Assembler(bool is64bit) {
   static std::once_flag flag;
   std::call_once(flag, [] {
@@ -18,7 +20,7 @@ namespace dragon::internal {
   });
 
   const std::string triple =
-      is64bit ? "x86_64-unknown-unknown" : "i386-unknown-unknown";
+          is64bit ? "x86_64-unknown-unknown" : "i386-unknown-unknown";
 
   return buildAssemblerTarget(triple);
 }

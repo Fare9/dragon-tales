@@ -37,13 +37,23 @@ lib/            C++ implementation
 c_shim/         C API (dragon_c.h + libdragon_c.so)
 python/         Python API (cffi, wraps the C shim)
 tests/          Catch2 test suite
+docs/           API documentation and examples
 ```
 
-## C++ usage
+## Documentation
+
+Full examples for every API layer are in [`docs/`](docs/):
+
+- [`docs/cpp_api.md`](docs/cpp_api.md) — C++ API
+- [`docs/c_api.md`](docs/c_api.md) — C shim API
+- [`docs/python_api.md`](docs/python_api.md) — Python API
+
+## Quick start
+
+**C++**
 
 ```cpp
 #include <dragon/Disassembler.hpp>
-#include <dragon/Graph.hpp>
 
 dragon::Configuration config;
 dragon::Disassembler dis(dragon::Architecture::X86_64, config);
@@ -53,14 +63,16 @@ for (const auto& insn : instructions)
     std::cout << std::hex << insn.address() << "  " << insn.disassembly() << "\n";
 ```
 
-## Python usage
+**Python**
 
 ```python
 import sys
 sys.path.insert(0, 'python')
 import dragon
 
-with dragon.disassemble(b'\x90\xC3', base_address=0x1000) as g:
-    for insn in g.instructions():
-        print(hex(insn.address), insn.mnemonic, insn.bytes.hex())
+cfg = dragon.Configuration()
+dis = dragon.Disassembler(dragon.Architecture.X86_64, cfg)
+graph = dis.disassemble(b'\x90\xC3', base_address=0x1000)
+for insn in graph.instructions():
+    print(hex(insn.address), insn.disassembly)
 ```

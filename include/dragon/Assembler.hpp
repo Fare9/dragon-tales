@@ -12,6 +12,9 @@ namespace dragon {
 
 class Assembler {
   public:
+  /// The assembler receives the architecture and the configuration to set up
+  /// the internal LLVM assembler. Internally it contains the implementation
+  /// of LLVM.
   Assembler(Architecture architecture, const Configuration &configuration);
   ~Assembler();
 
@@ -21,6 +24,7 @@ class Assembler {
   Assembler(Assembler &&) noexcept;
   Assembler &operator=(Assembler &&) noexcept = default;
 
+  /// Needed function to know if the assembler was properly created or not.
   [[nodiscard]] bool isValid() const noexcept;
   [[nodiscard]] Architecture architecture() const noexcept {
     return architecture_;

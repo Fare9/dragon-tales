@@ -9,7 +9,7 @@ namespace dragon::internal {
 
 /// Initialize LLVM for ARM/ARM64 and return a populated LLVMTarget.
 /// Registration is done once via std::call_once — thread safe.
-[[nodiscard]] inline dragon::LLVMTarget initARM(bool is64bit) {
+[[nodiscard]] inline LLVMTarget initARM(bool is64bit) {
   static std::once_flag flag;
   std::call_once(flag, [] {
       LLVMInitializeARMTargetInfo();

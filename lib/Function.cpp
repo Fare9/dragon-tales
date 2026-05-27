@@ -18,11 +18,12 @@ dragon::Function::Function(const Graph *graph, std::uint64_t startAddress) :
 
     if (graph_->blocks_q.is_invalid(blockAddr))
       return; // bad block inside the function — bail entirely
-
-    BasicBlock block(graph_, blockAddr);
+    // generate a new block as a starting address and
+    // the same graph object
+    BasicBlock block{graph_, blockAddr};
     if (!block.isValid())
       continue;
-
+    // Add successors to add them to the function
     for (std::uint64_t succ: block.successors()) {
       if (!processed.count(succ))
         queue.insert(succ);
@@ -45,6 +46,7 @@ const dragon::BasicBlock *dragon::Function::block(std::uint64_t address) const {
 std::vector<const dragon::Instruction *>
 dragon::Function::instructions() const {
   std::vector<const Instruction *> result;
+  // Each block provides access to its instructions
   for (const auto &[addr, bb]: blocks_) {
     auto insns = bb.instructions();
     result.insert(result.end(), insns.begin(), insns.end());

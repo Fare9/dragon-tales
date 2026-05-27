@@ -6,7 +6,8 @@
 
 dragon::LLVMTarget dragon::internal::buildTarget(const std::string &triple,
                                                  const std::string &cpu,
-                                                 const std::string &features) {
+                                                 const std::string &features,
+                                                 unsigned syntaxVariant) {
   dragon::LLVMTarget target;
 
   // 1. First we look for the target from the LLVM registry
@@ -53,9 +54,9 @@ dragon::LLVMTarget dragon::internal::buildTarget(const std::string &triple,
     return target;
 
   // 8. Printer — converts MCInst to mnemonic + operands strings
-  // 0 = default syntax variant for the arch
+  // For x86: 0 = AT&T, 1 = Intel. Other arches only have 0.
   target.printer.reset(llvmTarget->createMCInstPrinter(
-          llvm::Triple(triple), 0, *target.asmInfo, *target.instrInfo,
+          llvm::Triple(triple), syntaxVariant, *target.asmInfo, *target.instrInfo,
           *target.regInfo));
 
   return target;

@@ -14,13 +14,16 @@ class Instruction;
 
 /// Function is a viewer for the instructions that internally contains
 /// its BasicBlocks, same as the BasicBlock class, it contains a pointer
-/// for the Graph that will be used to retrieve the instructions.
+/// for the Graph that will be used to retrieve the instructions. The
+/// Function object will contain other representations from the function
+/// like a lifted version of the disassembled code. Different lifters could
+/// be included (e.g. to have different Intermediate Representations).
 class Function {
   public:
-  // Constructs a view over the function starting at startAddress.
-  // BFS over blocks via their successors, collects all reachable blocks.
-  // Sets valid_ = false if address is not in functions_q.valid or has no
-  // blocks.
+  /// Constructs a view over the function starting at startAddress.
+  /// BFS over blocks via their successors, collects all reachable blocks.
+  /// Sets valid_ = false if address is not in functions_q.valid or has no
+  /// blocks.
   Function(const Graph *graph, std::uint64_t startAddress);
 
   [[nodiscard]] bool isValid() const { return valid_; }

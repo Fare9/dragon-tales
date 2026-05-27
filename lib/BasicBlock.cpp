@@ -15,7 +15,7 @@ dragon::BasicBlock::BasicBlock(const Graph *graph, std::uint64_t startAddress) :
        it != graph_->listing().end(); ++it) {
     const Instruction &insn = it->second;
 
-    // Gap between instructions — block is non-contiguous
+    // Gap between instructions - block is non-contiguous
     if (hasPrev && insn.address() != expectedNext)
       return;
 
@@ -39,7 +39,7 @@ dragon::BasicBlock::BasicBlock(const Graph *graph, std::uint64_t startAddress) :
 
     prevInsn = &insn;
   }
-  // Fell off the end of the listing without finding a terminator — stays
+  // Fell off the end of the listing without finding a terminator - stays
   // invalid
 }
 

@@ -94,7 +94,7 @@ TEST_CASE("Instruction fields are correct", "[disassembler][instruction]") {
 
     REQUIRE(instr.address() == 0x1000);
     REQUIRE(instr.size() == 3);
-    REQUIRE(instr.mnemonic() == "movq");
+    REQUIRE(instr.mnemonic() == "mov");
     REQUIRE_FALSE(instr.isJump());
     REQUIRE_FALSE(instr.isCall());
     REQUIRE_FALSE(instr.isReturn());

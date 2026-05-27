@@ -7,6 +7,8 @@
 
 namespace dragon::internal {
 
+/// Initialization function for LLVM objects for RiscV both
+/// We only need to call this function once.
 [[nodiscard]] inline LLVMAssemblerTarget initRISCVAssembler(bool is64bit) {
   static std::once_flag flag;
   std::call_once(flag, [] {
@@ -18,7 +20,7 @@ namespace dragon::internal {
   });
 
   const std::string triple =
-      is64bit ? "riscv64-unknown-unknown" : "riscv32-unknown-unknown";
+          is64bit ? "riscv64-unknown-unknown" : "riscv32-unknown-unknown";
 
   return buildAssemblerTarget(triple);
 }
