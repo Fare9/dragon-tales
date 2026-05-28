@@ -3,3 +3,5 @@ target_sources(libdragon
         LLVMTarget.cpp
         Disassembler.cpp
 )
+
+add_subdirectory(x86)
