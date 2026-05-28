@@ -3,10 +3,11 @@
 #include <stack>
 #include <unordered_set>
 
-#include "ARMTarget.hpp"
-#include "LLVMTarget.hpp"
-#include "RISCVTarget.hpp"
-#include "X86Target.hpp"
+#include "InstructionImpl.hpp"
+#include "disassemblers/ARMTarget.hpp"
+#include "disassemblers/LLVMTarget.hpp"
+#include "disassemblers/RISCVTarget.hpp"
+#include "disassemblers/X86Target.hpp"
 
 struct dragon::Disassembler::Impl {
   LLVMTarget target;
@@ -19,7 +20,7 @@ dragon::Disassembler::Disassembler(Architecture architecture,
   const unsigned syntaxVariant =
           (configuration_.syntax == Syntax::INTEL) ? 1 : 0;
 
-  const std::string &cpu      = configuration_.cpu;
+  const std::string &cpu = configuration_.cpu;
   const std::string &features = configuration_.features;
 
   switch (architecture) {
@@ -131,12 +132,23 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
                    static_cast<std::uint8_t>(instSize), std::move(mnemonic),
                    std::move(operands), std::move(rawBytes), isReturn, isCall,
                    isJump, isConditional, isTrap, hasIndirect);
+  // We keep the LLVM object just in case we are going to use it later.
+  insn.impl_ = std::make_unique<Instruction::Impl>(Instruction::Impl{inst});
 
   // Resolve direct branch target from immediate operand
   if (isJump && !hasIndirect && inst.getNumOperands() > 0) {
     const auto &op = inst.getOperand(0);
     if (op.isImm()) {
       insn.addBranch(address + instSize +
+                     static_cast<std::uint64_t>(op.getImm()));
+    }
+  }
+
+  // If it is a call, we need to calculate possible callees
+  if (isCall && !hasIndirect && inst.getNumOperands() > 0) {
+    const auto &op = inst.getOperand(0);
+    if (op.isImm()) {
+      insn.addCallee(address + instSize +
                      static_cast<std::uint64_t>(op.getImm()));
     }
   }

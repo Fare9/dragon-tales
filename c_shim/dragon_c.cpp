@@ -17,8 +17,8 @@ static dragon_syntax_t from_syntax(dragon::Syntax s) {
 }
 static dragon_strategy_t from_strategy(dragon::DisassemblyStrategy s) {
   return s == dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL
-      ? DRAGON_STRATEGY_RECURSIVE_TRAVERSAL
-      : DRAGON_STRATEGY_LINEAR_SWEEP;
+                 ? DRAGON_STRATEGY_RECURSIVE_TRAVERSAL
+                 : DRAGON_STRATEGY_LINEAR_SWEEP;
 }
 
 // -- enum mappings
@@ -50,68 +50,78 @@ struct dragon_config {
   dragon::Configuration config;
 };
 
-dragon_config_t* dragon_config_create(dragon_syntax_t syntax, dragon_strategy_t strategy) {
+dragon_config_t *dragon_config_create(dragon_syntax_t syntax,
+                                      dragon_strategy_t strategy) {
   dragon::Configuration cfg;
   cfg.syntax = to_syntax(syntax);
-  cfg.disassemblyStrategy = (strategy == DRAGON_STRATEGY_RECURSIVE_TRAVERSAL)
-      ? dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL
-      : dragon::DisassemblyStrategy::LINEAR_SWEEP;
+  cfg.disassemblyStrategy =
+          (strategy == DRAGON_STRATEGY_RECURSIVE_TRAVERSAL)
+                  ? dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL
+                  : dragon::DisassemblyStrategy::LINEAR_SWEEP;
   return new dragon_config{cfg};
 }
 
-void dragon_config_destroy(dragon_config_t* c) { delete c; }
+void dragon_config_destroy(dragon_config_t *c) { delete c; }
 
-dragon_syntax_t dragon_config_syntax(const dragon_config_t* c) {
+dragon_syntax_t dragon_config_syntax(const dragon_config_t *c) {
   return from_syntax(c->config.syntax);
 }
 
-dragon_strategy_t dragon_config_strategy(const dragon_config_t* c) {
+dragon_strategy_t dragon_config_strategy(const dragon_config_t *c) {
   return from_strategy(c->config.disassemblyStrategy);
 }
 
-void dragon_config_set_cpu(dragon_config_t* c, const char* cpu) {
-  if (c) c->config.cpu = cpu ? cpu : "";
+void dragon_config_set_cpu(dragon_config_t *c, const char *cpu) {
+  if (c)
+    c->config.cpu = cpu ? cpu : "";
 }
 
-const char* dragon_config_cpu(const dragon_config_t* c) {
+const char *dragon_config_cpu(const dragon_config_t *c) {
   return c ? c->config.cpu.c_str() : "";
 }
 
-void dragon_config_set_features(dragon_config_t* c, const char* features) {
-  if (c) c->config.features = features ? features : "";
+void dragon_config_set_features(dragon_config_t *c, const char *features) {
+  if (c)
+    c->config.features = features ? features : "";
 }
 
-const char* dragon_config_features(const dragon_config_t* c) {
+const char *dragon_config_features(const dragon_config_t *c) {
   return c ? c->config.features.c_str() : "";
 }
 
 // -- dragon_asm_t — full definition
 struct dragon_asm {
-    dragon::Assembler assembler;
+  dragon::Assembler assembler;
 };
 
-dragon_asm_t* dragon_asm_create(dragon_architecture_t arch, const dragon_config_t* config) {
-    dragon::Configuration cfg = config ? config->config : dragon::Configuration{};
-    return new dragon_asm{ dragon::Assembler(to_arch(arch), cfg) };
+dragon_asm_t *dragon_asm_create(dragon_architecture_t arch,
+                                const dragon_config_t *config) {
+  dragon::Configuration cfg = config ? config->config : dragon::Configuration{};
+  return new dragon_asm{dragon::Assembler(to_arch(arch), cfg)};
 }
 
-void dragon_asm_destroy(dragon_asm_t* a) { delete a; }
+void dragon_asm_destroy(dragon_asm_t *a) { delete a; }
 
-int dragon_asm_valid(const dragon_asm_t* a) {
-    return a && a->assembler.isValid() ? 1 : 0;
+int dragon_asm_valid(const dragon_asm_t *a) {
+  return a && a->assembler.isValid() ? 1 : 0;
 }
 
-uint8_t* dragon_asm_assemble(dragon_asm_t* a, const char* source, size_t* out_len) {
-    if (!a || !source || !out_len) return nullptr;
-    auto bytes = a->assembler.assemble(source);
-    if (bytes.empty()) { *out_len = 0; return nullptr; }
-    auto* buf = new uint8_t[bytes.size()];
-    std::copy(bytes.begin(), bytes.end(), buf);
-    *out_len = bytes.size();
-    return buf;
+uint8_t *dragon_asm_assemble(dragon_asm_t *a, const char *source,
+                             size_t *out_len) {
+  if (!a || !source || !out_len)
+    return nullptr;
+  auto bytes = a->assembler.assemble(source);
+  if (bytes.empty()) {
+    *out_len = 0;
+    return nullptr;
+  }
+  auto *buf = new uint8_t[bytes.size()];
+  std::copy(bytes.begin(), bytes.end(), buf);
+  *out_len = bytes.size();
+  return buf;
 }
 
-void dragon_bytes_free(uint8_t* bytes) { delete[] bytes; }
+void dragon_bytes_free(uint8_t *bytes) { delete[] bytes; }
 
 // -- dragon_disasm_t — full definition
 struct dragon_disasm {
@@ -185,14 +195,14 @@ void dragon_graph_each_instruction(const dragon_graph_t *g,
 
 void dragon_graph_each_block_address(const dragon_graph_t *g,
                                      void (*cb)(uint64_t, void *), void *user) {
-  for (uint64_t addr: as_graph(g)->blocks_q.valid)
+  for (uint64_t addr: as_graph(g)->blocks_q.valid())
     cb(addr, user);
 }
 
 void dragon_graph_each_function_address(const dragon_graph_t *g,
                                         void (*cb)(uint64_t, void *),
                                         void *user) {
-  for (uint64_t addr: as_graph(g)->functions_q.valid)
+  for (uint64_t addr: as_graph(g)->functions_q.valid())
     cb(addr, user);
 }
 
@@ -202,7 +212,7 @@ void dragon_graph_each_function_address(const dragon_graph_t *g,
 dragon_disasm_t *dragon_disasm_create(dragon_architecture_t arch,
                                       const dragon_config_t *config) {
   dragon::Configuration cfg = config ? config->config : dragon::Configuration{};
-  dragon::Architecture  a   = to_arch(arch);
+  dragon::Architecture a = to_arch(arch);
   return new dragon_disasm{a, cfg, dragon::Disassembler(a, cfg)};
 }
 
@@ -215,11 +225,12 @@ int dragon_disasm_valid(const dragon_disasm_t *d) {
 dragon_graph_t *dragon_disasm_disassemble(dragon_disasm_t *d,
                                           const uint8_t *bytes, size_t len,
                                           uint64_t base_address) {
-  if (!d || !bytes) return nullptr;
+  if (!d || !bytes)
+    return nullptr;
   auto instrs = d->disassembler.disassemble({bytes, len}, base_address);
   auto *g = new dragon::Graph(d->arch, d->config);
-  for (auto &insn : instrs)
-    g->insert(std::move(insn));
+  for (auto &insn: instrs)
+    g->addInstruction(std::move(insn));
   return reinterpret_cast<dragon_graph_t *>(g);
 }
 

@@ -13,13 +13,8 @@
 
 namespace dragon {
 
-struct GraphQueue {
-  std::set<std::uint64_t> queue;
-  std::set<std::uint64_t> pending;
-  std::set<std::uint64_t> processed;
-  std::set<std::uint64_t> valid;
-  std::set<std::uint64_t> invalid;
-
+class GraphQueue {
+  public:
   void enqueue(std::uint64_t addr);
   [[nodiscard]] bool is_queued(std::uint64_t addr) const;
   [[nodiscard]] bool is_pending(std::uint64_t addr) const;
@@ -28,7 +23,33 @@ struct GraphQueue {
   [[nodiscard]] bool is_invalid(std::uint64_t addr) const;
   [[nodiscard]] bool empty() const;
 
-  std::optional<std::uint64_t> next(); // pops from queue, moves to pending
+  std::optional<std::uint64_t> next(); // pops from queue, marks processed
+
+  /// unconditional set as processed
+  void mark_processed(std::uint64_t addr);
+  /// mark as valid only if previously processed
+  void mark_valid(std::uint64_t addr); // no-op if not processed
+  /// mark invalid only if not already valid
+  void mark_invalid(std::uint64_t addr); // no-op if already valid
+  /// add addresses to queue of processing
+  void enqueue_extend(const std::set<std::uint64_t> &addrs);
+
+  [[nodiscard]] const std::set<std::uint64_t> &processed() const {
+    return processed_;
+  }
+
+  [[nodiscard]] const std::set<std::uint64_t> &valid() const { return valid_; }
+
+  [[nodiscard]] const std::set<std::uint64_t> &invalid() const {
+    return invalid_;
+  }
+
+  private:
+  std::set<std::uint64_t> queue_;
+  std::set<std::uint64_t> pending_;
+  std::set<std::uint64_t> processed_;
+  std::set<std::uint64_t> valid_;
+  std::set<std::uint64_t> invalid_;
 };
 
 /// A representation of whole disassembled code, Graph will be
@@ -37,14 +58,14 @@ struct GraphQueue {
 /// only views to those instructions.
 class Graph {
   public:
-  Graph(Architecture architecture, const Configuration &config);
+  Graph(Architecture architecture, Configuration config);
 
   [[nodiscard]] Architecture architecture() const { return architecture_; }
   [[nodiscard]] const Configuration &configuration() const {
     return configuration_;
   }
 
-  void insert(Instruction insn);
+  void addInstruction(Instruction insn);
   void update(const Instruction &insn);
 
   [[nodiscard]] const Instruction *get(std::uint64_t address) const;
@@ -69,6 +90,8 @@ class Graph {
   GraphQueue functions_q;
 
   private:
+  void insert(Instruction insn);
+
   Architecture architecture_;
   Configuration configuration_;
   std::map<std::uint64_t, Instruction> listing_;

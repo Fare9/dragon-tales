@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <set>
 #include <string>
 #include <string_view>
@@ -65,13 +66,30 @@ class Instruction {
     chromosomeMask_ = std::move(m);
   }
 
-  // Public constructor — no more friend class needed
   Instruction(std::uint64_t address, std::uint8_t size, std::string mnemonic,
               std::string operands, std::vector<std::uint8_t> bytes,
               bool isReturn, bool isCall, bool isJump, bool isConditional,
               bool isTrap, bool hasIndirectTarget);
 
+  // Declared here so the compiler does not try to destroy the incomplete Impl
+  // type in an inline destructor.  Defined in Instruction.cpp after Impl is
+  // fully defined via InstructionImpl.hpp.
+  ~Instruction();
+  Instruction(const Instruction &);
+  Instruction &operator=(const Instruction &);
+  Instruction(Instruction &&) noexcept;
+  Instruction &operator=(Instruction &&) noexcept;
+
   private:
+  /// Opaque LLVM state (MCInst and related data).
+  /// Null for instructions that failed to decode.
+  /// Internal code can access the full definition by including InstructionImpl.hpp.
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+
+  /// Disassembler creates and populates Instruction objects, including impl_.
+  friend class Disassembler;
+
   std::uint64_t address_{};
   std::uint8_t size_{};
 

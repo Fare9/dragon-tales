@@ -1,9 +1,9 @@
 #include <dragon/Assembler.hpp>
 
-#include "ARMAssemblerTarget.hpp"
-#include "LLVMAssemblerTarget.hpp"
-#include "RISCVAssemblerTarget.hpp"
-#include "X86AssemblerTarget.hpp"
+#include "assemblers/ARMAssemblerTarget.hpp"
+#include "assemblers/LLVMAssemblerTarget.hpp"
+#include "assemblers/RISCVAssemblerTarget.hpp"
+#include "assemblers/X86AssemblerTarget.hpp"
 
 #include <llvm/MC/MCAsmBackend.h>
 #include <llvm/MC/MCCodeEmitter.h>

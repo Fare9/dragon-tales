@@ -21,9 +21,6 @@ target_include_directories(libdragon
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/utils
-        ${CMAKE_CURRENT_SOURCE_DIR}/disassemblers
-        ${CMAKE_CURRENT_SOURCE_DIR}/assemblers
         ${LLVM_INCLUDE_DIRS}
 )
 

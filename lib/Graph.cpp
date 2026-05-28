@@ -1,48 +1,76 @@
 #include <dragon/Graph.hpp>
+#include <utility>
 
 // -- GraphQueue
 
-void dragon::GraphQueue::enqueue(std::uint64_t addr) {
-  if (processed.contains(addr) || pending.contains(addr))
+void dragon::GraphQueue::enqueue(const std::uint64_t addr) {
+  if (processed_.contains(addr) || pending_.contains(addr))
     return;
-  pending.insert(addr);
-  queue.insert(addr);
+  pending_.insert(addr);
+  queue_.insert(addr);
 }
 
-bool dragon::GraphQueue::is_queued(std::uint64_t addr) const {
-  return queue.contains(addr);
+bool dragon::GraphQueue::is_queued(const std::uint64_t addr) const {
+  return queue_.contains(addr);
 }
-bool dragon::GraphQueue::is_pending(std::uint64_t addr) const {
-  return pending.contains(addr);
+bool dragon::GraphQueue::is_pending(const std::uint64_t addr) const {
+  return pending_.contains(addr);
 }
-bool dragon::GraphQueue::is_processed(std::uint64_t addr) const {
-  return processed.contains(addr);
+bool dragon::GraphQueue::is_processed(const std::uint64_t addr) const {
+  return processed_.contains(addr);
 }
-bool dragon::GraphQueue::is_valid(std::uint64_t addr) const {
-  return valid.contains(addr);
+bool dragon::GraphQueue::is_valid(const std::uint64_t addr) const {
+  return valid_.contains(addr);
 }
-bool dragon::GraphQueue::is_invalid(std::uint64_t addr) const {
-  return invalid.contains(addr);
+bool dragon::GraphQueue::is_invalid(const std::uint64_t addr) const {
+  return invalid_.contains(addr);
 }
-bool dragon::GraphQueue::empty() const { return queue.empty(); }
+bool dragon::GraphQueue::empty() const { return queue_.empty(); }
 
 std::optional<std::uint64_t> dragon::GraphQueue::next() {
-  if (queue.empty())
+  if (queue_.empty())
     return std::nullopt;
-  auto it = queue.begin();
+  const auto it = queue_.begin();
   std::uint64_t addr = *it;
-  queue.erase(it);
-  pending.erase(addr);
+  queue_.erase(it);
+  pending_.erase(addr);
+  processed_.insert(addr);
   return addr;
 }
 
+void dragon::GraphQueue::mark_processed(std::uint64_t addr) {
+  processed_.insert(addr);
+}
+
+void dragon::GraphQueue::mark_valid(std::uint64_t addr) {
+  if (processed_.contains(addr)) // add to valid only if previously processed
+    valid_.insert(addr);
+}
+
+void dragon::GraphQueue::mark_invalid(std::uint64_t addr) {
+  if (!valid_.contains(addr))
+    invalid_.insert(addr);
+}
+
+void dragon::GraphQueue::enqueue_extend(const std::set<std::uint64_t> &addrs) {
+  for (const std::uint64_t addr: addrs)
+    enqueue(addr);
+}
+
 // -- Graph
-dragon::Graph::Graph(Architecture architecture, const Configuration &config) :
-    architecture_(architecture), configuration_(config) {}
+dragon::Graph::Graph(Architecture architecture, Configuration config) :
+    architecture_(architecture), configuration_(std::move(config)) {}
+
+void dragon::Graph::addInstruction(Instruction insn) {
+  std::uint64_t addr = insn.address();
+  listing_.emplace(addr, std::move(insn));
+  instructions_q.mark_processed(addr);
+  instructions_q.mark_valid(addr);
+}
 
 void dragon::Graph::insert(Instruction insn) {
   std::uint64_t addr = insn.address();
-  listing_.emplace(addr, std::move(insn));
+  listing_.emplace(addr, std::move(insn));;
 }
 
 void dragon::Graph::update(const Instruction &insn) {
@@ -62,7 +90,7 @@ dragon::Instruction *dragon::Graph::get(std::uint64_t address) {
 
 std::vector<dragon::Instruction *> dragon::Graph::instructions() {
   std::vector<Instruction *> result;
-  for (std::uint64_t addr: instructions_q.valid) {
+  for (std::uint64_t addr: instructions_q.valid()) {
     if (auto *insn = get(addr))
       result.push_back(insn);
   }
@@ -71,7 +99,7 @@ std::vector<dragon::Instruction *> dragon::Graph::instructions() {
 
 std::vector<dragon::BasicBlock> dragon::Graph::blocks() {
   std::vector<BasicBlock> result;
-  for (std::uint64_t addr: blocks_q.valid) {
+  for (std::uint64_t addr: blocks_q.valid()) {
     if (BasicBlock bb{this, addr}; bb.isValid())
       result.push_back(std::move(bb));
   }
@@ -80,7 +108,7 @@ std::vector<dragon::BasicBlock> dragon::Graph::blocks() {
 
 std::vector<dragon::Function> dragon::Graph::functions() {
   std::vector<Function> result;
-  for (std::uint64_t addr: functions_q.valid) {
+  for (std::uint64_t addr: functions_q.valid()) {
     Function fn(this, addr);
     if (fn.isValid())
       result.push_back(std::move(fn));
@@ -92,24 +120,24 @@ void dragon::Graph::merge(Graph other) {
   for (auto &[addr, insn]: other.listing_)
     listing_.try_emplace(addr, std::move(insn));
 
-  for (std::uint64_t addr: other.instructions_q.processed)
-    instructions_q.processed.insert(addr);
-  for (std::uint64_t addr: other.instructions_q.valid)
-    instructions_q.valid.insert(addr);
-  for (std::uint64_t addr: other.instructions_q.invalid)
-    instructions_q.invalid.insert(addr);
-  for (std::uint64_t addr: other.blocks_q.processed)
-    blocks_q.processed.insert(addr);
-  for (std::uint64_t addr: other.blocks_q.valid)
-    blocks_q.valid.insert(addr);
-  for (std::uint64_t addr: other.blocks_q.invalid)
-    blocks_q.invalid.insert(addr);
-  for (std::uint64_t addr: other.functions_q.processed)
-    functions_q.processed.insert(addr);
-  for (std::uint64_t addr: other.functions_q.valid)
-    functions_q.valid.insert(addr);
-  for (std::uint64_t addr: other.functions_q.invalid)
-    functions_q.invalid.insert(addr);
+  for (std::uint64_t addr: other.instructions_q.processed())
+    instructions_q.mark_processed(addr);
+  for (std::uint64_t addr: other.instructions_q.valid())
+    instructions_q.mark_valid(addr);
+  for (std::uint64_t addr: other.instructions_q.invalid())
+    instructions_q.mark_invalid(addr);
+  for (std::uint64_t addr: other.blocks_q.processed())
+    blocks_q.mark_processed(addr);
+  for (std::uint64_t addr: other.blocks_q.valid())
+    blocks_q.mark_valid(addr);
+  for (std::uint64_t addr: other.blocks_q.invalid())
+    blocks_q.mark_invalid(addr);
+  for (std::uint64_t addr: other.functions_q.processed())
+    functions_q.mark_processed(addr);
+  for (std::uint64_t addr: other.functions_q.valid())
+    functions_q.mark_valid(addr);
+  for (std::uint64_t addr: other.functions_q.invalid())
+    functions_q.mark_invalid(addr);
 
   while (auto addr = other.instructions_q.next())
     instructions_q.enqueue(*addr);
