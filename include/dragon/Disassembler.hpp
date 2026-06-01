@@ -7,6 +7,7 @@
 
 #include <dragon/Architecture.hpp>
 #include <dragon/Configuration.hpp>
+#include <dragon/Graph.hpp>
 #include <dragon/Instruction.hpp>
 
 namespace dragon {
@@ -52,18 +53,22 @@ class Disassembler {
   /// baseAddress is used to generate the instructions and to take
   /// into account things like jumps, and calls, etc.
   [[nodiscard]] std::vector<Instruction>
-  disassemble(std::span<const std::uint8_t> bytes, std::uint64_t baseAddress) const;
+  disassemble(std::span<const std::uint8_t> bytes,
+              std::uint64_t baseAddress) const;
 
-  private:
-  struct Impl;
+  void disassemble(std::span<const std::uint8_t> bytes,
+                   std::uint64_t baseAddress, Graph &graph) const;
+
+          private : struct Impl;
 
   Instruction decodeOne(std::span<const std::uint8_t> bytes,
                         std::uint64_t address, std::size_t &offset) const;
 
-  std::vector<Instruction> linearSweep(std::span<const std::uint8_t> bytes,
-                                       std::uint64_t baseAddress) const;
+  [[nodiscard]] std::vector<Instruction>
+  linearSweep(std::span<const std::uint8_t> bytes,
+              std::uint64_t baseAddress) const;
 
-  std::vector<Instruction>
+  [[nodiscard]] std::vector<Instruction>
   recursiveTraversal(std::span<const std::uint8_t> bytes,
                      std::uint64_t baseAddress) const;
 

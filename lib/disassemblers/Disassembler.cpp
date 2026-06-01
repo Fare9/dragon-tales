@@ -8,15 +8,20 @@
 #include "disassemblers/LLVMTarget.hpp"
 #include "disassemblers/RISCVTarget.hpp"
 #include "disassemblers/X86Target.hpp"
+#include "disassemblers/x86/x86Analysis.hpp"
+#include "utils/Logger.hpp"
 
 struct dragon::Disassembler::Impl {
   LLVMTarget target;
+  internal::Logger logger;
 };
 
 dragon::Disassembler::Disassembler(Architecture architecture,
                                    const Configuration &configuration) :
     architecture_(architecture), configuration_(configuration),
     impl_(std::make_unique<Impl>()) {
+  impl_->logger = internal::Logger{configuration_.logging};
+
   const unsigned syntaxVariant =
           (configuration_.syntax == Syntax::INTEL) ? 1 : 0;
 
@@ -45,6 +50,17 @@ dragon::Disassembler::Disassembler(Architecture architecture,
     default:
       break;
   }
+
+  impl_->logger.log("Disassembler: arch={} syntax={} strategy={}",
+                    ArchitectureName(architecture_),
+                    configuration_.syntax == Syntax::INTEL ? "intel" : "att",
+                    configuration_.disassemblyStrategy ==
+                                    DisassemblyStrategy::LINEAR_SWEEP
+                            ? "linear_sweep"
+                            : "recursive_traversal");
+  if (!isValid())
+    impl_->logger.log("Disassembler: target initialization failed for {}",
+                      ArchitectureName(architecture_));
 }
 
 dragon::Disassembler::~Disassembler() = default;
@@ -57,8 +73,10 @@ bool dragon::Disassembler::isValid() const noexcept {
 std::vector<dragon::Instruction>
 dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
                                   std::uint64_t baseAddress) const {
-  if (!isValid())
+  if (!isValid()) {
+    impl_->logger.log("disassemble: called on invalid disassembler");
     return {};
+  }
   // disassemble is just a wrapper over different disassembly algorithms
   switch (configuration_.disassemblyStrategy) {
     case DisassemblyStrategy::LINEAR_SWEEP:
@@ -67,6 +85,32 @@ dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
       return recursiveTraversal(bytes, baseAddress);
   }
   return {};
+}
+
+void dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
+                                       std::uint64_t baseAddress,
+                                       Graph &graph) const {
+  if (!isValid()) {
+    impl_->logger.log("disassemble: called on invalid disassembler");
+    return;
+  }
+
+  switch (architecture_) {
+    case Architecture::X86_32:
+    case Architecture::X86_64: {
+      x86::X86Analysis x86Analysis{architecture_, *this, configuration_};
+      x86Analysis.analyze(bytes, baseAddress, graph);
+      break;
+    }
+    case Architecture::ARM32:
+    case Architecture::ARM64:
+    case Architecture::RISCV32:
+    case Architecture::RISCV64:
+      std::cerr << "Not implemented yet\n";
+      break;
+    case Architecture::Unknown:
+      break;
+  }
 }
 
 dragon::Instruction
@@ -84,6 +128,8 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
           address + offset, llvm::nulls());
 
   if (status != llvm::MCDisassembler::Success || instSize == 0) {
+    impl_->logger.log("decodeOne: failed at 0x{:x}, skipping byte",
+                      address + offset);
     offset += 1;
     return {address + offset,
             0,
@@ -139,7 +185,7 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
   if (isJump && !hasIndirect && inst.getNumOperands() > 0) {
     const auto &op = inst.getOperand(0);
     if (op.isImm()) {
-      insn.addBranch(address + instSize +
+      insn.addBranch(insn.address() + instSize +
                      static_cast<std::uint64_t>(op.getImm()));
     }
   }
@@ -148,7 +194,7 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
   if (isCall && !hasIndirect && inst.getNumOperands() > 0) {
     const auto &op = inst.getOperand(0);
     if (op.isImm()) {
-      insn.addCallee(address + instSize +
+      insn.addCallee(insn.address() + instSize +
                      static_cast<std::uint64_t>(op.getImm()));
     }
   }
@@ -165,6 +211,8 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
 std::vector<dragon::Instruction>
 dragon::Disassembler::linearSweep(std::span<const std::uint8_t> bytes,
                                   std::uint64_t baseAddress) const {
+  impl_->logger.log("LinearSweep: {} bytes at 0x{:x}", bytes.size(),
+                    baseAddress);
   std::vector<Instruction> instructions;
   std::size_t offset{0};
   while (offset < bytes.size()) {
@@ -173,12 +221,16 @@ dragon::Disassembler::linearSweep(std::span<const std::uint8_t> bytes,
       continue;
     instructions.emplace_back(std::move(instr));
   }
+  impl_->logger.log("LinearSweep: decoded {} instructions",
+                    instructions.size());
   return instructions;
 }
 
 std::vector<dragon::Instruction>
 dragon::Disassembler::recursiveTraversal(std::span<const std::uint8_t> bytes,
                                          std::uint64_t baseAddress) const {
+  impl_->logger.log("RecursiveTraversal: {} bytes at 0x{:x}", bytes.size(),
+                    baseAddress);
   std::vector<Instruction> instructions;
   std::unordered_set<std::uint64_t> visited;
   std::stack<std::uint64_t> workList;
@@ -229,5 +281,7 @@ dragon::Disassembler::recursiveTraversal(std::span<const std::uint8_t> bytes,
                       return a.address() < b.address();
                     });
 
+  impl_->logger.log("RecursiveTraversal: decoded {} instructions",
+                    instructions.size());
   return instructions;
 }

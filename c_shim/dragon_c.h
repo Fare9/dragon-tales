@@ -60,6 +60,10 @@
   void        dragon_config_set_features(dragon_config_t* c, const char* features);
   const char* dragon_config_features(const dragon_config_t* c);
 
+  // Enable (1) or disable (0) diagnostic logging to stderr.
+  void dragon_config_set_logging(dragon_config_t* c, int enabled);
+  int  dragon_config_logging(const dragon_config_t* c);
+
   // -- Graph ---
 
   dragon_graph_t* dragon_graph_create(dragon_architecture_t arch);
@@ -96,6 +100,13 @@
                                              const uint8_t* bytes,
                                              size_t len,
                                              uint64_t base_address);
+
+  // Disassemble and run architecture-specific analysis (block and function
+  // discovery). Returns a fully populated graph. Caller destroys the graph.
+  dragon_graph_t*  dragon_disasm_analyze(dragon_disasm_t* d,
+                                         const uint8_t* bytes,
+                                         size_t len,
+                                         uint64_t base_address);
 
   // -- Instruction ---------------------------------------------------------------
 

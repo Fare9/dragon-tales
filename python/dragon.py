@@ -348,7 +348,7 @@ class Configuration:
     """
 
     def __init__(self, syntax=Syntax.INTEL, strategy=Strategy.LINEAR_SWEEP,
-                 cpu='', features=''):
+                 cpu='', features='', logging=False):
         self._ptr = lib.dragon_config_create(syntax, strategy)
         if self._ptr == ffi.NULL:
             raise RuntimeError('failed to create configuration')
@@ -356,6 +356,8 @@ class Configuration:
             lib.dragon_config_set_cpu(self._ptr, cpu.encode())
         if features:
             lib.dragon_config_set_features(self._ptr, features.encode())
+        if logging:
+            lib.dragon_config_set_logging(self._ptr, 1)
 
     def __del__(self):
         if self._ptr:
@@ -394,10 +396,20 @@ class Configuration:
     def features(self, value):
         lib.dragon_config_set_features(self._ptr, value.encode())
 
+    @property
+    def logging(self):
+        """Whether diagnostic logging to stderr is enabled."""
+        return bool(lib.dragon_config_logging(self._ptr))
+
+    @logging.setter
+    def logging(self, value):
+        lib.dragon_config_set_logging(self._ptr, 1 if value else 0)
+
     def __repr__(self):
         cpu_part = f' cpu={self.cpu!r}' if self.cpu else ''
         feat_part = f' features={self.features!r}' if self.features else ''
-        return f'<Configuration syntax={self.syntax} strategy={self.strategy}{cpu_part}{feat_part}>'
+        log_part = ' logging=True' if self.logging else ''
+        return f'<Configuration syntax={self.syntax} strategy={self.strategy}{cpu_part}{feat_part}{log_part}>'
 
 
 # -- Disassembler --------------------------------------------------------------
@@ -434,6 +446,15 @@ class Disassembler:
         ptr = lib.dragon_disasm_disassemble(self._ptr, buf, len(bytes_data), base_address)
         if ptr == ffi.NULL:
             raise RuntimeError('disassembly failed — unsupported architecture or invalid input')
+        return Graph(ptr)
+
+    def analyze(self, bytes_data, base_address=0x0):
+        """Disassemble and run architecture-specific analysis (block and function
+        discovery). Returns a fully populated Graph. Raises RuntimeError on failure."""
+        buf = ffi.from_buffer(bytes_data)
+        ptr = lib.dragon_disasm_analyze(self._ptr, buf, len(bytes_data), base_address)
+        if ptr == ffi.NULL:
+            raise RuntimeError('analysis failed — unsupported architecture or invalid input')
         return Graph(ptr)
 
     def __repr__(self):

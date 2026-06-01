@@ -68,6 +68,16 @@ void dragon::Graph::addInstruction(Instruction insn) {
   instructions_q.mark_valid(addr);
 }
 
+void dragon::Graph::addBlock(std::uint64_t addr) {
+  blocks_q.mark_processed(addr);
+  blocks_q.mark_valid(addr);
+}
+
+void dragon::Graph::addFunction(std::uint64_t addr) {
+  functions_q.mark_processed(addr);
+  functions_q.mark_valid(addr);
+}
+
 void dragon::Graph::insert(Instruction insn) {
   std::uint64_t addr = insn.address();
   listing_.emplace(addr, std::move(insn));;

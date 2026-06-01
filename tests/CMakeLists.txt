@@ -1,6 +1,7 @@
 add_executable(dragon_tests
         TestMain.cpp
         disassemblers/TestDisassembler.cpp
+        disassemblers/TestX86Analysis.cpp
         assemblers/TestAssembler.cpp
 )
 

@@ -75,6 +75,11 @@ std::set<std::uint64_t> dragon::BasicBlock::successors() const {
   const Instruction *term = terminator();
   if (!term || term->isReturn() || term->isTrap())
     return {};
+  if (term->isJump() && term->isConditional()) {
+    auto succs = term->branches();
+    succs.insert(term->address() + term->size());
+    return succs;
+  }
   if (!term->branches().empty())
     return term->branches();
   // Non-jump block end: fall-through is the instruction immediately after

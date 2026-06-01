@@ -1,0 +1,69 @@
+#pragma once
+
+#include <cstdint>
+#include <span>
+#include <unordered_set>
+#include <vector>
+
+#include <dragon/Architecture.hpp>
+#include <dragon/Configuration.hpp>
+#include "utils/Logger.hpp"
+
+namespace dragon {
+
+class Instruction;
+class Disassembler;
+class Graph;
+
+namespace x86 {
+
+class X86Analysis {
+  public:
+  /// Constructor for x86Analysis, we need to understand what architecture
+  /// we are working with, the disassembler to retrieve all the instructions
+  /// and the configuration for logging.
+  X86Analysis(Architecture architecture, const Disassembler &disassembler,
+              const Configuration &configuration);
+  /// Populate the graph received with the decoded
+  /// instructions, blocks and functions.
+  /// @param bytes bytes from instructions to be decoded.
+  /// @param baseAddr base address used to decode the instructions.
+  /// @param graph graph where data will be populated.
+  bool analyze(std::span<const std::uint8_t> bytes, std::uint64_t baseAddr,
+               Graph &graph);
+
+  private:
+  /// We apply a simple analysis to retrieve possible block starts,
+  /// we start from the first instruction retrieved by the disassembler
+  /// looking for jump instructions, the next instructions and the
+  /// jump address are marked as start of blocks.
+  /// @param instructions the instructions that were disassembled.
+  /// @param basicBlockStarts the set where to store the addresses of the basic
+  /// blocks.
+  void discoverBlockStarts(
+          std::vector<Instruction> &instructions,
+          std::unordered_set<std::uint64_t> &basicBlockStarts) const;
+
+  /// We apply a simple analysis to retrieve the beginning of the functions
+  /// we follow calls to look for functions, those points will be marked
+  /// as function beginnings and as basic blocks too.
+  /// @param instructions the instructions that were disassembled.
+  /// @param basicBlockStarts the set where to store the addresses of the basic
+  /// blocks.
+  /// @param functionStarts the set where to store the addresses of the
+  /// functions.
+  void discoverFunctionStarts(
+          std::vector<Instruction> &instructions,
+          std::unordered_set<std::uint64_t> &basicBlockStarts,
+          std::unordered_set<std::uint64_t> &functionStarts) const;
+
+  Architecture architecture_;
+  // In order to work with the disassembler
+  // we need a reference to the object
+  const Disassembler &disassembler_;
+  const Configuration &configuration_;
+  internal::Logger logger_;
+};
+
+} // namespace x86
+} // namespace dragon

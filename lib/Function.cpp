@@ -25,7 +25,7 @@ dragon::Function::Function(const Graph *graph, std::uint64_t startAddress) :
       continue;
     // Add successors to add them to the function
     for (std::uint64_t succ: block.successors()) {
-      if (!processed.count(succ))
+      if (!processed.count(succ) && !graph_->functions_q.is_valid(succ))
         queue.insert(succ);
     }
 

@@ -58,6 +58,10 @@ struct Configuration {
   /// Individual features separated by commas, each prefixed with '+' or '-'.
   /// Empty string uses the defaults implied by `cpu`.
   std::string features;
+
+  /// When true, the library emits diagnostic messages to stderr.
+  /// Set to false by default so library users are not surprised by output.
+  bool logging = false;
 };
 
 } // namespace dragon

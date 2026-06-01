@@ -66,6 +66,8 @@ class Graph {
   }
 
   void addInstruction(Instruction insn);
+  void addBlock(std::uint64_t addr);
+  void addFunction(std::uint64_t addr);
   void update(const Instruction &insn);
 
   [[nodiscard]] const Instruction *get(std::uint64_t address) const;

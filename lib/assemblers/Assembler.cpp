@@ -4,6 +4,7 @@
 #include "assemblers/LLVMAssemblerTarget.hpp"
 #include "assemblers/RISCVAssemblerTarget.hpp"
 #include "assemblers/X86AssemblerTarget.hpp"
+#include "utils/Logger.hpp"
 
 #include <llvm/MC/MCAsmBackend.h>
 #include <llvm/MC/MCCodeEmitter.h>
@@ -31,6 +32,7 @@
 /// recreated per assemble()
 struct dragon::Assembler::Impl {
   LLVMAssemblerTarget target; ///< LLVM objects to create the assemblers.
+  internal::Logger logger;
 };
 
 // -----------------------------------------------------------------------
@@ -41,6 +43,8 @@ dragon::Assembler::Assembler(Architecture architecture,
                              const Configuration &config) :
     architecture_(architecture), configuration_(config),
     impl_(std::make_unique<Impl>()) {
+  impl_->logger = internal::Logger{configuration_.logging};
+
   const std::string &cpu      = configuration_.cpu;
   const std::string &features = configuration_.features;
 
@@ -66,6 +70,12 @@ dragon::Assembler::Assembler(Architecture architecture,
     default:
       break;
   }
+
+  impl_->logger.log("Assembler: arch={} syntax={}", ArchitectureName(architecture_),
+                    configuration_.syntax == Syntax::INTEL ? "intel" : "att");
+  if (!isValid())
+    impl_->logger.log("Assembler: target initialization failed for {}",
+                      ArchitectureName(architecture_));
 }
 
 // These two will need to have the implementation of Pimpl class
@@ -130,8 +140,11 @@ extractTextSection(const llvm::SmallVector<char, 4096> &buffer) {
 
 std::vector<std::uint8_t>
 dragon::Assembler::assemble(std::string_view text) const {
-  if (!isValid())
+  if (!isValid()) {
+    impl_->logger.log("assemble: called on invalid assembler");
     return {};
+  }
+  impl_->logger.log("assemble: {} chars of source text", text.size());
 
   // For x86, prepend the Intel-syntax directive so the user doesn't have to.
   // AT&T is the GNU assembler default, so no prefix is needed for ATT.
@@ -148,8 +161,10 @@ dragon::Assembler::assemble(std::string_view text) const {
   std::string error;
   const llvm::Target *llvmTarget =
           llvm::TargetRegistry::lookupTarget(triple, error);
-  if (!llvmTarget)
+  if (!llvmTarget) {
+    impl_->logger.log("assemble: target lookup failed for triple '{}'", triple);
     return {};
+  }
   // Buffer and stream where the assembled code will be written.
   llvm::SmallVector<char, 4096> outputBuffer;
   llvm::raw_svector_ostream outputStream(outputBuffer);
@@ -168,13 +183,17 @@ dragon::Assembler::assemble(std::string_view text) const {
   auto backend =
           std::unique_ptr<llvm::MCAsmBackend>(llvmTarget->createMCAsmBackend(
                   *target.subtargetInfo, *target.regInfo, targetOptions));
-  if (!backend)
+  if (!backend) {
+    impl_->logger.log("assemble: failed to create backend");
     return {};
+  }
 
   auto emitter = std::unique_ptr<llvm::MCCodeEmitter>(
           llvmTarget->createMCCodeEmitter(*target.instrInfo, *context));
-  if (!emitter)
+  if (!emitter) {
+    impl_->logger.log("assemble: failed to create code emitter");
     return {};
+  }
 
   auto objectWriter = backend->createObjectWriter(outputStream);
 
@@ -187,8 +206,10 @@ dragon::Assembler::assemble(std::string_view text) const {
                   false, // IncrementalLinkerCompatible
                   false // DWARFMustBeAtTheEnd
                   ));
-  if (!streamer)
+  if (!streamer) {
+    impl_->logger.log("assemble: failed to create streamer");
     return {};
+  }
 
   auto srcBuffer = llvm::MemoryBuffer::getMemBuffer(
           llvm::StringRef(patchedSource.data(), patchedSource.size()),
@@ -200,21 +221,32 @@ dragon::Assembler::assemble(std::string_view text) const {
   // after the run call.
   auto parser = std::unique_ptr<llvm::MCAsmParser>(llvm::createMCAsmParser(
           srcMgr, *context, *streamer, *target.asmInfo));
-  if (!parser)
+  if (!parser) {
+    impl_->logger.log("assemble: failed to create parser");
     return {};
+  }
 
   auto targetParser = std::unique_ptr<llvm::MCTargetAsmParser>(
           llvmTarget->createMCAsmParser(*target.subtargetInfo, *parser,
                                         *target.instrInfo, targetOptions));
-  if (!targetParser)
+  if (!targetParser) {
+    impl_->logger.log("assemble: failed to create target parser");
     return {};
+  }
 
   parser->setTargetParser(*targetParser);
 
-  if (parser->Run(false))
+  if (parser->Run(false)) {
+    impl_->logger.log("assemble: parse/assemble failed");
     return {};
+  }
 
   streamer->finish();
 
-  return extractTextSection(outputBuffer);
+  auto result = extractTextSection(outputBuffer);
+  if (result.empty())
+    impl_->logger.log("assemble: text section extraction failed");
+  else
+    impl_->logger.log("assemble: produced {} bytes", result.size());
+  return result;
 }

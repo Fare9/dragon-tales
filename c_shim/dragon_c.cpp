@@ -89,6 +89,15 @@ const char *dragon_config_features(const dragon_config_t *c) {
   return c ? c->config.features.c_str() : "";
 }
 
+void dragon_config_set_logging(dragon_config_t *c, int enabled) {
+  if (c)
+    c->config.logging = enabled != 0;
+}
+
+int dragon_config_logging(const dragon_config_t *c) {
+  return c && c->config.logging ? 1 : 0;
+}
+
 // -- dragon_asm_t — full definition
 struct dragon_asm {
   dragon::Assembler assembler;
@@ -231,6 +240,15 @@ dragon_graph_t *dragon_disasm_disassemble(dragon_disasm_t *d,
   auto *g = new dragon::Graph(d->arch, d->config);
   for (auto &insn: instrs)
     g->addInstruction(std::move(insn));
+  return reinterpret_cast<dragon_graph_t *>(g);
+}
+
+dragon_graph_t *dragon_disasm_analyze(dragon_disasm_t *d, const uint8_t *bytes,
+                                      size_t len, uint64_t base_address) {
+  if (!d || !bytes)
+    return nullptr;
+  auto *g = new dragon::Graph(d->arch, d->config);
+  d->disassembler.disassemble({bytes, len}, base_address, *g);
   return reinterpret_cast<dragon_graph_t *>(g);
 }
 

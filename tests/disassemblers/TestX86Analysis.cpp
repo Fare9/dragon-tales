@@ -1,0 +1,299 @@
+#include <catch2/catch_test_macros.hpp>
+
+#include <dragon/Disassembler.hpp>
+#include <dragon/Graph.hpp>
+
+#include <algorithm>
+#include <vector>
+
+// -----------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------
+
+static dragon::Disassembler makeAnalyzer(dragon::Architecture arch) {
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::LINEAR_SWEEP;
+  cfg.syntax = dragon::Syntax::INTEL;
+  return dragon::Disassembler(arch, cfg);
+}
+
+static dragon::Graph makeGraph(dragon::Architecture arch) {
+  return dragon::Graph(arch, dragon::Configuration{});
+}
+
+static bool hasFunction(const std::vector<dragon::Function> &fns,
+                        std::uint64_t addr) {
+  return std::any_of(fns.begin(), fns.end(), [addr](const dragon::Function &f) {
+    return f.startAddress() == addr;
+  });
+}
+
+static bool hasBlock(const std::vector<dragon::BasicBlock> &blocks,
+                     std::uint64_t addr) {
+  return std::any_of(blocks.begin(), blocks.end(),
+                     [addr](const dragon::BasicBlock &b) {
+                       return b.startAddress() == addr;
+                     });
+}
+
+// -----------------------------------------------------------------------
+// Basic sanity
+// -----------------------------------------------------------------------
+
+TEST_CASE("X86Analysis — empty bytes yields empty graph", "[x86][analysis]") {
+  auto dis = makeAnalyzer(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble({}, 0x1000, g);
+  REQUIRE(g.empty());
+  REQUIRE(g.functions().empty());
+  REQUIRE(g.blocks().empty());
+}
+
+// -----------------------------------------------------------------------
+// Prologue detection
+// -----------------------------------------------------------------------
+
+TEST_CASE("X86Analysis x86_64 — prologue detected as function start",
+          "[x86][analysis][x86_64]") {
+  // push rbp      55
+  // mov rbp, rsp  48 89 E5
+  // xor eax, eax  31 C0
+  // pop rbp       5D
+  // ret           C3
+  const std::vector<std::uint8_t> bytes = {
+          0x55, 0x48, 0x89, 0xE5, // push rbp; mov rbp, rsp
+          0x31, 0xC0, // xor eax, eax
+          0x5D, 0xC3, // pop rbp; ret
+  };
+  auto dis = makeAnalyzer(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  REQUIRE_FALSE(g.empty());
+
+  SECTION("one function at the base address") {
+    auto fns = g.functions();
+    REQUIRE(fns.size() == 1);
+    REQUIRE(fns[0].startAddress() == 0x1000);
+    REQUIRE(fns[0].isValid());
+  }
+
+  SECTION("prologue instruction flags") {
+    const dragon::Instruction *first = g.get(0x1000);
+    REQUIRE(first != nullptr);
+    REQUIRE(first->isFunctionStart());
+    REQUIRE(first->isPrologue());
+    REQUIRE(first->isBlockStart());
+  }
+}
+
+TEST_CASE("X86Analysis x86_32 — prologue detected as function start",
+          "[x86][analysis][x86_32]") {
+  // push ebp      55
+  // mov ebp, esp  89 E5
+  // xor eax, eax  31 C0
+  // pop ebp       5D
+  // ret           C3
+  const std::vector<std::uint8_t> bytes = {
+          0x55, 0x89, 0xE5, // push ebp; mov ebp, esp
+          0x31, 0xC0, // xor eax, eax
+          0x5D, 0xC3, // pop ebp; ret
+  };
+  auto dis = makeAnalyzer(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  auto fns = g.functions();
+  REQUIRE(fns.size() == 1);
+  REQUIRE(fns[0].startAddress() == 0x1000);
+  REQUIRE(fns[0].isValid());
+}
+
+// -----------------------------------------------------------------------
+// Call target → function start
+// -----------------------------------------------------------------------
+
+TEST_CASE("X86Analysis x86_64 — call target becomes a function start",
+          "[x86][analysis][x86_64]") {
+  // 0x1000: E8 0A 00 00 00  call 0x100F  (0x1000 + 5 + 0xA = 0x100F)
+  // 0x1005: C3              ret
+  // 0x1006-0x100E: 90 * 9  padding
+  // 0x100F: 55 48 89 E5     push rbp; mov rbp, rsp
+  // 0x1013: C3              ret
+  const std::vector<std::uint8_t> bytes = {
+          0xE8, 0x0A, 0x00, 0x00, 0x00, // call 0x100F
+          0xC3, // ret   (0x1005)
+          0x90, 0x90, 0x90, 0x90, 0x90,
+          0x90, 0x90, 0x90, 0x90, // 9 nops (0x1006-0x100E)
+          0x55, 0x48, 0x89, 0xE5, // push rbp; mov rbp, rsp (0x100F)
+          0xC3, // ret   (0x1013)
+  };
+  auto dis = makeAnalyzer(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  auto fns = g.functions();
+  REQUIRE(hasFunction(fns, 0x100F));
+
+  const dragon::Instruction *callee = g.get(0x100F);
+  REQUIRE(callee != nullptr);
+  REQUIRE(callee->isFunctionStart());
+}
+
+// -----------------------------------------------------------------------
+// Block discovery via conditional branch
+// -----------------------------------------------------------------------
+
+TEST_CASE("X86Analysis x86_64 — conditional branch creates multiple blocks",
+          "[x86][analysis][x86_64]") {
+  // 0x1000: 74 05  je  0x1007  (0x1000 + 2 + 5 = 0x1007)
+  // 0x1002: C3     ret
+  // 0x1003-0x1006: 90 90 90 90  padding
+  // 0x1007: C3     ret
+  const std::vector<std::uint8_t> bytes = {
+          0x74, 0x05, // je 0x1007
+          0xC3, // ret  (0x1002)
+          0x90, 0x90, 0x90, 0x90, // padding
+          0xC3, // ret  (0x1007)
+  };
+  auto dis = makeAnalyzer(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  auto blocks = g.blocks();
+  REQUIRE(blocks.size() == 3);
+  REQUIRE(hasBlock(blocks, 0x1000)); // entry (je)
+  REQUIRE(hasBlock(blocks, 0x1002)); // fall-through
+  REQUIRE(hasBlock(blocks, 0x1007)); // branch target
+}
+
+// -----------------------------------------------------------------------
+// Full if/else function
+// -----------------------------------------------------------------------
+
+TEST_CASE("X86Analysis x86_64 — if/else function structure",
+          "[x86][analysis][x86_64]") {
+  // Equivalent C:  int foo(int x) { if (x > 0) return 1; else return -1; }
+  //
+  // 0x1000: 55               push rbp
+  // 0x1001: 48 89 E5         mov rbp, rsp
+  // 0x1004: 85 FF            test edi, edi
+  // 0x1006: 7E 07            jle +7  →  0x100F  (else-block)
+  // -- then-block ---
+  // 0x1008: B8 01 00 00 00   mov eax, 1
+  // 0x100D: 5D               pop rbp
+  // 0x100E: C3               ret
+  // -- else-block ---
+  // 0x100F: B8 FF FF FF FF   mov eax, -1
+  // 0x1014: 5D               pop rbp
+  // 0x1015: C3               ret
+  const std::vector<std::uint8_t> bytes = {
+          0x55, // push rbp        (0x1000)
+          0x48, 0x89, 0xE5, // mov rbp, rsp    (0x1001)
+          0x85, 0xFF, // test edi, edi   (0x1004)
+          0x7E, 0x07, // jle +7          (0x1006)
+          0xB8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1      (0x1008)
+          0x5D, // pop rbp         (0x100D)
+          0xC3, // ret             (0x100E)
+          0xB8, 0xFF, 0xFF, 0xFF, 0xFF, // mov eax, -1     (0x100F)
+          0x5D, // pop rbp         (0x1014)
+          0xC3, // ret             (0x1015)
+  };
+
+  auto dis = makeAnalyzer(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  SECTION("all instructions are in the graph") { REQUIRE(g.size() == 10); }
+
+  SECTION("one function detected at the prologue") {
+    auto fns = g.functions();
+    REQUIRE(fns.size() == 1);
+    REQUIRE(fns[0].startAddress() == 0x1000);
+    REQUIRE(fns[0].isValid());
+  }
+
+  SECTION("three basic blocks: entry, then-branch, else-branch") {
+    auto blocks = g.blocks();
+    REQUIRE(blocks.size() == 3);
+    REQUIRE(hasBlock(blocks, 0x1000)); // entry (up to jle)
+    REQUIRE(hasBlock(blocks, 0x1008)); // then-block
+    REQUIRE(hasBlock(blocks, 0x100F)); // else-block
+  }
+
+  SECTION("function owns all three blocks") {
+    auto fns = g.functions();
+    REQUIRE(fns[0].numBlocks() == 3);
+    REQUIRE(fns[0].block(0x1000) != nullptr);
+    REQUIRE(fns[0].block(0x1008) != nullptr);
+    REQUIRE(fns[0].block(0x100F) != nullptr);
+  }
+
+  SECTION("entry block contains 4 instructions and terminates on the jle") {
+    auto fns = g.functions();
+    const dragon::BasicBlock *entry = fns[0].block(0x1000);
+    REQUIRE(entry != nullptr);
+    REQUIRE(entry->size() == 4);
+    REQUIRE(entry->terminatorAddress() == 0x1006);
+    const dragon::Instruction *jle = entry->terminator();
+    REQUIRE(jle != nullptr);
+    REQUIRE(jle->isJump());
+    REQUIRE(jle->isConditional());
+  }
+
+  SECTION("then-block and else-block each have 3 instructions ending in ret") {
+    auto fns = g.functions();
+    const dragon::BasicBlock *then_bb = fns[0].block(0x1008);
+    const dragon::BasicBlock *else_bb = fns[0].block(0x100F);
+    REQUIRE(then_bb != nullptr);
+    REQUIRE(else_bb != nullptr);
+    REQUIRE(then_bb->size() == 3);
+    REQUIRE(else_bb->size() == 3);
+    REQUIRE(then_bb->terminator()->isReturn());
+    REQUIRE(else_bb->terminator()->isReturn());
+  }
+
+  SECTION("function instruction count is the sum of all blocks") {
+    auto fns = g.functions();
+    REQUIRE(fns[0].numInstructions() == 10);
+  }
+}
+
+// -----------------------------------------------------------------------
+// Two adjacent functions — function boundary stops BFS
+// -----------------------------------------------------------------------
+
+TEST_CASE("X86Analysis x86_64 — two adjacent prologues produce two distinct "
+          "functions",
+          "[x86][analysis][x86_64]") {
+  // Function 1 (0x1000): push rbp; mov rbp, rsp; pop rbp  — no ret, falls
+  // through Function 2 (0x1005): push rbp; mov rbp, rsp; pop rbp; ret
+  //
+  // Without the function-boundary BFS guard in Function.cpp, function 1 would
+  // follow the fall-through successor at 0x1005 and absorb function 2's blocks.
+  const std::vector<std::uint8_t> bytes = {
+          0x55, 0x48, 0x89, 0xE5, 0x5D, // push rbp; mov rbp, rsp; pop rbp (fn1)
+          0x55, 0x48, 0x89, 0xE5, 0x5D,
+          0xC3, // push rbp; mov rbp, rsp; pop rbp; ret (fn2)
+  };
+  auto dis = makeAnalyzer(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  auto fns = g.functions();
+  REQUIRE(fns.size() == 2);
+  REQUIRE(hasFunction(fns, 0x1000));
+  REQUIRE(hasFunction(fns, 0x1005));
+
+  SECTION("function 1 does not absorb function 2 blocks") {
+    // functions() returns in address order (std::set iteration)
+    REQUIRE(fns[0].startAddress() == 0x1000);
+    REQUIRE(fns[0].numBlocks() == 1);
+    REQUIRE(fns[0].block(0x1005) == nullptr);
+  }
+
+  SECTION("function 2 is self-contained") {
+    REQUIRE(fns[1].startAddress() == 0x1005);
+    REQUIRE(fns[1].isValid());
+  }
+}
