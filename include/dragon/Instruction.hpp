@@ -8,6 +8,13 @@
 #include <string_view>
 #include <vector>
 
+namespace llvm {
+// Forward declaration so we can use it here
+// internally we need to use InstructionImpl.hpp
+// to retrieve the real value
+class MCInst;
+} // namespace llvm
+
 namespace dragon {
 
 /// A representation of an Instruction agnostic to any kind of architecture
@@ -40,6 +47,8 @@ class Instruction {
     return callees_;
   }
   [[nodiscard]] std::size_t edges() const { return edges_; }
+
+  [[nodiscard]] const llvm::MCInst *mcInst() const;
 
   // Structural flags
   [[nodiscard]] bool isBlockStart() const { return isBlockStart_; }
@@ -83,7 +92,8 @@ class Instruction {
   private:
   /// Opaque LLVM state (MCInst and related data).
   /// Null for instructions that failed to decode.
-  /// Internal code can access the full definition by including InstructionImpl.hpp.
+  /// Internal code can access the full definition by including
+  /// InstructionImpl.hpp.
   struct Impl;
   std::unique_ptr<Impl> impl_;
 

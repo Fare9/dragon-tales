@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include <span>
 #include <unordered_set>
 #include <vector>
@@ -9,11 +8,15 @@
 #include <dragon/Configuration.hpp>
 #include "utils/Logger.hpp"
 
+#include <llvm/MC/MCInstrInfo.h>
+#include <llvm/MC/MCRegisterInfo.h>
+
 namespace dragon {
 
 class Instruction;
 class Disassembler;
 class Graph;
+class X86Info;
 
 namespace x86 {
 
@@ -23,14 +26,16 @@ class X86Analysis {
   /// we are working with, the disassembler to retrieve all the instructions
   /// and the configuration for logging.
   X86Analysis(Architecture architecture, const Disassembler &disassembler,
-              const Configuration &configuration);
+              const Configuration &configuration,
+                  const llvm::MCInstrInfo &instrInfo,
+                  const llvm::MCRegisterInfo &regInfo);
   /// Populate the graph received with the decoded
   /// instructions, blocks and functions.
   /// @param bytes bytes from instructions to be decoded.
   /// @param baseAddr base address used to decode the instructions.
   /// @param graph graph where data will be populated.
   bool analyze(std::span<const std::uint8_t> bytes, std::uint64_t baseAddr,
-               Graph &graph);
+               Graph &graph) const;
 
   private:
   /// We apply a simple analysis to retrieve possible block starts,
@@ -58,10 +63,11 @@ class X86Analysis {
           std::unordered_set<std::uint64_t> &functionStarts) const;
 
   Architecture architecture_;
-  // In order to work with the disassembler
-  // we need a reference to the object
   const Disassembler &disassembler_;
   const Configuration &configuration_;
+  const llvm::MCInstrInfo &instrInfo_;
+  const llvm::MCRegisterInfo &regInfo_;
+  const X86Info *x86Info_;
   internal::Logger logger_;
 };
 

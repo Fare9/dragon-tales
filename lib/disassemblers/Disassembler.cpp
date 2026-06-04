@@ -98,7 +98,9 @@ void dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
   switch (architecture_) {
     case Architecture::X86_32:
     case Architecture::X86_64: {
-      x86::X86Analysis x86Analysis{architecture_, *this, configuration_};
+      x86::X86Analysis x86Analysis{architecture_, *this, configuration_,
+                                   *impl_->target.instrInfo,
+                                   *impl_->target.regInfo};
       x86Analysis.analyze(bytes, baseAddress, graph);
       break;
     }

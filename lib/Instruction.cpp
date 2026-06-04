@@ -34,20 +34,20 @@ dragon::Instruction::~Instruction() = default;
 
 // Move: unique_ptr is movable; trivially correct.
 dragon::Instruction::Instruction(Instruction &&) noexcept = default;
-dragon::Instruction &dragon::Instruction::operator=(Instruction &&) noexcept = default;
+dragon::Instruction &
+dragon::Instruction::operator=(Instruction &&) noexcept = default;
 
 // Copy: deep-copy the Impl so each Instruction owns its own MCInst.
 // impl_ may be null for instructions that failed to decode — handle that case.
 dragon::Instruction::Instruction(const Instruction &other) :
-    address_(other.address_), size_(other.size_),
-    mnemonic_(other.mnemonic_), operands_(other.operands_),
-    disassembly_(other.disassembly_), pattern_(other.pattern_),
-    bytes_(other.bytes_), chromosomeMask_(other.chromosomeMask_),
-    branches_(other.branches_), callees_(other.callees_),
-    edges_(other.edges_),
-    isBlockStart_(other.isBlockStart_), isFunctionStart_(other.isFunctionStart_),
-    isPrologue_(other.isPrologue_), isReturn_(other.isReturn_),
-    isCall_(other.isCall_), isJump_(other.isJump_),
+    address_(other.address_), size_(other.size_), mnemonic_(other.mnemonic_),
+    operands_(other.operands_), disassembly_(other.disassembly_),
+    pattern_(other.pattern_), bytes_(other.bytes_),
+    chromosomeMask_(other.chromosomeMask_), branches_(other.branches_),
+    callees_(other.callees_), edges_(other.edges_),
+    isBlockStart_(other.isBlockStart_),
+    isFunctionStart_(other.isFunctionStart_), isPrologue_(other.isPrologue_),
+    isReturn_(other.isReturn_), isCall_(other.isCall_), isJump_(other.isJump_),
     isConditional_(other.isConditional_), isTrap_(other.isTrap_),
     hasIndirectTarget_(other.hasIndirectTarget_),
     impl_(other.impl_ ? std::make_unique<Impl>(*other.impl_) : nullptr) {}
@@ -56,27 +56,31 @@ dragon::Instruction &dragon::Instruction::operator=(const Instruction &other) {
   if (this == &other)
     return *this;
 
-  address_          = other.address_;
-  size_             = other.size_;
-  mnemonic_         = other.mnemonic_;
-  operands_         = other.operands_;
-  disassembly_      = other.disassembly_;
-  pattern_          = other.pattern_;
-  bytes_            = other.bytes_;
-  chromosomeMask_   = other.chromosomeMask_;
-  branches_         = other.branches_;
-  callees_          = other.callees_;
-  edges_            = other.edges_;
-  isBlockStart_     = other.isBlockStart_;
-  isFunctionStart_  = other.isFunctionStart_;
-  isPrologue_       = other.isPrologue_;
-  isReturn_         = other.isReturn_;
-  isCall_           = other.isCall_;
-  isJump_           = other.isJump_;
-  isConditional_    = other.isConditional_;
-  isTrap_           = other.isTrap_;
-  hasIndirectTarget_= other.hasIndirectTarget_;
+  address_ = other.address_;
+  size_ = other.size_;
+  mnemonic_ = other.mnemonic_;
+  operands_ = other.operands_;
+  disassembly_ = other.disassembly_;
+  pattern_ = other.pattern_;
+  bytes_ = other.bytes_;
+  chromosomeMask_ = other.chromosomeMask_;
+  branches_ = other.branches_;
+  callees_ = other.callees_;
+  edges_ = other.edges_;
+  isBlockStart_ = other.isBlockStart_;
+  isFunctionStart_ = other.isFunctionStart_;
+  isPrologue_ = other.isPrologue_;
+  isReturn_ = other.isReturn_;
+  isCall_ = other.isCall_;
+  isJump_ = other.isJump_;
+  isConditional_ = other.isConditional_;
+  isTrap_ = other.isTrap_;
+  hasIndirectTarget_ = other.hasIndirectTarget_;
   impl_ = other.impl_ ? std::make_unique<Impl>(*other.impl_) : nullptr;
 
   return *this;
+}
+
+const llvm::MCInst *dragon::Instruction::mcInst() const {
+  return impl_ ? (&impl_->inst) : nullptr;
 }

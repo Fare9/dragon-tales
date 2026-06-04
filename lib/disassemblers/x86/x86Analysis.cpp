@@ -1,34 +1,37 @@
 #include "disassemblers/x86/x86Analysis.hpp"
 
 // Public headers
-#include <dragon/BasicBlock.hpp>
 #include <dragon/Disassembler.hpp>
-#include <dragon/Function.hpp>
 #include <dragon/Graph.hpp>
 #include <dragon/Instruction.hpp>
 #include <dragon/x86Info.hpp>
 
 // Private headers
-#include "InstructionImpl.hpp"
 
 #include <unordered_set>
 #include <vector>
 
 dragon::x86::X86Analysis::X86Analysis(Architecture architecture,
                                       const Disassembler &disassembler,
-                                      const Configuration &configuration) :
+                                      const Configuration &configuration,
+                                      const llvm::MCInstrInfo &instrInfo,
+                                      const llvm::MCRegisterInfo &regInfo) :
     architecture_(architecture), disassembler_(disassembler),
-    configuration_(configuration) {
+    configuration_(configuration), instrInfo_(instrInfo), regInfo_(regInfo) {
+  static const X86Info x86Info32{Architecture::X86_32, instrInfo, regInfo};
+  static const X86Info x86Info64{Architecture::X86_64, instrInfo, regInfo};
+  x86Info_ = (architecture == Architecture::X86_32) ? &x86Info32 : &x86Info64;
   logger_ = internal::Logger{configuration_.logging};
 }
 
 bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
-                                       std::uint64_t baseAddr, Graph &graph) {
+                                       std::uint64_t baseAddr,
+                                       Graph &graph) const {
   std::unordered_set<std::uint64_t> basicBlockStarts;
   std::unordered_set<std::uint64_t> functionStarts;
-  std::vector<Instruction> instructions;
 
-  instructions = disassembler_.disassemble(bytes, baseAddr);
+  std::vector<Instruction> instructions =
+          disassembler_.disassemble(bytes, baseAddr);
 
   discoverBlockStarts(instructions, basicBlockStarts);
 
@@ -89,23 +92,20 @@ void dragon::x86::X86Analysis::discoverFunctionStarts(
         std::vector<Instruction> &instructions,
         std::unordered_set<std::uint64_t> &basicBlockStarts,
         std::unordered_set<std::uint64_t> &functionStarts) const {
+
   for (auto &I: instructions) {
     if (I.isCall()) {
       for (auto callee: I.callees()) {
         functionStarts.insert(callee);
         basicBlockStarts.insert(callee);
-        I.setFunctionStart(true);
-        I.setBlockStart(true);
         logger_.log("Discovered callee at address 0x{:x}", callee);
       }
     }
   }
 
-  // We need information about the instructions.
-  const X86Info x86Info{architecture_};
   for (size_t i = 0, e = instructions.size(); i + 1 < e; ++i) {
     const Instruction *window[2] = {&instructions[i], &instructions[i + 1]};
-    if (x86Info.isCommonFunctionPrologue({window, 2})) {
+    if (x86Info_->isCommonFunctionPrologue({window, 2})) {
       std::uint64_t addr = instructions[i].address();
       functionStarts.insert(addr);
       basicBlockStarts.insert(addr);

@@ -79,9 +79,5 @@ std::size_t dragon::Function::byteSize() const {
 }
 
 std::size_t dragon::Function::cyclomaticComplexity() const {
-  std::size_t e = edges();
-  std::size_t n = blocks_.size();
-  if (e < n)
-    return 0;
-  return e - n + 2;
+  return edges() - blocks_.size() + 2;
 }
