@@ -1,4 +1,5 @@
 #include "disassemblers/x86/x86Analysis.hpp"
+#include "disassemblers/x86/X86IGNILLifter.hpp"
 
 // Public headers
 #include <dragon/Disassembler.hpp>
@@ -20,9 +21,12 @@ dragon::x86::X86Analysis::X86Analysis(Architecture architecture,
     configuration_(configuration), instrInfo_(instrInfo), regInfo_(regInfo) {
   static const X86Info x86Info32{Architecture::X86_32, instrInfo, regInfo};
   static const X86Info x86Info64{Architecture::X86_64, instrInfo, regInfo};
+  x86IgnilLifter_ = std::make_unique<X86IGNILLifter>(architecture, instrInfo, regInfo);
   x86Info_ = (architecture == Architecture::X86_32) ? &x86Info32 : &x86Info64;
   logger_ = internal::Logger{configuration_.logging};
 }
+
+dragon::x86::X86Analysis::~X86Analysis() = default;
 
 bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
                                        std::uint64_t baseAddr,
@@ -45,6 +49,13 @@ bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
 
   for (std::uint64_t addr: functionStarts)
     graph.addFunction(addr);
+
+  for (BasicBlock &block: graph.blocks()) {
+    auto ignilBlock = x86IgnilLifter_->liftBlock(block, graph);
+    logger_.log("Lifted block @ 0x{:x} -> {} IGNIL ops", block.startAddress(),
+                ignilBlock.size());
+    graph.addIGNILBlock(std::move(ignilBlock));
+  }
 
   return true;
 }

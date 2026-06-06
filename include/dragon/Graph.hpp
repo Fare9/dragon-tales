@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include <dragon/Architecture.hpp>
 #include <dragon/BasicBlock.hpp>
 #include <dragon/Configuration.hpp>
@@ -10,6 +9,8 @@
 #include <optional>
 #include <set>
 #include <vector>
+
+#include "IGNIL.hpp"
 
 namespace dragon {
 
@@ -70,6 +71,10 @@ class Graph {
   void addFunction(std::uint64_t addr);
   void update(const Instruction &insn);
 
+  void addIGNILBlock(ignil::Block block);
+  ignil::Block *getIGNILBlock(std::uint64_t addr);
+  const ignil::Block *getIGNILBlock(std::uint64_t addr) const;
+
   [[nodiscard]] const Instruction *get(std::uint64_t address) const;
   [[nodiscard]] Instruction *get(std::uint64_t address);
 
@@ -97,6 +102,7 @@ class Graph {
   Architecture architecture_;
   Configuration configuration_;
   std::map<std::uint64_t, Instruction> listing_;
+  std::map<std::uint64_t, ignil::Block> ignilBlocks_;
 };
 
 } // namespace dragon

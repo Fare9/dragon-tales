@@ -27,6 +27,7 @@ option(DRAGON_BUILD_TESTS "Build tests" ON)
 
 add_subdirectory(lib)
 add_subdirectory(c_shim)
+add_subdirectory(examples/cpp)
 
 if (DRAGON_BUILD_TESTS)
     enable_testing()

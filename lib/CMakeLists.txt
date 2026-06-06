@@ -4,6 +4,7 @@ add_library(libdragon SHARED
         BasicBlock.cpp
         Function.cpp
         Graph.cpp
+        IGNIL.cpp
 )
 
 add_library(dragon::libdragon ALIAS libdragon)
