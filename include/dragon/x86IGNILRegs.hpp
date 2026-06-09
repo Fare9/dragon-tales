@@ -153,15 +153,17 @@ inline constexpr ignil::Reg DH{kOffRDX + 1, k8};
 inline constexpr ignil::Reg BH{kOffRBX + 1, k8};
 
 // ---------------------------------------------------------------------------
-// EFLAGS — all 1-bit wide
+// EFLAGS — 8-bit wide in the IGNIL register space (one byte slot each).
+// The boolean value stored inside is still 1 bit; the register container
+// is 8 bits as defined in x86registers.def.
 // ---------------------------------------------------------------------------
 
-inline constexpr ignil::Reg CF{kOffCF, 1}; ///< Carry flag
-inline constexpr ignil::Reg PF{kOffPF, 1}; ///< Parity flag
-inline constexpr ignil::Reg AF{kOffAF, 1}; ///< Auxiliary carry flag
-inline constexpr ignil::Reg ZF{kOffZF, 1}; ///< Zero flag
-inline constexpr ignil::Reg SF{kOffSF, 1}; ///< Sign flag
-inline constexpr ignil::Reg OF{kOffOF, 1}; ///< Overflow flag
-inline constexpr ignil::Reg DF{kOffDF, 1}; ///< Direction flag
+inline constexpr ignil::Reg CF{kOffCF, k8}; ///< Carry flag
+inline constexpr ignil::Reg PF{kOffPF, k8}; ///< Parity flag
+inline constexpr ignil::Reg AF{kOffAF, k8}; ///< Auxiliary carry flag
+inline constexpr ignil::Reg ZF{kOffZF, k8}; ///< Zero flag
+inline constexpr ignil::Reg SF{kOffSF, k8}; ///< Sign flag
+inline constexpr ignil::Reg OF{kOffOF, k8}; ///< Overflow flag
+inline constexpr ignil::Reg DF{kOffDF, k8}; ///< Direction flag
 
 } // namespace dragon::x86

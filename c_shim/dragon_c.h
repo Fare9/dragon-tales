@@ -181,6 +181,144 @@
   void dragon_function_each_block(const dragon_function_t* f,
       void (*cb)(const dragon_block_t*, void* user), void* user);
 
+  // -- String helper -------------------------------------------------------------
+
+  // Free a C string returned by any dragon function whose documentation says
+  // "free with dragon_cstr_free".  Do NOT use on static strings.
+  void dragon_cstr_free(char* s);
+
+  // -- IGNIL opcodes -------------------------------------------------------------
+
+  // Mirror of ignil::Opcode.  Numerical values are guaranteed to match.
+  typedef enum {
+      DRAGON_IGNIL_COPY  = 0,
+      DRAGON_IGNIL_LOAD  = 1,
+      DRAGON_IGNIL_STORE = 2,
+      DRAGON_IGNIL_ADD   = 3,
+      DRAGON_IGNIL_SUB   = 4,
+      DRAGON_IGNIL_NEG   = 5,
+      DRAGON_IGNIL_MUL   = 6,
+      DRAGON_IGNIL_SDIV  = 7,
+      DRAGON_IGNIL_UDIV  = 8,
+      DRAGON_IGNIL_SMOD  = 9,
+      DRAGON_IGNIL_UMOD  = 10,
+      DRAGON_IGNIL_AND   = 11,
+      DRAGON_IGNIL_OR    = 12,
+      DRAGON_IGNIL_XOR   = 13,
+      DRAGON_IGNIL_NOT   = 14,
+      DRAGON_IGNIL_SHL   = 15,
+      DRAGON_IGNIL_SHR   = 16,
+      DRAGON_IGNIL_SAR   = 17,
+      DRAGON_IGNIL_ZEXT  = 18,
+      DRAGON_IGNIL_SEXT  = 19,
+      DRAGON_IGNIL_TRUNC = 20,
+      DRAGON_IGNIL_EQ    = 21,
+      DRAGON_IGNIL_NEQ   = 22,
+      DRAGON_IGNIL_ULT   = 23,
+      DRAGON_IGNIL_ULE   = 24,
+      DRAGON_IGNIL_UGT   = 25,
+      DRAGON_IGNIL_UGE   = 26,
+      DRAGON_IGNIL_SLT   = 27,
+      DRAGON_IGNIL_SLE   = 28,
+      DRAGON_IGNIL_SGT   = 29,
+      DRAGON_IGNIL_SGE   = 30,
+      DRAGON_IGNIL_JMP   = 31,
+      DRAGON_IGNIL_CJMP  = 32,
+      DRAGON_IGNIL_CALL  = 33,
+      DRAGON_IGNIL_RET   = 34,
+      DRAGON_IGNIL_UNDEF = 35,
+  } dragon_ignil_opcode_t;
+
+  // Returns a static string for the opcode mnemonic (e.g. "ADD", "COPY").
+  const char* dragon_ignil_opcode_name(dragon_ignil_opcode_t op);
+
+  // -- IGNIL block ---------------------------------------------------------------
+
+  // Borrowed pointer into the graph — valid while the owning graph is alive.
+  // No destroy needed.
+  typedef struct dragon_ignil_block dragon_ignil_block_t;
+
+  // Returns NULL if no IGNIL block exists for this address.
+  const dragon_ignil_block_t* dragon_graph_get_ignil_block(
+      const dragon_graph_t* g, uint64_t addr);
+
+  size_t   dragon_ignil_block_size(const dragon_ignil_block_t* b);
+  uint64_t dragon_ignil_block_address(const dragon_ignil_block_t* b);
+
+  // Render the whole block as a multi-line string.  Caller must free with dragon_cstr_free.
+  char* dragon_ignil_block_to_string(const dragon_ignil_block_t* b);
+
+  // Render one op (by 0-based index) as a string.  Caller must free with dragon_cstr_free.
+  // Returns NULL if index >= block size.
+  char* dragon_ignil_block_op_to_string(const dragon_ignil_block_t* b, size_t index);
+
+  // Iterate ops; callback receives machine address, opcode, and 0-based index.
+  void dragon_ignil_block_each_op(
+      const dragon_ignil_block_t* b,
+      void (*cb)(uint64_t op_addr, dragon_ignil_opcode_t opcode, size_t index, void* user),
+      void* user);
+
+  // -- SliceExpr -----------------------------------------------------------------
+
+  typedef enum {
+      DRAGON_SLICE_CONST   = 0,
+      DRAGON_SLICE_SYM_REG = 1,
+      DRAGON_SLICE_BINOP   = 2,
+      DRAGON_SLICE_UNARYOP = 3,
+      DRAGON_SLICE_LOAD    = 4,
+      DRAGON_SLICE_UNDEF   = 5,
+  } dragon_slice_type_t;
+
+  // Owned handle.  Root and child handles must each be destroyed independently.
+  typedef struct dragon_slice_expr dragon_slice_expr_t;
+
+  void                  dragon_slice_expr_destroy(dragon_slice_expr_t* e);
+  dragon_slice_type_t   dragon_slice_expr_type(const dragon_slice_expr_t* e);
+
+  // Caller must free the returned string with dragon_cstr_free.
+  char* dragon_slice_expr_to_string(const dragon_slice_expr_t* e);
+
+  // DRAGON_SLICE_CONST
+  uint64_t dragon_slice_expr_const_value(const dragon_slice_expr_t* e);
+  uint8_t  dragon_slice_expr_const_width(const dragon_slice_expr_t* e);
+
+  // DRAGON_SLICE_SYM_REG
+  uint32_t dragon_slice_expr_symreg_offset(const dragon_slice_expr_t* e);
+  uint8_t  dragon_slice_expr_symreg_width(const dragon_slice_expr_t* e);
+
+  // DRAGON_SLICE_BINOP / DRAGON_SLICE_UNARYOP — shared opcode accessor
+  dragon_ignil_opcode_t dragon_slice_expr_opcode(const dragon_slice_expr_t* e);
+
+  // DRAGON_SLICE_BINOP — caller must destroy returned handles.
+  dragon_slice_expr_t* dragon_slice_expr_left(const dragon_slice_expr_t* e);
+  dragon_slice_expr_t* dragon_slice_expr_right(const dragon_slice_expr_t* e);
+
+  // DRAGON_SLICE_UNARYOP — caller must destroy returned handle.
+  dragon_slice_expr_t* dragon_slice_expr_operand(const dragon_slice_expr_t* e);
+
+  // DRAGON_SLICE_LOAD — caller must destroy the address handle.
+  dragon_slice_expr_t* dragon_slice_expr_load_addr(const dragon_slice_expr_t* e);
+  uint8_t              dragon_slice_expr_load_width(const dragon_slice_expr_t* e);
+
+  // -- BackwardSlicer ------------------------------------------------------------
+
+  typedef struct dragon_slicer dragon_slicer_t;
+
+  // max_blocks caps how many inter-block steps the slicer takes (0 ≤ default = 5).
+  dragon_slicer_t* dragon_slicer_create(int max_blocks);
+  void             dragon_slicer_destroy(dragon_slicer_t* s);
+
+  // Slice a register backwards through the CFG starting at block_addr.
+  // reg_offset and reg_width identify the architectural register in the IGNIL
+  // register address space (see x86IGNILRegs.hpp for x86 constants).
+  // Returns an owned SliceExpr; caller must destroy with dragon_slice_expr_destroy.
+  dragon_slice_expr_t* dragon_slicer_slice_reg(
+      const dragon_slicer_t* s,
+      const dragon_graph_t*  g,
+      uint64_t block_addr,
+      uint32_t reg_offset,
+      uint8_t  reg_width);
+
   #ifdef __cplusplus
   }
   #endif
