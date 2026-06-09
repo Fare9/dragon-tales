@@ -5,6 +5,8 @@
 #include <llvm/MC/MCInstrInfo.h>
 #include <llvm/MC/MCRegisterInfo.h>
 
+#include <functional>
+#include <map>
 #include <unordered_map>
 
 namespace dragon {
@@ -15,6 +17,13 @@ class Graph;
 class Instruction;
 
 namespace x86 {
+
+/// x86 EFLAGS register identifiers, used as keys in the emitArithFlags map.
+enum class X86Flag : std::uint8_t { CF, PF, AF, ZF, SF, OF, DF };
+
+/// Callable that appends IGNIL ops for a single flag into a Block.
+/// Receives the block and the running temp-id counter by reference.
+using FlagSetter = std::function<void(ignil::Block &, std::uint32_t &)>;
 
 /// A lifter for x86/x86_64 machine instructions to IGNIL
 ///
@@ -33,7 +42,6 @@ class X86IGNILLifter {
                                        const Graph &graph) const;
 
   private:
-
   Architecture architecture_;
   const llvm::MCInstrInfo *instrInfo_; // used for MCInstrDesc flag checks
 
@@ -45,6 +53,10 @@ class X86IGNILLifter {
   // Per-opcode lifting helpers
   void liftMov(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
+  void liftMovLoad(const llvm::MCInst &mc, std::uint64_t addr,
+                   ignil::Block &out, std::uint32_t &tmp) const;
+  void liftMovStore(const llvm::MCInst &mc, std::uint64_t addr,
+                    ignil::Block &out, std::uint32_t &tmp) const;
   void liftAdd(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftSub(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -71,7 +83,8 @@ class X86IGNILLifter {
   void liftJmp(const llvm::MCInst &mc, std::uint64_t addr,
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;
-  void liftCall(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+  void liftCall(const llvm::MCInst &mc, std::uint64_t addr,
+                std::uint8_t insnSize, ignil::Block &out,
                 std::uint32_t &tmp) const;
   void liftRet(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
@@ -85,9 +98,10 @@ class X86IGNILLifter {
   [[nodiscard]] ignil::Temp newTemp(std::uint32_t &tempId,
                                     ignil::Width width) const;
 
-  // Decode the 5-operand x86 memory reference starting at mc.getOperand(opStart)
-  // (base, scale, index, disp, seg) and emit the arithmetic ops that compute
-  // the effective address, returning the Temp that holds the result.
+  // Decode the 5-operand x86 memory reference starting at
+  // mc.getOperand(opStart) (base, scale, index, disp, seg) and emit the
+  // arithmetic ops that compute the effective address, returning the Temp that
+  // holds the result.
   [[nodiscard]] ignil::Temp emitAddress(const llvm::MCInst &mc,
                                         unsigned opStart, ignil::Width ptrWidth,
                                         std::uint64_t addr, ignil::Block &out,
@@ -104,28 +118,59 @@ class X86IGNILLifter {
   // instructions we do not yet lift).
   void emitUndef(ignil::Reg dst, std::uint64_t addr, ignil::Block &out) const;
 
-  // EFLAGS helpers - emit standard arithmetic flag updates
-  // after an operation whose result is in `result`.
-  void emitArithFlags(ignil::Value result, std::uint64_t addr,
-                      ignil::Block &out, std::uint32_t &tmp) const;
+  // EFLAGS helpers — iterate every EFLAGS register; for each flag present in
+  // flagMap the corresponding FlagSetter is called, otherwise UNDEF is emitted.
+  void emitArithFlags(std::uint64_t addr, ignil::Block &out, std::uint32_t &tmp,
+                      const std::map<X86Flag, FlagSetter> &flagMap = {}) const;
+
+  // FlagSetter factories — each captures the operands it needs and returns a
+  // callable suitable for the flagMap passed to emitArithFlags.
+
+  // ZF = (value == 0)
+  [[nodiscard]] FlagSetter zfEqZero(ignil::Value value,
+                                    std::uint64_t addr) const;
+  // SF = sign bit of value
+  [[nodiscard]] FlagSetter sfSignBit(ignil::Value value,
+                                     std::uint64_t addr) const;
+
+  // CF = 0 / OF = 0  (logical ops: XOR, AND, OR, TEST always clear both)
+  [[nodiscard]] FlagSetter cfAlwaysZero(std::uint64_t addr) const;
+  [[nodiscard]] FlagSetter ofAlwaysZero(std::uint64_t addr) const;
+
+  // CF for ADD: unsigned overflow  →  ULT(result, addend)
+  [[nodiscard]] FlagSetter cfAddOverflow(ignil::Value result,
+                                         ignil::Value addend,
+                                         std::uint64_t addr) const;
+  // CF for SUB/CMP: unsigned borrow  →  ULT(lhs, rhs)
+  [[nodiscard]] FlagSetter cfSubBorrow(ignil::Value lhs, ignil::Value rhs,
+                                       std::uint64_t addr) const;
+
+  // OF for ADD: same-sign inputs produce opposite-sign result
+  [[nodiscard]] FlagSetter ofAddOverflow(ignil::Value lhs, ignil::Value rhs,
+                                         ignil::Value result,
+                                         std::uint64_t addr) const;
+  // OF for SUB/CMP: different-sign inputs, result sign differs from lhs
+  [[nodiscard]] FlagSetter ofSubOverflow(ignil::Value lhs, ignil::Value rhs,
+                                         ignil::Value result,
+                                         std::uint64_t addr) const;
 
   // Cached opcode integers (same approach as X86Info)
   unsigned opMov64rr_{}, opMov32rr_{};
-  unsigned opMov64ri_{}, opMov32ri_{};
+  unsigned opMov64ri_{}, opMov32ri_{}, opMov64ri32_{};
   unsigned opMov64rm_{}, opMov32rm_{};
   unsigned opMov64mr_{}, opMov32mr_{};
   unsigned opLea64r_{}, opLea32r_{};
   unsigned opAdd64rr_{}, opAdd32rr_{};
-  unsigned opAdd64ri_{}, opAdd32ri_{};
+  unsigned opAdd64ri_{}, opAdd32ri_{}, opAdd64ri8_{}, opAdd32ri8_{};
   unsigned opSub64rr_{}, opSub32rr_{};
-  unsigned opSub64ri_{}, opSub32ri_{};
+  unsigned opSub64ri_{}, opSub32ri_{}, opSub64ri8_{}, opSub32ri8_{};
   unsigned opXor64rr_{}, opXor32rr_{};
   unsigned opAnd64rr_{}, opAnd32rr_{};
   unsigned opOr64rr_{}, opOr32rr_{};
   unsigned opPush64r_{}, opPop64r_{};
   unsigned opPush32r_{}, opPop32r_{};
   unsigned opCmp64rr_{}, opCmp32rr_{};
-  unsigned opCmp64ri_{}, opCmp32ri_{};
+  unsigned opCmp64ri_{}, opCmp32ri_{}, opCmp64ri8_{}, opCmp32ri8_{};
   unsigned opTest64rr_{}, opTest32rr_{};
   unsigned opJmp64r_{}, opJmp32r_{}; // indirect
   unsigned opJmp_{}; // direct

@@ -7,3 +7,12 @@ target_include_directories(ignil_lifting PRIVATE
         ${CMAKE_SOURCE_DIR}/lib
         ${LLVM_INCLUDE_DIRS}
 )
+
+add_executable(backward_slicing backward_slicing.cpp)
+
+target_link_libraries(backward_slicing PRIVATE dragon::libdragon)
+
+target_include_directories(backward_slicing PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${LLVM_INCLUDE_DIRS}
+)

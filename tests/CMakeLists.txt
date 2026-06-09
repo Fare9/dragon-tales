@@ -4,6 +4,7 @@ add_executable(dragon_tests
         disassemblers/TestX86Analysis.cpp
         disassemblers/TestX86IGNILLifter.cpp
         assemblers/TestAssembler.cpp
+        analysis/TestBackwardSlicer.cpp
 )
 
 target_link_libraries(dragon_tests
