@@ -37,6 +37,7 @@ struct Const {
 struct Reg {
   std::uint32_t offset; // byte offset in the register address space
   Width width; // bit width
+  std::string name; // an optional name to improve output
 };
 
 /// SSA temporary value, the registers need to
@@ -59,7 +60,7 @@ using Value = std::variant<Const, Reg, Temp>;
 /// Opcode for the operations of IGNIL, we need
 /// to have operations that provide information
 /// about sign of the operands.
-enum class  Opcode : std::uint8_t {
+enum class Opcode : std::uint8_t {
   // Data movement
   COPY, // dst = srcs[0]
   LOAD, // dst = memory[srcs[0]] (width bytes)

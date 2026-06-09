@@ -12,6 +12,8 @@ std::string toString(const Expr &e) {
             return std::format("0x{:x}:i{}", c.value, c.width);
           },
           [](const SymReg &r) {
+            if (!r.reg.name.empty())
+              return std::format("{}:i{}", r.reg.name, r.reg.width);
             return std::format("reg[{}]:i{}", r.reg.offset, r.reg.width);
           },
           [](const BinOp &b) {

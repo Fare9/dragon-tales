@@ -110,6 +110,9 @@ std::string dragon::ignil::toString(const Value &v) {
                                                            c.value, c.width);
                                       },
                                       [](const Reg &r) {
+                                        if (!r.name.empty())
+                                          return std::format("{}:i{}", r.name,
+                                                             r.width);
                                         return std::format("reg[{}]:i{}",
                                                            r.offset, r.width);
                                       },

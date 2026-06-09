@@ -283,8 +283,11 @@
   uint8_t  dragon_slice_expr_const_width(const dragon_slice_expr_t* e);
 
   // DRAGON_SLICE_SYM_REG
-  uint32_t dragon_slice_expr_symreg_offset(const dragon_slice_expr_t* e);
-  uint8_t  dragon_slice_expr_symreg_width(const dragon_slice_expr_t* e);
+  uint32_t    dragon_slice_expr_symreg_offset(const dragon_slice_expr_t* e);
+  uint8_t     dragon_slice_expr_symreg_width(const dragon_slice_expr_t* e);
+  // Returns a pointer into internal storage — valid while the expr is alive.
+  // Empty string ("") when no name was set.
+  const char* dragon_slice_expr_symreg_name(const dragon_slice_expr_t* e);
 
   // DRAGON_SLICE_BINOP / DRAGON_SLICE_UNARYOP — shared opcode accessor
   dragon_ignil_opcode_t dragon_slice_expr_opcode(const dragon_slice_expr_t* e);
@@ -311,13 +314,16 @@
   // Slice a register backwards through the CFG starting at block_addr.
   // reg_offset and reg_width identify the architectural register in the IGNIL
   // register address space (see x86IGNILRegs.hpp for x86 constants).
+  // reg_name is an optional human-readable label carried into SymReg results
+  // when the value cannot be resolved (NULL or "" means no name).
   // Returns an owned SliceExpr; caller must destroy with dragon_slice_expr_destroy.
   dragon_slice_expr_t* dragon_slicer_slice_reg(
       const dragon_slicer_t* s,
       const dragon_graph_t*  g,
-      uint64_t block_addr,
-      uint32_t reg_offset,
-      uint8_t  reg_width);
+      uint64_t    block_addr,
+      uint32_t    reg_offset,
+      uint8_t     reg_width,
+      const char* reg_name);
 
   #ifdef __cplusplus
   }

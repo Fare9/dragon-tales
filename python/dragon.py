@@ -646,6 +646,11 @@ class SliceExpr:
     def symreg_width(self):
         return lib.dragon_slice_expr_symreg_width(self._ptr)
 
+    @property
+    def symreg_name(self):
+        """Register name if one was set, empty string otherwise."""
+        return ffi.string(lib.dragon_slice_expr_symreg_name(self._ptr)).decode()
+
     # -- BINOP / UNARYOP
 
     @property
@@ -716,7 +721,7 @@ class BackwardSlicer:
     def __exit__(self, *_):
         self.__del__()
 
-    def slice_reg(self, graph, block_addr, reg_offset, reg_width):
+    def slice_reg(self, graph, block_addr, reg_offset, reg_width, reg_name=''):
         """Slice a register backwards through the CFG of *graph*.
 
         Parameters
@@ -729,14 +734,20 @@ class BackwardSlicer:
             Byte offset of the register in the IGNIL register space.
         reg_width  : int
             Bit width of the register.
+        reg_name   : str
+            Optional human-readable name carried into SymReg results when
+            the value cannot be resolved.  Pass via ``*x86.RAX`` to have
+            names filled in automatically.
 
         Returns
         -------
         SliceExpr
             Owned expression tree (caller must destroy / use as context manager).
         """
+        name_bytes = reg_name.encode() if reg_name else ffi.NULL
         ptr = lib.dragon_slicer_slice_reg(
-            self._ptr, graph._ptr, block_addr, reg_offset, reg_width)
+            self._ptr, graph._ptr, block_addr, reg_offset, reg_width,
+            name_bytes)
         if ptr == ffi.NULL:
             raise RuntimeError('slicer returned NULL')
         return SliceExpr(ptr)
@@ -748,11 +759,15 @@ class BackwardSlicer:
 # -- x86 register descriptors --------------------------------------------------
 
 class x86:
-    """x86 / x86-64 IGNIL register descriptors as (offset, width) tuples.
+    """x86 / x86-64 IGNIL register descriptors as (offset, width, name) tuples.
 
     Usage::
 
         slicer.slice_reg(graph, block_addr, *x86.RAX)
+        # equivalent to: slice_reg(graph, block_addr, 0, 64, 'RAX')
+
+    The name is carried into SymReg results and printed in to_string() output
+    when the slicer cannot resolve the register to a concrete value.
 
     Layout (byte offsets in the IGNIL register address space):
         RAX=0  RCX=8  RDX=16  RBX=24  RSP=32  RBP=40  RSI=48  RDI=56
@@ -761,26 +776,28 @@ class x86:
     """
 
     # 64-bit GP registers
-    RAX = (0,   64); RCX = (8,   64); RDX = (16,  64); RBX = (24,  64)
-    RSP = (32,  64); RBP = (40,  64); RSI = (48,  64); RDI = (56,  64)
-    R8  = (64,  64); R9  = (72,  64); R10 = (80,  64); R11 = (88,  64)
-    R12 = (96,  64); R13 = (104, 64); R14 = (112, 64); R15 = (120, 64)
-    RIP = (128, 64)
+    RAX = (0,   64, 'RAX'); RCX = (8,   64, 'RCX'); RDX = (16,  64, 'RDX'); RBX = (24,  64, 'RBX')
+    RSP = (32,  64, 'RSP'); RBP = (40,  64, 'RBP'); RSI = (48,  64, 'RSI'); RDI = (56,  64, 'RDI')
+    R8  = (64,  64, 'R8');  R9  = (72,  64, 'R9');  R10 = (80,  64, 'R10'); R11 = (88,  64, 'R11')
+    R12 = (96,  64, 'R12'); R13 = (104, 64, 'R13'); R14 = (112, 64, 'R14'); R15 = (120, 64, 'R15')
+    RIP = (128, 64, 'RIP')
 
     # 32-bit GP registers
-    EAX = (0,   32); ECX = (8,   32); EDX = (16,  32); EBX = (24,  32)
-    ESP = (32,  32); EBP = (40,  32); ESI = (48,  32); EDI = (56,  32)
-    R8D = (64,  32); R9D = (72,  32); R10D = (80, 32); R11D = (88, 32)
-    R12D = (96, 32); R13D = (104,32); R14D = (112,32); R15D = (120,32)
+    EAX  = (0,   32, 'EAX');  ECX  = (8,   32, 'ECX');  EDX  = (16,  32, 'EDX');  EBX  = (24,  32, 'EBX')
+    ESP  = (32,  32, 'ESP');  EBP  = (40,  32, 'EBP');  ESI  = (48,  32, 'ESI');  EDI  = (56,  32, 'EDI')
+    R8D  = (64,  32, 'R8D');  R9D  = (72,  32, 'R9D');  R10D = (80,  32, 'R10D'); R11D = (88,  32, 'R11D')
+    R12D = (96,  32, 'R12D'); R13D = (104, 32, 'R13D'); R14D = (112, 32, 'R14D'); R15D = (120, 32, 'R15D')
 
     # 16-bit GP registers
-    AX = (0,  16); CX = (8,  16); DX = (16, 16); BX = (24, 16)
-    SP = (32, 16); BP = (40, 16); SI = (48, 16); DI = (56, 16)
+    AX = (0,  16, 'AX'); CX = (8,  16, 'CX'); DX = (16, 16, 'DX'); BX = (24, 16, 'BX')
+    SP = (32, 16, 'SP'); BP = (40, 16, 'BP'); SI = (48, 16, 'SI'); DI = (56, 16, 'DI')
 
     # 8-bit low GP registers
-    AL = (0,  8); CL = (8,  8); DL = (16, 8); BL = (24, 8)
-    AH = (1,  8); CH = (9,  8); DH = (17, 8); BH = (25, 8)  # high-byte aliases
+    AL  = (0,  8, 'AL');  CL  = (8,  8, 'CL');  DL  = (16, 8, 'DL');  BL  = (24, 8, 'BL')
+    SPL = (32, 8, 'SPL'); BPL = (40, 8, 'BPL'); SIL = (48, 8, 'SIL'); DIL = (56, 8, 'DIL')
+    # 8-bit high registers (legacy aliases)
+    AH = (1,  8, 'AH'); CH = (9,  8, 'CH'); DH = (17, 8, 'DH'); BH = (25, 8, 'BH')
 
     # EFLAGS — 8-bit slots in the IGNIL register space (x86registers.def uses width=8)
-    CF = (136, 8); PF = (137, 8); AF = (138, 8); ZF = (139, 8)
-    SF = (140, 8); OF = (141, 8); DF = (142, 8)
+    CF = (136, 8, 'CF'); PF = (137, 8, 'PF'); AF = (138, 8, 'AF'); ZF = (139, 8, 'ZF')
+    SF = (140, 8, 'SF'); OF = (141, 8, 'OF'); DF = (142, 8, 'DF')

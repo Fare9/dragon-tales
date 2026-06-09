@@ -540,6 +540,13 @@ uint8_t dragon_slice_expr_symreg_width(const dragon_slice_expr_t *e) {
   return r ? r->reg.width : 0;
 }
 
+const char *dragon_slice_expr_symreg_name(const dragon_slice_expr_t *e) {
+  if (!e)
+    return "";
+  const auto *r = std::get_if<dragon::slice::SymReg>(&e->expr->data);
+  return r ? r->reg.name.c_str() : "";
+}
+
 dragon_ignil_opcode_t
 dragon_slice_expr_opcode(const dragon_slice_expr_t *e) {
   if (!e)
@@ -605,10 +612,13 @@ dragon_slice_expr_t *dragon_slicer_slice_reg(const dragon_slicer_t *s,
                                               const dragon_graph_t *g,
                                               uint64_t block_addr,
                                               uint32_t reg_offset,
-                                              uint8_t reg_width) {
+                                              uint8_t reg_width,
+                                              const char *reg_name) {
   if (!s || !g)
     return nullptr;
-  dragon::ignil::Value reg{dragon::ignil::Reg{reg_offset, reg_width}};
+  std::string name = (reg_name && *reg_name) ? reg_name : "";
+  dragon::ignil::Value reg{
+      dragon::ignil::Reg{reg_offset, reg_width, std::move(name)}};
   dragon::slice::Expr result =
       s->slicer.slice(reg, block_addr, *as_graph(g));
   return new dragon_slice_expr{

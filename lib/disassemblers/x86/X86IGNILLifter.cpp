@@ -12,12 +12,10 @@
 // Authoritative IGNIL register address space for the x86 lifter.
 // Entries are defined in x86registers.def via the REG(name, offset, width)
 // macro.
-static const std::unordered_map<std::string_view,
-                                std::pair<std::uint32_t, dragon::ignil::Width>>
+static const std::unordered_map<std::string_view, dragon::ignil::Reg>
         kRegisterTable = {
-#define REG(name, offset, width) {name, {offset, width}},
+#define REG(name, offset, width) {name, {offset, width, name}},
 #include "x86registers.def"
-
 
 #undef REG
 };
@@ -32,10 +30,8 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   for (unsigned i = 0; i < regInfo.getNumRegs(); ++i) {
     std::string_view name = regInfo.getName(i);
     auto it = kRegisterTable.find(name);
-    if (it != kRegisterTable.end()) {
-      auto [offset, width] = it->second;
-      regMap_.emplace(i, ignil::Reg{offset, width});
-    }
+    if (it != kRegisterTable.end())
+      regMap_.emplace(i, it->second);
   }
 
   // Flags are not LLVM architectural registers; look them up directly in
@@ -43,9 +39,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   // what LLVM's register info contains.
   auto findFlagReg = [](std::string_view name) -> ignil::Reg {
     auto it = kRegisterTable.find(name);
-    if (it != kRegisterTable.end())
-      return ignil::Reg{it->second.first, it->second.second};
-    return ignil::Reg{0, 0};
+    return it != kRegisterTable.end() ? it->second : ignil::Reg{0, 0};
   };
   // General-purpose registers that are needed structurally (RSP/ESP for
   // push/pop) are also real LLVM registers, so use regMap_ for those.
