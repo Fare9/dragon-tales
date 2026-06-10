@@ -204,3 +204,118 @@ dragon_config_t* config = dragon_config_create(DRAGON_SYNTAX_ATT,
 dragon_asm_t* asm_ = dragon_asm_create(DRAGON_ARCH_X86_64, config);
 dragon_config_destroy(config);
 ```
+
+---
+
+## IGNIL blocks
+
+`dragon_disasm_analyze` populates both the CFG and the IGNIL blocks in the
+returned graph. Use `dragon_graph_get_ignil_block` to retrieve a block by
+address (borrowed pointer — no destroy needed, valid while the graph is alive).
+
+```c
+// nop; cmp rax, rbx; ret
+static const uint8_t code[] = { 0x90, 0x48, 0x39, 0xD8, 0xC3 };
+
+dragon_config_t* config = dragon_config_create(DRAGON_SYNTAX_INTEL,
+                                               DRAGON_STRATEGY_LINEAR_SWEEP);
+dragon_disasm_t* dis    = dragon_disasm_create(DRAGON_ARCH_X86_64, config);
+dragon_config_destroy(config);
+
+dragon_graph_t* graph = dragon_disasm_analyze(dis, code, sizeof(code), 0x1000);
+dragon_disasm_destroy(dis);
+
+const dragon_ignil_block_t* ib = dragon_graph_get_ignil_block(graph, 0x1000);
+if (ib) {
+    // Render the whole block
+    char* s = dragon_ignil_block_to_string(ib);
+    printf("%s", s);
+    dragon_cstr_free(s);
+
+    // Iterate ops
+    void on_op(uint64_t addr, dragon_ignil_opcode_t opc, size_t idx, void* u) {
+        printf("  [%zu] @0x%llx  %s\n", idx, (unsigned long long)addr,
+               dragon_ignil_opcode_name(opc));
+    }
+    dragon_ignil_block_each_op(ib, on_op, NULL);
+}
+
+dragon_graph_destroy(graph);
+```
+
+**IGNIL block API summary**
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_graph_get_ignil_block(g, addr)` | borrowed `const dragon_ignil_block_t*` | NULL if no IGNIL block at addr |
+| `dragon_ignil_block_address(b)` | `uint64_t` | Start address |
+| `dragon_ignil_block_size(b)` | `size_t` | Op count |
+| `dragon_ignil_block_to_string(b)` | `char*` (heap) | Free with `dragon_cstr_free` |
+| `dragon_ignil_block_op_to_string(b, idx)` | `char*` (heap) | Single op; NULL if idx ≥ size |
+| `dragon_ignil_block_each_op(b, cb, user)` | — | Callback receives addr, opcode, index |
+| `dragon_ignil_opcode_name(opc)` | `const char*` (static) | E.g. `"ADD"`, `"COPY"` |
+
+---
+
+## Backward slicer
+
+`dragon_slicer_t` wraps `BackwardSlicer`. `dragon_slice_expr_t` is an owned
+handle to a node in the expression tree; child handles (left, right, operand,
+load_addr) are also owned and must each be destroyed independently.
+
+```c
+// Slice ZF backward starting from block 0x1000
+dragon_slicer_t* slicer = dragon_slicer_create(/*max_blocks=*/5);
+
+dragon_slice_expr_t* expr = dragon_slicer_slice_reg(
+    slicer, graph,
+    /*block_addr=*/0x1000,
+    /*reg_offset=*/139,   // ZF offset
+    /*reg_width =*/8,     // ZF is 8-bit in IGNIL
+    /*reg_name  =*/"ZF");
+
+// Render the whole expression
+char* s = dragon_slice_expr_to_string(expr);
+printf("%s\n", s);   // EQ(SUB(RAX:i64, RBX:i64), 0x0:i64)
+dragon_cstr_free(s);
+
+// Walk the tree
+if (dragon_slice_expr_type(expr) == DRAGON_SLICE_BINOP) {
+    dragon_ignil_opcode_t opc = dragon_slice_expr_opcode(expr);
+    printf("opcode: %s\n", dragon_ignil_opcode_name(opc));
+
+    dragon_slice_expr_t* left  = dragon_slice_expr_left(expr);
+    dragon_slice_expr_t* right = dragon_slice_expr_right(expr);
+
+    // left is another BINOP (SUB), right is a CONST
+    if (dragon_slice_expr_type(right) == DRAGON_SLICE_CONST)
+        printf("rhs: 0x%llx:i%d\n",
+               (unsigned long long)dragon_slice_expr_const_value(right),
+               (int)dragon_slice_expr_const_width(right));
+
+    dragon_slice_expr_destroy(left);
+    dragon_slice_expr_destroy(right);
+}
+
+dragon_slice_expr_destroy(expr);
+dragon_slicer_destroy(slicer);
+```
+
+**SliceExpr API summary**
+
+| Function | Type | Notes |
+|---|---|---|
+| `dragon_slice_expr_destroy(e)` | — | Must be called for every owned handle |
+| `dragon_slice_expr_type(e)` | `dragon_slice_type_t` | CONST / SYM_REG / BINOP / UNARYOP / LOAD / UNDEF |
+| `dragon_slice_expr_to_string(e)` | `char*` (heap) | Free with `dragon_cstr_free` |
+| `dragon_slice_expr_const_value(e)` | `uint64_t` | CONST nodes only |
+| `dragon_slice_expr_const_width(e)` | `uint8_t` | CONST nodes only |
+| `dragon_slice_expr_symreg_offset(e)` | `uint32_t` | SYM_REG nodes only |
+| `dragon_slice_expr_symreg_width(e)` | `uint8_t` | SYM_REG nodes only |
+| `dragon_slice_expr_symreg_name(e)` | `const char*` (borrowed) | SYM_REG; `""` if no name was set |
+| `dragon_slice_expr_opcode(e)` | `dragon_ignil_opcode_t` | BINOP / UNARYOP |
+| `dragon_slice_expr_left(e)` | owned `dragon_slice_expr_t*` | BINOP |
+| `dragon_slice_expr_right(e)` | owned `dragon_slice_expr_t*` | BINOP |
+| `dragon_slice_expr_operand(e)` | owned `dragon_slice_expr_t*` | UNARYOP |
+| `dragon_slice_expr_load_addr(e)` | owned `dragon_slice_expr_t*` | LOAD |
+| `dragon_slice_expr_load_width(e)` | `uint8_t` | LOAD |
