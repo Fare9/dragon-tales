@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
 #include <format>
+#include <string>
 
 namespace dragon::utils {
 
@@ -16,5 +16,12 @@ namespace dragon::utils {
 [[nodiscard]] inline std::string toHexPrefixed(std::uint64_t value) {
   return std::format("0x{:x}", value);
 }
+
+template<class... Ts>
+struct overloaded : Ts... {
+  using Ts::operator()...;
+};
+template<class... Ts>
+overloaded(Ts...) -> overloaded<Ts...>;
 
 } // namespace dragon::utils

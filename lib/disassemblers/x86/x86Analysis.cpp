@@ -1,11 +1,13 @@
 #include "disassemblers/x86/x86Analysis.hpp"
+#include "disassemblers/x86/X86IGNILLifter.hpp"
 
 // Public headers
+#include <dragon/BackwardSlicer.hpp>
 #include <dragon/Disassembler.hpp>
 #include <dragon/Graph.hpp>
 #include <dragon/Instruction.hpp>
+#include <dragon/SliceExpr.hpp>
 #include <dragon/x86Info.hpp>
-
 // Private headers
 
 #include <unordered_set>
@@ -20,9 +22,13 @@ dragon::x86::X86Analysis::X86Analysis(Architecture architecture,
     configuration_(configuration), instrInfo_(instrInfo), regInfo_(regInfo) {
   static const X86Info x86Info32{Architecture::X86_32, instrInfo, regInfo};
   static const X86Info x86Info64{Architecture::X86_64, instrInfo, regInfo};
+  x86IgnilLifter_ =
+          std::make_unique<X86IGNILLifter>(architecture, instrInfo, regInfo);
   x86Info_ = (architecture == Architecture::X86_32) ? &x86Info32 : &x86Info64;
   logger_ = internal::Logger{configuration_.logging};
 }
+
+dragon::x86::X86Analysis::~X86Analysis() = default;
 
 bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
                                        std::uint64_t baseAddr,
@@ -45,6 +51,86 @@ bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
 
   for (std::uint64_t addr: functionStarts)
     graph.addFunction(addr);
+
+  // Fixpoint loop
+  // Each iteration:
+  //   1. Commit pending block/function starts to the graph
+  //   2. Lift IGNIL for any block that doesn't have it yet
+  //   3. Resolve indirect JMPs via backward slicing
+  //      ---> if a resolved target is new, add it and loop again
+  bool changed = true;
+  while (changed) {
+    changed = false;
+
+    for (std::uint64_t addr: basicBlockStarts)
+      graph.addBlock(addr);
+    for (std::uint64_t addr: functionStarts)
+      graph.addFunction(addr);
+
+    for (BasicBlock &block: graph.blocks()) {
+      if (graph.getIGNILBlock(block.startAddress()))
+        continue;
+      auto ib = x86IgnilLifter_->liftBlock(block, graph);
+      logger_.log("Lifted block @ 0x{:x} -> {} IGNIL ops", block.startAddress(),
+                  ib.size());
+      graph.addIGNILBlock(std::move(ib));
+    }
+
+    for (const auto &block: graph.blocks()) {
+      const auto *ignilBlock = graph.getIGNILBlock(block.startAddress());
+      if (!ignilBlock || ignilBlock->ops().empty())
+        continue;
+
+      // We are looking for jump instructions
+      // pointed with a register, we try to
+      // resolve it to a constant
+      const auto &last = ignilBlock->ops().back();
+      if (last.opcode != ignil::Opcode::JMP || last.srcs.empty() ||
+          !std::holds_alternative<ignil::Reg>(last.srcs[0]))
+        continue;
+
+      // Backward slicing algorithm, it will just go back in the basic blocks
+      // looking for the instruction generating the value
+      const auto &reg = std::get<ignil::Reg>(last.srcs[0]);
+
+      BackwardSlicer slicer{5};
+      slice::Expr result = slicer.slice(ignil::Value{reg},
+                                        ignilBlock->startAddress(), graph);
+      // Check that the result from slicing is a constant
+      if (!std::holds_alternative<slice::Const>(result.data))
+        continue;
+
+      // Add it to the list, next it must be disassembled
+      std::uint64_t target = std::get<slice::Const>(result.data).value;
+      logger_.log("Resolved indirect jump @ 0x{:x} -> 0x{:x}",
+                  block.startAddress(), target);
+
+      if (target < baseAddr || target >= baseAddr + bytes.size()) {
+        logger_.log("Resolved target 0x{:x} is out of range, skipping", target);
+        continue;
+      }
+
+      if (basicBlockStarts.insert(target).second)
+        changed = true;
+
+      // If instructions at the target are not yet in the graph, disassemble
+      // the block starting there and integrate the results so the next
+      // iteration can lift and analyze it.
+      if (!graph.get(target)) {
+        auto newInstrs =
+                disassembler_.disassembleBlock(bytes, baseAddr, target);
+        if (!newInstrs.empty()) {
+          discoverBlockStarts(newInstrs, basicBlockStarts);
+          discoverFunctionStarts(newInstrs, basicBlockStarts, functionStarts);
+          for (auto &insn: newInstrs) {
+            if (!graph.get(insn.address()))
+              graph.addInstruction(std::move(insn));
+          }
+          changed = true;
+        }
+      }
+    }
+  }
 
   return true;
 }

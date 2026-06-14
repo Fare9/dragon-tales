@@ -208,3 +208,149 @@ config.syntax = dragon::Syntax::ATT;
 dragon::Assembler asm_(dragon::Architecture::X86_64, config);
 auto bytes = asm_.assemble("nop\nret\n");
 ```
+
+---
+
+## IGNIL
+
+`Disassembler::analyze` populates both the CFG and the IGNIL blocks in the
+returned `Graph`. Each basic block has a corresponding `ignil::Block` that
+holds the lifted ops for that block.
+
+```cpp
+#include <dragon/Disassembler.hpp>
+#include <dragon/IGNIL.hpp>
+
+dragon::Configuration config;
+dragon::Disassembler dis(dragon::Architecture::X86_64, config);
+
+// nop; cmp rax, rbx; je 0x100a; ret
+std::vector<uint8_t> code = { 0x90, 0x48, 0x39, 0xD8, 0x74, 0x03, 0xC3, 0xC3 };
+auto graph = dis.analyze(code, /*base_address=*/0x1000);
+
+// Get the IGNIL block for a known address
+if (auto* ib = graph->getIGNILBlock(0x1000)) {
+    std::cout << dragon::ignil::toString(*ib);
+    // IGNILBlock @ 0x1000
+    //   t0:i64 = SUB(RAX:i64, RBX:i64)  ; @0x1001
+    //   t1:i1  = ULT(RAX:i64, RBX:i64)  ; @0x1001
+    //   COPY CF:i8 = (t1:i1)             ; @0x1001
+    //   ...
+
+    // Iterate individual ops
+    for (const auto& op : ib->ops()) {
+        std::cout << dragon::ignil::opcodeName(op.opcode) << "\n";
+        if (op.dst)
+            std::cout << "  dst: " << dragon::ignil::toString(*op.dst) << "\n";
+        for (const auto& src : op.srcs)
+            std::cout << "  src: " << dragon::ignil::toString(src) << "\n";
+    }
+}
+```
+
+### x86 register constants
+
+`include/dragon/x86IGNILRegs.hpp` provides named `ignil::Reg` constants
+for every x86/x86-64 register in the `dragon::x86` namespace:
+
+```cpp
+#include <dragon/x86IGNILRegs.hpp>
+
+namespace x86 = dragon::x86;
+
+// Each constant is an ignil::Reg{offset, width, name}
+ignil::Reg rax = x86::RAX;    // {0,  64, "RAX"}
+ignil::Reg zf  = x86::ZF;     // {139, 8, "ZF"}
+ignil::Reg ah  = x86::AH;     // {1,   8, "AH"}
+
+// Offset constants and width aliases are also available
+static_assert(x86::kOffZF == 139);
+static_assert(x86::k64    ==  64);
+```
+
+Available groups:
+- 64-bit: `RAX RCX RDX RBX RSP RBP RSI RDI R8..R15 RIP`
+- 32-bit: `EAX ECX EDX EBX ESP EBP ESI EDI R8D..R15D`
+- 16-bit: `AX CX DX BX SP BP SI DI R8W..R15W`
+- 8-bit low: `AL CL DL BL SPL BPL SIL DIL R8B..R15B`
+- 8-bit high: `AH CH DH BH`
+- Flags (8-bit slots): `CF PF AF ZF SF OF DF`
+
+---
+
+## Backward slicer
+
+`BackwardSlicer` propagates a value backward through an IGNIL CFG and returns
+a `SliceExpr` expression tree. It stops at join nodes (blocks with more than
+one predecessor) and at a configurable block depth.
+
+`graph` must come from `Disassembler::analyze()` — IGNIL blocks must exist.
+
+```cpp
+#include <dragon/BackwardSlicer.hpp>
+#include <dragon/SliceExpr.hpp>
+#include <dragon/x86IGNILRegs.hpp>
+
+namespace x86 = dragon::x86;
+
+dragon::BackwardSlicer slicer(/*maxBlocks=*/5);
+
+// Slice ZF backward starting from the block at 0x1001
+auto expr = slicer.slice(x86::ZF, /*blockAddr=*/0x1001, *graph);
+std::cout << dragon::slice::toString(expr) << "\n";
+// EQ(SUB(RAX:i64, RBX:i64), 0x0:i64)
+```
+
+### Walking the expression tree
+
+```cpp
+#include <dragon/SliceExpr.hpp>
+
+void print(const dragon::slice::Expr& e, int indent = 0) {
+    std::string pad(indent * 2, ' ');
+    std::visit(dragon::utils::overloaded{
+        [&](const dragon::slice::Const& c) {
+            std::cout << pad << "Const 0x" << std::hex << c.value
+                      << ":i" << (int)c.width << "\n";
+        },
+        [&](const dragon::slice::SymReg& r) {
+            std::cout << pad << "Reg " << r.reg.name
+                      << ":i" << (int)r.reg.width << "\n";
+        },
+        [&](const dragon::slice::BinOp& b) {
+            std::cout << pad << dragon::ignil::opcodeName(b.op) << "\n";
+            print(*b.left,  indent + 1);
+            print(*b.right, indent + 1);
+        },
+        [&](const dragon::slice::UnaryOp& u) {
+            std::cout << pad << dragon::ignil::opcodeName(u.op) << "\n";
+            print(*u.operand, indent + 1);
+        },
+        [&](const dragon::slice::Load& l) {
+            std::cout << pad << "Load:i" << (int)l.width << "\n";
+            print(*l.addr, indent + 1);
+        },
+        [&](const dragon::slice::Undef&) {
+            std::cout << pad << "undef\n";
+        },
+    }, e.value);
+}
+
+print(expr);
+// EQ
+//   SUB
+//     Reg RAX:i64
+//     Reg RBX:i64
+//   Const 0x0:i64
+```
+
+### SliceExpr node types
+
+| Variant | Key fields | Meaning |
+|---|---|---|
+| `Const` | `value`, `width` | Folded constant |
+| `SymReg` | `reg` (offset, width, name) | Unresolved register |
+| `BinOp` | `op`, `left`, `right` | Binary operation |
+| `UnaryOp` | `op`, `operand` | Unary operation |
+| `Load` | `addr`, `width` | Memory read |
+| `Undef` | — | Unresolvable value |

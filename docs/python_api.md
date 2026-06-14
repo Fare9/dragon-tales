@@ -230,6 +230,130 @@ raw = asm.assemble("nop\nret\n")
 
 ---
 
+---
+
+## IGNIL blocks
+
+`Disassembler.analyze()` (not `disassemble()`) populates IGNIL blocks in the
+graph. Retrieve one with `graph.get_ignil_block(address)`.
+
+```python
+dis   = dragon.Disassembler(dragon.Architecture.X86_64)
+# nop; cmp rax, rbx; ret
+code  = bytes([0x90, 0x48, 0x39, 0xD8, 0xC3])
+graph = dis.analyze(code, base_address=0x1000)
+
+ib = graph.get_ignil_block(0x1000)   # None if no IGNIL block at that address
+if ib:
+    print(ib.to_string())
+    # IGNILBlock @ 0x1000
+    #   t0:i64 = SUB(RAX:i64, RBX:i64)  ; @0x1001
+    #   ...
+
+    # Individual ops (each yields address, opcode int, index)
+    for addr, opc, idx in ib.ops():
+        print(f"[{idx}] @{hex(addr)}  {dragon.IGNILOpcode.name(opc)}")
+        print(ib.op_to_string(idx))
+```
+
+`IGNILBlock` is a borrowed view — it is valid as long as the owning graph
+is alive; no `__exit__` / destroy needed.
+
+---
+
+## x86 register constants
+
+`dragon.x86` exposes every x86/x86-64 register as a 3-tuple
+`(offset, width, name)` that can be splatted directly into
+`BackwardSlicer.slice_reg()`:
+
+```python
+dragon.x86.RAX   # (0,   64, 'RAX')
+dragon.x86.ZF    # (139,  8, 'ZF')
+dragon.x86.AH    # (1,    8, 'AH')
+
+# Available groups
+# 64-bit: RAX RCX RDX RBX RSP RBP RSI RDI R8..R15 RIP
+# 32-bit: EAX ECX .. R15D
+# 16-bit: AX CX .. R15W
+# 8-bit low: AL CL .. R15B
+# 8-bit high: AH CH DH BH
+# Flags (8-bit): CF PF AF ZF SF OF DF
+```
+
+---
+
+## Backward slicer
+
+`BackwardSlicer` propagates a register value backward through an IGNIL CFG.
+Both the slicer and every `SliceExpr` it returns are context managers (owned
+handles that must be destroyed).
+
+```python
+dis   = dragon.Disassembler(dragon.Architecture.X86_64)
+code  = bytes([0x48, 0x39, 0xD8, 0xC3])   # cmp rax, rbx; ret
+graph = dis.analyze(code, 0x5000)
+
+with dragon.BackwardSlicer(max_blocks=5) as slicer:
+    with slicer.slice_reg(graph, 0x5000, *dragon.x86.ZF) as expr:
+        print(expr.to_string())
+        # EQ(SUB(RAX:i64, RBX:i64), 0x0:i64)
+```
+
+### Walking the tree
+
+```python
+def print_expr(expr, indent=0):
+    pad = '  ' * indent
+    t = expr.type
+    if t == dragon.SliceExprType.CONST:
+        print(f"{pad}Const 0x{expr.const_value:x}:i{expr.const_width}")
+    elif t == dragon.SliceExprType.SYM_REG:
+        print(f"{pad}Reg {expr.symreg_name}:i{expr.symreg_width}")
+    elif t == dragon.SliceExprType.BINOP:
+        print(f"{pad}{expr.opcode_name}")
+        with expr.left()  as l: print_expr(l,  indent + 1)
+        with expr.right() as r: print_expr(r, indent + 1)
+    elif t == dragon.SliceExprType.UNARYOP:
+        print(f"{pad}{expr.opcode_name}")
+        with expr.operand() as o: print_expr(o, indent + 1)
+    elif t == dragon.SliceExprType.LOAD:
+        print(f"{pad}Load:i{expr.load_width}")
+        with expr.load_addr() as a: print_expr(a, indent + 1)
+    else:
+        print(f"{pad}undef")
+
+with dragon.BackwardSlicer() as slicer:
+    with slicer.slice_reg(graph, 0x5000, *dragon.x86.ZF) as expr:
+        print_expr(expr)
+# EQ
+#   SUB
+#     Reg RAX:i64
+#     Reg RBX:i64
+#   Const 0x0:i64
+```
+
+### SliceExpr properties
+
+| Property / method | Type | Available on |
+|---|---|---|
+| `type` | `SliceExprType` | all |
+| `to_string()` | `str` | all |
+| `const_value` | `int` | CONST |
+| `const_width` | `int` | CONST |
+| `symreg_offset` | `int` | SYM_REG |
+| `symreg_width` | `int` | SYM_REG |
+| `symreg_name` | `str` | SYM_REG |
+| `opcode` | `int` | BINOP / UNARYOP |
+| `opcode_name` | `str` | BINOP / UNARYOP |
+| `left()` | owned `SliceExpr` | BINOP |
+| `right()` | owned `SliceExpr` | BINOP |
+| `operand()` | owned `SliceExpr` | UNARYOP |
+| `load_addr()` | owned `SliceExpr` | LOAD |
+| `load_width` | `int` | LOAD |
+
+---
+
 ## Enum reference
 
 | Class | Values |
@@ -237,3 +361,5 @@ raw = asm.assemble("nop\nret\n")
 | `dragon.Architecture` | `UNKNOWN`, `X86_32`, `X86_64`, `ARM32`, `ARM64`, `RISCV32`, `RISCV64` |
 | `dragon.Syntax` | `INTEL`, `ATT` |
 | `dragon.Strategy` | `LINEAR_SWEEP`, `RECURSIVE_TRAVERSAL` |
+| `dragon.SliceExprType` | `CONST`, `SYM_REG`, `BINOP`, `UNARYOP`, `LOAD`, `UNDEF` |
+| `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF` (35 values) |

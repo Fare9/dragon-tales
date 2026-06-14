@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <span>
 #include <unordered_set>
 #include <vector>
@@ -20,6 +21,8 @@ class X86Info;
 
 namespace x86 {
 
+class X86IGNILLifter;
+
 class X86Analysis {
   public:
   /// Constructor for x86Analysis, we need to understand what architecture
@@ -29,6 +32,7 @@ class X86Analysis {
               const Configuration &configuration,
                   const llvm::MCInstrInfo &instrInfo,
                   const llvm::MCRegisterInfo &regInfo);
+  ~X86Analysis();
   /// Populate the graph received with the decoded
   /// instructions, blocks and functions.
   /// @param bytes bytes from instructions to be decoded.
@@ -68,6 +72,7 @@ class X86Analysis {
   const llvm::MCInstrInfo &instrInfo_;
   const llvm::MCRegisterInfo &regInfo_;
   const X86Info *x86Info_;
+  std::unique_ptr<X86IGNILLifter> x86IgnilLifter_;
   internal::Logger logger_;
 };
 

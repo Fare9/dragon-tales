@@ -2,13 +2,19 @@
 
 #include <dragon/Architecture.hpp>
 #include <dragon/Assembler.hpp>
+#include <dragon/BackwardSlicer.hpp>
 #include <dragon/BasicBlock.hpp>
 #include <dragon/Configuration.hpp>
 #include <dragon/Disassembler.hpp>
 #include <dragon/Function.hpp>
 #include <dragon/Graph.hpp>
+#include <dragon/IGNIL.hpp>
 #include <dragon/Instruction.hpp>
+#include <dragon/SliceExpr.hpp>
 
+#include <cassert>
+#include <memory>
+#include <string>
 #include <vector>
 
 // -- helpers to convert C++ types back to C enum values
@@ -400,4 +406,221 @@ void dragon_function_each_block(const dragon_function_t *f,
                                 void *user) {
   for (const auto &[addr, block]: as_fn(f)->blocks())
     cb(reinterpret_cast<const dragon_block_t *>(&block), user);
+}
+
+// =============================================================================
+// String helper
+// =============================================================================
+
+void dragon_cstr_free(char *s) { delete[] s; }
+
+static char *dup_string(const std::string &s) {
+  char *buf = new char[s.size() + 1];
+  s.copy(buf, s.size());
+  buf[s.size()] = '\0';
+  return buf;
+}
+
+// =============================================================================
+// IGNIL opcodes
+// =============================================================================
+
+// Verify the enum values match ignil::Opcode at compile time.
+static_assert(static_cast<int>(dragon::ignil::Opcode::COPY)  == DRAGON_IGNIL_COPY);
+static_assert(static_cast<int>(dragon::ignil::Opcode::LOAD)  == DRAGON_IGNIL_LOAD);
+static_assert(static_cast<int>(dragon::ignil::Opcode::UNDEF) == DRAGON_IGNIL_UNDEF);
+
+const char *dragon_ignil_opcode_name(dragon_ignil_opcode_t op) {
+  return dragon::ignil::opcodeName(
+             static_cast<dragon::ignil::Opcode>(op))
+      .data();
+}
+
+// =============================================================================
+// IGNIL block — borrowed from graph via reinterpret_cast
+// =============================================================================
+
+static const dragon::ignil::Block *
+as_ignil_block(const dragon_ignil_block_t *b) {
+  return reinterpret_cast<const dragon::ignil::Block *>(b);
+}
+
+const dragon_ignil_block_t *
+dragon_graph_get_ignil_block(const dragon_graph_t *g, uint64_t addr) {
+  const dragon::ignil::Block *b = as_graph(g)->getIGNILBlock(addr);
+  return reinterpret_cast<const dragon_ignil_block_t *>(b);
+}
+
+size_t dragon_ignil_block_size(const dragon_ignil_block_t *b) {
+  return as_ignil_block(b)->size();
+}
+
+uint64_t dragon_ignil_block_address(const dragon_ignil_block_t *b) {
+  return as_ignil_block(b)->startAddress();
+}
+
+char *dragon_ignil_block_to_string(const dragon_ignil_block_t *b) {
+  return dup_string(dragon::ignil::toString(*as_ignil_block(b)));
+}
+
+char *dragon_ignil_block_op_to_string(const dragon_ignil_block_t *b,
+                                      size_t index) {
+  const auto &ops = as_ignil_block(b)->ops();
+  if (index >= ops.size())
+    return nullptr;
+  return dup_string(dragon::ignil::toString(ops[index]));
+}
+
+void dragon_ignil_block_each_op(
+    const dragon_ignil_block_t *b,
+    void (*cb)(uint64_t, dragon_ignil_opcode_t, size_t, void *), void *user) {
+  const auto &ops = as_ignil_block(b)->ops();
+  for (size_t i = 0; i < ops.size(); ++i) {
+    cb(ops[i].address,
+       static_cast<dragon_ignil_opcode_t>(
+           static_cast<int>(ops[i].opcode)),
+       i, user);
+  }
+}
+
+// =============================================================================
+// SliceExpr
+// =============================================================================
+
+struct dragon_slice_expr {
+  std::shared_ptr<dragon::slice::Expr> expr;
+};
+
+static dragon_slice_expr_t *
+wrap_expr(std::shared_ptr<dragon::slice::Expr> ptr) {
+  if (!ptr)
+    return nullptr;
+  return new dragon_slice_expr{std::move(ptr)};
+}
+
+void dragon_slice_expr_destroy(dragon_slice_expr_t *e) { delete e; }
+
+dragon_slice_type_t dragon_slice_expr_type(const dragon_slice_expr_t *e) {
+  if (!e)
+    return DRAGON_SLICE_UNDEF;
+  return static_cast<dragon_slice_type_t>(e->expr->data.index());
+}
+
+char *dragon_slice_expr_to_string(const dragon_slice_expr_t *e) {
+  if (!e)
+    return dup_string("undef");
+  return dup_string(dragon::slice::toString(*e->expr));
+}
+
+uint64_t dragon_slice_expr_const_value(const dragon_slice_expr_t *e) {
+  if (!e)
+    return 0;
+  const auto *c = std::get_if<dragon::slice::Const>(&e->expr->data);
+  return c ? c->value : 0;
+}
+
+uint8_t dragon_slice_expr_const_width(const dragon_slice_expr_t *e) {
+  if (!e)
+    return 0;
+  const auto *c = std::get_if<dragon::slice::Const>(&e->expr->data);
+  return c ? c->width : 0;
+}
+
+uint32_t dragon_slice_expr_symreg_offset(const dragon_slice_expr_t *e) {
+  if (!e)
+    return 0;
+  const auto *r = std::get_if<dragon::slice::SymReg>(&e->expr->data);
+  return r ? r->reg.offset : 0;
+}
+
+uint8_t dragon_slice_expr_symreg_width(const dragon_slice_expr_t *e) {
+  if (!e)
+    return 0;
+  const auto *r = std::get_if<dragon::slice::SymReg>(&e->expr->data);
+  return r ? r->reg.width : 0;
+}
+
+const char *dragon_slice_expr_symreg_name(const dragon_slice_expr_t *e) {
+  if (!e)
+    return "";
+  const auto *r = std::get_if<dragon::slice::SymReg>(&e->expr->data);
+  return r ? r->reg.name.c_str() : "";
+}
+
+dragon_ignil_opcode_t
+dragon_slice_expr_opcode(const dragon_slice_expr_t *e) {
+  if (!e)
+    return DRAGON_IGNIL_UNDEF;
+  if (const auto *b = std::get_if<dragon::slice::BinOp>(&e->expr->data))
+    return static_cast<dragon_ignil_opcode_t>(static_cast<int>(b->op));
+  if (const auto *u = std::get_if<dragon::slice::UnaryOp>(&e->expr->data))
+    return static_cast<dragon_ignil_opcode_t>(static_cast<int>(u->op));
+  return DRAGON_IGNIL_UNDEF;
+}
+
+dragon_slice_expr_t *dragon_slice_expr_left(const dragon_slice_expr_t *e) {
+  if (!e)
+    return nullptr;
+  const auto *b = std::get_if<dragon::slice::BinOp>(&e->expr->data);
+  return b ? wrap_expr(b->left) : nullptr;
+}
+
+dragon_slice_expr_t *dragon_slice_expr_right(const dragon_slice_expr_t *e) {
+  if (!e)
+    return nullptr;
+  const auto *b = std::get_if<dragon::slice::BinOp>(&e->expr->data);
+  return b ? wrap_expr(b->right) : nullptr;
+}
+
+dragon_slice_expr_t *dragon_slice_expr_operand(const dragon_slice_expr_t *e) {
+  if (!e)
+    return nullptr;
+  const auto *u = std::get_if<dragon::slice::UnaryOp>(&e->expr->data);
+  return u ? wrap_expr(u->operand) : nullptr;
+}
+
+dragon_slice_expr_t *
+dragon_slice_expr_load_addr(const dragon_slice_expr_t *e) {
+  if (!e)
+    return nullptr;
+  const auto *l = std::get_if<dragon::slice::Load>(&e->expr->data);
+  return l ? wrap_expr(l->addr) : nullptr;
+}
+
+uint8_t dragon_slice_expr_load_width(const dragon_slice_expr_t *e) {
+  if (!e)
+    return 0;
+  const auto *l = std::get_if<dragon::slice::Load>(&e->expr->data);
+  return l ? l->width : 0;
+}
+
+// =============================================================================
+// BackwardSlicer
+// =============================================================================
+
+struct dragon_slicer {
+  dragon::BackwardSlicer slicer;
+};
+
+dragon_slicer_t *dragon_slicer_create(int max_blocks) {
+  return new dragon_slicer{dragon::BackwardSlicer{max_blocks > 0 ? max_blocks : 5}};
+}
+
+void dragon_slicer_destroy(dragon_slicer_t *s) { delete s; }
+
+dragon_slice_expr_t *dragon_slicer_slice_reg(const dragon_slicer_t *s,
+                                              const dragon_graph_t *g,
+                                              uint64_t block_addr,
+                                              uint32_t reg_offset,
+                                              uint8_t reg_width,
+                                              const char *reg_name) {
+  if (!s || !g)
+    return nullptr;
+  std::string name = (reg_name && *reg_name) ? reg_name : "";
+  dragon::ignil::Value reg{
+      dragon::ignil::Reg{reg_offset, reg_width, std::move(name)}};
+  dragon::slice::Expr result =
+      s->slicer.slice(reg, block_addr, *as_graph(g));
+  return new dragon_slice_expr{
+      std::make_shared<dragon::slice::Expr>(std::move(result))};
 }

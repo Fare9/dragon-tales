@@ -80,13 +80,28 @@ void dragon::Graph::addFunction(std::uint64_t addr) {
 
 void dragon::Graph::insert(Instruction insn) {
   std::uint64_t addr = insn.address();
-  listing_.emplace(addr, std::move(insn));;
+  listing_.emplace(addr, std::move(insn));
+  ;
 }
 
 void dragon::Graph::update(const Instruction &insn) {
   if (auto it = listing_.find(insn.address()); it != listing_.end())
     it->second = insn;
 }
+void dragon::Graph::addIGNILBlock(ignil::Block block) {
+  std::uint64_t addr = block.startAddress();
+  ignilBlocks_.emplace(addr, std::move(block));
+}
+dragon::ignil::Block *dragon::Graph::getIGNILBlock(std::uint64_t addr) {
+  auto it = ignilBlocks_.find(addr);
+  return it != ignilBlocks_.end() ? &it->second : nullptr;
+}
+const dragon::ignil::Block *
+dragon::Graph::getIGNILBlock(std::uint64_t addr) const {
+  const auto it = ignilBlocks_.find(addr);
+  return it != ignilBlocks_.end() ? &it->second : nullptr;
+}
+
 
 const dragon::Instruction *dragon::Graph::get(std::uint64_t address) const {
   const auto it = listing_.find(address);
