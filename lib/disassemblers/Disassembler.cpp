@@ -163,7 +163,7 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
     operands = full.substr(mnemonicStart + mnemonic.size());
   operands.erase(0, operands.find_first_not_of(" \t"));
 
-  std::vector<std::uint8_t> rawBytes(bytes.begin() + offset,
+  std::vector rawBytes(bytes.begin() + offset,
                                      bytes.begin() + offset + instSize);
 
   const auto &desc = target.instrInfo->get(inst.getOpcode());
@@ -208,6 +208,32 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
   insn.setEdges(edgeCount);
 
   return insn;
+}
+
+std::vector<dragon::Instruction>
+dragon::Disassembler::disassembleBlock(std::span<const std::uint8_t> bytes,
+                                       std::uint64_t baseAddress,
+                                       std::uint64_t startAddress) const {
+  if (!isValid() || startAddress < baseAddress)
+    return {};
+  const std::size_t startOffset = startAddress - baseAddress;
+  if (startOffset >= bytes.size())
+    return {};
+
+  std::vector<Instruction> result;
+  std::size_t offset = startOffset;
+  while (offset < bytes.size()) {
+    auto instr = decodeOne(bytes, baseAddress, offset);
+    if (instr.size() == 0)
+      break;
+    const bool isTerminator = instr.isReturn() || instr.isTrap() || instr.isJump();
+    result.push_back(std::move(instr));
+    if (isTerminator)
+      break;
+  }
+  impl_->logger.log("disassembleBlock: {} instrs from 0x{:x}", result.size(),
+                    startAddress);
+  return result;
 }
 
 std::vector<dragon::Instruction>

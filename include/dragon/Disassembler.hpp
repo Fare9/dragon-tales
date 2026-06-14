@@ -59,7 +59,15 @@ class Disassembler {
   void disassemble(std::span<const std::uint8_t> bytes,
                    std::uint64_t baseAddress, Graph &graph) const;
 
-          private : struct Impl;
+  /// Decode instructions starting at startAddress until a basic-block
+  /// terminator (jump, return, or trap). Returns only the instructions
+  /// belonging to that one block.
+  [[nodiscard]] std::vector<Instruction>
+  disassembleBlock(std::span<const std::uint8_t> bytes,
+                   std::uint64_t baseAddress, std::uint64_t startAddress) const;
+
+  private:
+  struct Impl;
 
   Instruction decodeOne(std::span<const std::uint8_t> bytes,
                         std::uint64_t address, std::size_t &offset) const;
