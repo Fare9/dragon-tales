@@ -5,6 +5,7 @@ add_library(libdragon SHARED
         Function.cpp
         Graph.cpp
         IGNIL.cpp
+        LLVMLifter.cpp
 )
 
 add_library(dragon::libdragon ALIAS libdragon)

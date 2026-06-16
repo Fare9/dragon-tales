@@ -1,5 +1,5 @@
-#include <dragon/BackwardSlicer.hpp>
-#include <dragon/Graph.hpp>
+#include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/disassembler/Graph.hpp>
 
 #include "utils/Utils.hpp"
 

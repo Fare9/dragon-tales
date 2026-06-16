@@ -2,12 +2,12 @@
 #include "disassemblers/x86/X86IGNILLifter.hpp"
 
 // Public headers
-#include <dragon/BackwardSlicer.hpp>
-#include <dragon/Disassembler.hpp>
-#include <dragon/Graph.hpp>
-#include <dragon/Instruction.hpp>
-#include <dragon/SliceExpr.hpp>
-#include <dragon/x86Info.hpp>
+#include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
+#include <dragon/disassembler/Graph.hpp>
+#include <dragon/disassembler/Instruction.hpp>
+#include <dragon/analysis/SliceExpr.hpp>
+#include <dragon/disassembler/x86/x86Info.hpp>
 // Private headers
 
 #include <unordered_set>

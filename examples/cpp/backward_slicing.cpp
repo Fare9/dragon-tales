@@ -1,9 +1,9 @@
-#include <dragon/BackwardSlicer.hpp>
-#include <dragon/Disassembler.hpp>
-#include <dragon/Graph.hpp>
-#include <dragon/IGNIL.hpp>
-#include <dragon/SliceExpr.hpp>
-#include <dragon/x86IGNILRegs.hpp>
+#include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
+#include <dragon/disassembler/Graph.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
+#include <dragon/analysis/SliceExpr.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
 #include <cstdint>
 #include <format>

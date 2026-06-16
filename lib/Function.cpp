@@ -1,5 +1,5 @@
-#include <dragon/Function.hpp>
-#include <dragon/Graph.hpp>
+#include <dragon/disassembler/Function.hpp>
+#include <dragon/disassembler/Graph.hpp>
 #include <set>
 
 dragon::Function::Function(const Graph *graph, std::uint64_t startAddress) :

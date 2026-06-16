@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include <dragon/Disassembler.hpp>
-#include <dragon/Graph.hpp>
-#include <dragon/IGNIL.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
+#include <dragon/disassembler/Graph.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
 
 #include <iostream>
 #include <vector>

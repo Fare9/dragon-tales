@@ -1,10 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include <dragon/BackwardSlicer.hpp>
-#include <dragon/Graph.hpp>
-#include <dragon/IGNIL.hpp>
-#include <dragon/SliceExpr.hpp>
-#include <dragon/x86IGNILRegs.hpp>
+#include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/disassembler/Graph.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
+#include <dragon/analysis/SliceExpr.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
 #include <iostream>
 

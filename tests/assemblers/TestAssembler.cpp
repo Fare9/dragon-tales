@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include <dragon/Assembler.hpp>
-#include <dragon/Disassembler.hpp>
+#include <dragon/assembler/Assembler.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
 
 // -----------------------------------------------------------------------
 // Helpers

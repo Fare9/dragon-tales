@@ -1,6 +1,6 @@
 #pragma once
 
-#include <dragon/IGNIL.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
 
 #include <memory>
 #include <string>

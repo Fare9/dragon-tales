@@ -1,7 +1,7 @@
 #pragma once
 
 #include <dragon/Architecture.hpp>
-#include <dragon/IGNIL.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
 #include <llvm/MC/MCInstrInfo.h>
 #include <llvm/MC/MCRegisterInfo.h>
 
