@@ -16,3 +16,12 @@ target_include_directories(backward_slicing PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${LLVM_INCLUDE_DIRS}
 )
+
+add_executable(llvmir_lifting llvmir_lifting.cpp)
+
+target_link_libraries(llvmir_lifting PRIVATE dragon::libdragon)
+
+target_include_directories(llvmir_lifting PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${LLVM_INCLUDE_DIRS}
+)
