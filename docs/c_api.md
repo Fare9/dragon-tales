@@ -319,3 +319,70 @@ dragon_slicer_destroy(slicer);
 | `dragon_slice_expr_operand(e)` | owned `dragon_slice_expr_t*` | UNARYOP |
 | `dragon_slice_expr_load_addr(e)` | owned `dragon_slice_expr_t*` | LOAD |
 | `dragon_slice_expr_load_width(e)` | `uint8_t` | LOAD |
+
+---
+
+## LLVMLifter
+
+`dragon_llvm_lifter_t` wraps the C++ `LLVMLifter`. It must be destroyed with
+`dragon_llvm_lifter_destroy` when no longer needed. `ir` strings are
+heap-allocated and must be freed with `dragon_cstr_free`.
+
+`graph` must come from `dragon_disasm_analyze` — IGNIL blocks must be present.
+
+```c
+static const uint8_t code[] = {
+    0x55,                    // push rbp
+    0x48, 0x89, 0xE5,        // mov  rbp, rsp
+    0x48, 0x01, 0xD8,        // add  rax, rbx
+    0x5D,                    // pop  rbp
+    0xC3,                    // ret
+};
+
+dragon_config_t* config = dragon_config_create(DRAGON_SYNTAX_INTEL,
+                                               DRAGON_STRATEGY_LINEAR_SWEEP);
+dragon_disasm_t* dis    = dragon_disasm_create(DRAGON_ARCH_X86_64, config);
+dragon_config_destroy(config);
+
+dragon_graph_t*    graph  = dragon_disasm_analyze(dis, code, sizeof(code), 0x1000);
+dragon_function_t* fn     = dragon_graph_get_function(graph, 0x1000);
+dragon_disasm_destroy(dis);
+
+dragon_llvm_lifter_t* lifter = dragon_llvm_lifter_create(DRAGON_ARCH_X86_64,
+                                                          "my_module");
+
+if (dragon_llvm_lifter_lift(lifter, fn, graph)) {
+    // Raw IR
+    char* ir = dragon_llvm_lifter_ir(lifter);
+    printf("%s", ir);
+    dragon_cstr_free(ir);
+
+    // Optimize
+    dragon_llvm_lifter_run_mem2reg(lifter);
+    dragon_llvm_lifter_run_inst_combine(lifter);
+    dragon_llvm_lifter_run_gvn(lifter);
+    dragon_llvm_lifter_run_dce(lifter);
+
+    // Optimized IR
+    ir = dragon_llvm_lifter_ir(lifter);
+    printf("%s", ir);
+    dragon_cstr_free(ir);
+}
+
+dragon_function_destroy(fn);
+dragon_llvm_lifter_destroy(lifter);
+dragon_graph_destroy(graph);
+```
+
+**API summary**
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_llvm_lifter_create(arch, module_name)` | `dragon_llvm_lifter_t*` | `module_name` may be NULL (defaults to `"lifted"`) |
+| `dragon_llvm_lifter_destroy(l)` | — | |
+| `dragon_llvm_lifter_lift(l, fn, graph)` | `int` (0/1) | 0 if any IGNIL block is missing |
+| `dragon_llvm_lifter_ir(l)` | `char*` (heap) | Free with `dragon_cstr_free` |
+| `dragon_llvm_lifter_run_mem2reg(l)` | — | Promotes allocas → SSA |
+| `dragon_llvm_lifter_run_inst_combine(l)` | — | Folds sub-register patterns |
+| `dragon_llvm_lifter_run_gvn(l)` | — | Eliminates redundant loads |
+| `dragon_llvm_lifter_run_dce(l)` | — | Removes dead flag computations |

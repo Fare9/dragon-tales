@@ -354,6 +354,64 @@ with dragon.BackwardSlicer() as slicer:
 
 ---
 
+---
+
+## LLVMLifter
+
+`LLVMLifter` lifts a `Function` to LLVM IR using the IGNIL graph.
+`graph` must come from `Disassembler.analyze()` — IGNIL blocks must be present.
+
+```python
+dis   = dragon.Disassembler(dragon.Architecture.X86_64)
+code  = bytes([
+    0x55,                    # push rbp
+    0x48, 0x89, 0xE5,        # mov  rbp, rsp
+    0x48, 0x01, 0xD8,        # add  rax, rbx
+    0x5D,                    # pop  rbp
+    0xC3,                    # ret
+])
+graph = dis.analyze(code, base_address=0x1000)
+
+lifter = dragon.LLVMLifter(arch=dragon.Architecture.X86_64, module_name='my_module')
+
+fn = graph.get_function(0x1000)
+if lifter.lift(fn, graph):
+    print(lifter.ir())    # raw IR
+
+    lifter.optimize()     # mem2reg → instcombine → GVN → DCE
+
+    print(lifter.ir())    # optimized IR
+```
+
+### Optimization passes
+
+Individual passes can be called separately or use `optimize()` for the
+recommended pipeline.
+
+```python
+lifter.run_mem2reg()      # promotes allocas to SSA values
+lifter.run_inst_combine() # folds sub-register mask/OR patterns
+lifter.run_gvn()          # eliminates redundant loads
+lifter.run_dce()          # removes dead flag computations
+
+# equivalent shorthand:
+lifter.optimize()
+```
+
+### Method reference
+
+| Method | Returns | Notes |
+|---|---|---|
+| `lift(function, graph)` | `bool` | `False` if any IGNIL block is missing |
+| `ir()` | `str` | Textual LLVM IR for all lifted functions |
+| `run_mem2reg()` | — | |
+| `run_inst_combine()` | — | |
+| `run_gvn()` | — | |
+| `run_dce()` | — | |
+| `optimize()` | — | Runs all four passes in the recommended order |
+
+---
+
 ## Enum reference
 
 | Class | Values |
