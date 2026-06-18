@@ -64,105 +64,70 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   regRSP_ = findGprReg("RSP");
   regESP_ = findGprReg("ESP");
 
-  // Scan opcodes by name - same as with x86Info
+  // Scan opcodes by name: map LLVM mnemonic string -> pointer-to-member field.
+  using OpcField = unsigned X86IGNILLifter::*;
+  static const std::unordered_map<std::string_view, OpcField> kOpcodeFields = {
+          {"MOV64rr", &X86IGNILLifter::opMov64rr_},
+          {"MOV32rr", &X86IGNILLifter::opMov32rr_},
+          {"MOV64ri", &X86IGNILLifter::opMov64ri_},
+          {"MOV32ri", &X86IGNILLifter::opMov32ri_},
+          {"MOV64ri32", &X86IGNILLifter::opMov64ri32_},
+          {"MOV64rm", &X86IGNILLifter::opMov64rm_},
+          {"MOV32rm", &X86IGNILLifter::opMov32rm_},
+          {"MOV64mr", &X86IGNILLifter::opMov64mr_},
+          {"MOV32mr", &X86IGNILLifter::opMov32mr_},
+          {"LEA64r", &X86IGNILLifter::opLea64r_},
+          {"LEA32r", &X86IGNILLifter::opLea32r_},
+          {"ADD64rr", &X86IGNILLifter::opAdd64rr_},
+          {"ADD32rr", &X86IGNILLifter::opAdd32rr_},
+          {"ADD64ri32", &X86IGNILLifter::opAdd64ri_},
+          {"ADD64ri8", &X86IGNILLifter::opAdd64ri8_},
+          {"ADD32ri", &X86IGNILLifter::opAdd32ri_},
+          {"ADD32ri8", &X86IGNILLifter::opAdd32ri8_},
+          {"SUB64rr", &X86IGNILLifter::opSub64rr_},
+          {"SUB32rr", &X86IGNILLifter::opSub32rr_},
+          {"SUB64ri32", &X86IGNILLifter::opSub64ri_},
+          {"SUB64ri8", &X86IGNILLifter::opSub64ri8_},
+          {"SUB32ri", &X86IGNILLifter::opSub32ri_},
+          {"SUB32ri8", &X86IGNILLifter::opSub32ri8_},
+          {"XOR64rr", &X86IGNILLifter::opXor64rr_},
+          {"XOR32rr", &X86IGNILLifter::opXor32rr_},
+          {"AND64rr", &X86IGNILLifter::opAnd64rr_},
+          {"AND32rr", &X86IGNILLifter::opAnd32rr_},
+          {"OR64rr", &X86IGNILLifter::opOr64rr_},
+          {"OR32rr", &X86IGNILLifter::opOr32rr_},
+          {"PUSH64r", &X86IGNILLifter::opPush64r_},
+          {"PUSH32r", &X86IGNILLifter::opPush32r_},
+          {"POP64r", &X86IGNILLifter::opPop64r_},
+          {"POP32r", &X86IGNILLifter::opPop32r_},
+          {"CMP64rr", &X86IGNILLifter::opCmp64rr_},
+          {"CMP32rr", &X86IGNILLifter::opCmp32rr_},
+          {"CMP64ri32", &X86IGNILLifter::opCmp64ri_},
+          {"CMP64ri8", &X86IGNILLifter::opCmp64ri8_},
+          {"CMP32ri", &X86IGNILLifter::opCmp32ri_},
+          {"CMP32ri8", &X86IGNILLifter::opCmp32ri8_},
+          {"TEST64rr", &X86IGNILLifter::opTest64rr_},
+          {"TEST32rr", &X86IGNILLifter::opTest32rr_},
+          {"JMP64r", &X86IGNILLifter::opJmp64r_},
+          {"JMP_1", &X86IGNILLifter::opJmp_},
+          {"JMP", &X86IGNILLifter::opJmp_},
+          {"JMP64m", &X86IGNILLifter::opJmp64m_},
+          {"JMP32m", &X86IGNILLifter::opJmp32m_},
+          {"CALL64r", &X86IGNILLifter::opCall64r_},
+          {"CALL64m", &X86IGNILLifter::opCall64m_},
+          {"CALL32m", &X86IGNILLifter::opCall32m_},
+          {"CALL64pcrel32", &X86IGNILLifter::opCall_},
+          {"RET64", &X86IGNILLifter::opRet64_},
+          {"RETL", &X86IGNILLifter::opRetL_},
+  };
+
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
-    std::string_view name = instrInfo.getName(i);
-    if (name == "MOV64rr")
-      opMov64rr_ = i;
-    else if (name == "MOV32rr")
-      opMov32rr_ = i;
-    else if (name == "MOV64ri")
-      opMov64ri_ = i;
-    else if (name == "MOV32ri")
-      opMov32ri_ = i;
-    else if (name == "MOV64ri32")
-      opMov64ri32_ = i;
-    else if (name == "MOV64rm")
-      opMov64rm_ = i;
-    else if (name == "MOV32rm")
-      opMov32rm_ = i;
-    else if (name == "MOV64mr")
-      opMov64mr_ = i;
-    else if (name == "MOV32mr")
-      opMov32mr_ = i;
-    else if (name == "LEA64r")
-      opLea64r_ = i;
-    else if (name == "LEA32r")
-      opLea32r_ = i;
-    else if (name == "ADD64rr")
-      opAdd64rr_ = i;
-    else if (name == "ADD32rr")
-      opAdd32rr_ = i;
-    else if (name == "ADD64ri32")
-      opAdd64ri_ = i;
-    else if (name == "ADD64ri8")
-      opAdd64ri8_ = i;
-    else if (name == "ADD32ri")
-      opAdd32ri_ = i;
-    else if (name == "ADD32ri8")
-      opAdd32ri8_ = i;
-    else if (name == "SUB64rr")
-      opSub64rr_ = i;
-    else if (name == "SUB32rr")
-      opSub32rr_ = i;
-    else if (name == "SUB64ri32")
-      opSub64ri_ = i;
-    else if (name == "SUB64ri8")
-      opSub64ri8_ = i;
-    else if (name == "SUB32ri")
-      opSub32ri_ = i;
-    else if (name == "SUB32ri8")
-      opSub32ri8_ = i;
-    else if (name == "XOR64rr")
-      opXor64rr_ = i;
-    else if (name == "XOR32rr")
-      opXor32rr_ = i;
-    else if (name == "AND64rr")
-      opAnd64rr_ = i;
-    else if (name == "AND32rr")
-      opAnd32rr_ = i;
-    else if (name == "OR64rr")
-      opOr64rr_ = i;
-    else if (name == "OR32rr")
-      opOr32rr_ = i;
-    else if (name == "PUSH64r")
-      opPush64r_ = i;
-    else if (name == "PUSH32r")
-      opPush32r_ = i;
-    else if (name == "POP64r")
-      opPop64r_ = i;
-    else if (name == "POP32r")
-      opPop32r_ = i;
-    else if (name == "CMP64rr")
-      opCmp64rr_ = i;
-    else if (name == "CMP32rr")
-      opCmp32rr_ = i;
-    else if (name == "CMP64ri32")
-      opCmp64ri_ = i;
-    else if (name == "CMP64ri8")
-      opCmp64ri8_ = i;
-    else if (name == "CMP32ri")
-      opCmp32ri_ = i;
-    else if (name == "CMP32ri8")
-      opCmp32ri8_ = i;
-    else if (name == "TEST64rr")
-      opTest64rr_ = i;
-    else if (name == "TEST32rr")
-      opTest32rr_ = i;
-    else if (name == "JMP64r")
-      opJmp64r_ = i;
-    else if (name == "JMP_1" || name == "JMP")
-      opJmp_ = i;
-    else if (name == "CALL64r")
-      opCall64r_ = i;
-    else if (name == "CALL64pcrel32")
-      opCall_ = i;
-    else if (name == "RET64")
-      opRet64_ = i;
-    else if (name == "RETL")
-      opRetL_ = i;
+    if (auto it = kOpcodeFields.find(instrInfo.getName(i));
+        it != kOpcodeFields.end())
+      this->*(it->second) = i;
   }
 }
+
 dragon::ignil::Block
 dragon::x86::X86IGNILLifter::liftBlock(const BasicBlock &block,
                                        const Graph &graph) const {
@@ -175,6 +140,7 @@ dragon::x86::X86IGNILLifter::liftBlock(const BasicBlock &block,
 
   return result;
 }
+
 void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
                                                   ignil::Block &out,
                                                   std::uint32_t &tempId) const {
@@ -219,6 +185,10 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftCall(*mc, addr, insn.size(), out, tempId);
   else if (opc == opRet64_ || opc == opRetL_)
     liftRet(*mc, addr, out, tempId);
+  else if (opc == opJmp64m_ || opc == opJmp32m_)
+    liftJmpMem(*mc, addr, insn.size(), out, tempId);
+  else if (opc == opCall64m_ || opc == opCall32m_)
+    liftCallMem(*mc, addr, insn.size(), out, tempId);
   else {
     const auto &desc = instrInfo_->get(opc);
     if (desc.isConditionalBranch())
@@ -226,9 +196,10 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     else if (desc.isBranch())
       liftJmp(*mc, addr, insn.size(), out, tempId);
   }
-  // Unknown — leave unlisted instructions as gaps (no UNDEF emitted for
+  // Unknown - leave unlisted instructions as gaps (no UNDEF emitted for
   // instructions with no IGNIL-visible side effects, e.g. prefetch, fence)
 }
+
 void dragon::x86::X86IGNILLifter::liftMov(const llvm::MCInst &mc,
                                           std::uint64_t addr, ignil::Block &out,
                                           std::uint32_t &tmp) const {
@@ -570,6 +541,33 @@ void dragon::x86::X86IGNILLifter::liftJmp(const llvm::MCInst &mc,
     out.append({ignil::Opcode::JMP, std::nullopt, {*targetReg}, addr});
   }
 }
+void dragon::x86::X86IGNILLifter::liftJmpMem(const llvm::MCInst &mc,
+                                             std::uint64_t addr,
+                                             std::uint8_t insnSize,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp) const {
+  ignil::Width ptrWidth = (architecture_ == Architecture::X86_64) ? 64 : 32;
+  // generate an address from the instruction
+  auto addrTemp = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
+  // generate a target that will be used to store the address
+  auto target = newTemp(tmp, ptrWidth);
+  out.append({ignil::Opcode::LOAD, target, {addrTemp}, addr});
+  out.append({ignil::Opcode::JMP, std::nullopt, {target}, addr});
+}
+void dragon::x86::X86IGNILLifter::liftCallMem(const llvm::MCInst &mc,
+                                              std::uint64_t addr,
+                                              std::uint8_t insnSize,
+                                              ignil::Block &out,
+                                              std::uint32_t &tmp) const {
+  ignil::Width ptrWidth = (architecture_ == Architecture::X86_64) ? 64 : 32;
+  // generate an address from the instruction
+  auto addrTemp = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
+  // generate a target that will be used to store the address
+  auto target = newTemp(tmp, ptrWidth);
+  out.append({ignil::Opcode::LOAD, target, {addrTemp}, addr});
+  out.append({ignil::Opcode::CALL, std::nullopt, {target}, addr});
+}
+
 
 void dragon::x86::X86IGNILLifter::liftCall(const llvm::MCInst &mc,
                                            std::uint64_t addr,

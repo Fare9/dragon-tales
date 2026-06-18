@@ -131,6 +131,49 @@ static void exampleConditionalBranch() {
   printComparison("Conditional branch: cmp rax, rbx / jle", g);
 }
 
+static void exampleIndirectJmpMem() {
+  // 0x1000: FF 20   jmp [rax]
+  //   Address of the jump target is read from memory at [rax].
+  //   IGNIL: emitAddress(rax) → LOAD from that address → JMP to loaded temp.
+  // 0x1002: C3      ret  (unreachable, just terminates the block)
+  const std::vector<std::uint8_t> bytes = {
+          0xFF, 0x20,  // jmp [rax]
+          0xC3,        // ret
+  };
+
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::LINEAR_SWEEP;
+  cfg.syntax = dragon::Syntax::INTEL;
+
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  dragon::Graph g(dragon::Architecture::X86_64, cfg);
+  dis.disassemble(bytes, 0x1000, g);
+
+  printComparison("Indirect jump through memory: jmp [rax]", g);
+}
+
+static void exampleIndirectCallMem() {
+  // 0x1000: FF 14 CB   call [rbx + rcx*8]
+  //   Virtual dispatch / jump-table call.  The callee address is read from the
+  //   vtable slot at rbx + rcx*8.
+  //   IGNIL: emitAddress(rbx + rcx*8) → LOAD from that address → CALL on loaded temp.
+  // 0x1003: C3          ret
+  const std::vector<std::uint8_t> bytes = {
+          0xFF, 0x14, 0xCB,  // call [rbx + rcx*8]
+          0xC3,              // ret
+  };
+
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::LINEAR_SWEEP;
+  cfg.syntax = dragon::Syntax::INTEL;
+
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  dragon::Graph g(dragon::Architecture::X86_64, cfg);
+  dis.disassemble(bytes, 0x1000, g);
+
+  printComparison("Indirect call through memory: call [rbx + rcx*8]", g);
+}
+
 // -----------------------------------------------------------------------
 // Entry point
 // -----------------------------------------------------------------------
@@ -179,5 +222,7 @@ int main() {
   exampleArithmetic();
   exampleLea();
   exampleConditionalBranch();
+  exampleIndirectJmpMem();
+  exampleIndirectCallMem();
   return 0;
 }

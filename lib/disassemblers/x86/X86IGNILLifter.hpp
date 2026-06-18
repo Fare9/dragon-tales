@@ -83,6 +83,12 @@ class X86IGNILLifter {
   void liftJmp(const llvm::MCInst &mc, std::uint64_t addr,
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;
+  void liftJmpMem(const llvm::MCInst &mc, std::uint64_t addr,
+                  std::uint8_t insnSize, ignil::Block &out,
+                  std::uint32_t &tmp) const;
+  void liftCallMem(const llvm::MCInst &mc, std::uint64_t addr,
+                   std::uint8_t insnSize, ignil::Block &out,
+                   std::uint32_t &tmp) const;
   void liftCall(const llvm::MCInst &mc, std::uint64_t addr,
                 std::uint8_t insnSize, ignil::Block &out,
                 std::uint32_t &tmp) const;
@@ -173,6 +179,8 @@ class X86IGNILLifter {
   unsigned opCmp64ri_{}, opCmp32ri_{}, opCmp64ri8_{}, opCmp32ri8_{};
   unsigned opTest64rr_{}, opTest32rr_{};
   unsigned opJmp64r_{}, opJmp32r_{}; // indirect
+  unsigned opJmp64m_{}, opJmp32m_{}; // indirect memory jump
+  unsigned opCall64m_{}, opCall32m_{}; // indirect memory call
   unsigned opJmp_{}; // direct
   unsigned opCall64r_{}; // indirect
   unsigned opCall_{}; // direct
