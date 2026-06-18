@@ -1,11 +1,9 @@
-#include <dragon/Disassembler.hpp>
-#include <dragon/Graph.hpp>
-#include <dragon/IGNIL.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
+#include <dragon/disassembler/Graph.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
 
-#include "InstructionImpl.hpp"
 #include <llvm/MC/MCInst.h>
 
-#include <cstdint>
 #include <format>
 #include <iostream>
 #include <span>
@@ -61,13 +59,13 @@ static void exampleArithmetic() {
   // pop rbp         5D
   // ret             C3
   const std::vector<std::uint8_t> bytes = {
-          0x55,                 // push rbp
-          0x48, 0x89, 0xE5,    // mov rbp, rsp
-          0x48, 0x01, 0xD8,    // add rax, rbx
-          0x48, 0x29, 0xD1,    // sub rcx, rdx
-          0x31, 0xC0,          // xor eax, eax
-          0x5D,                // pop rbp
-          0xC3,                // ret
+          0x55, // push rbp
+          0x48, 0x89, 0xE5, // mov rbp, rsp
+          0x48, 0x01, 0xD8, // add rax, rbx
+          0x48, 0x29, 0xD1, // sub rcx, rdx
+          0x31, 0xC0, // xor eax, eax
+          0x5D, // pop rbp
+          0xC3, // ret
   };
 
   dragon::Configuration cfg;
@@ -88,11 +86,11 @@ static void exampleLea() {
   // pop rbp                   5D
   // ret                       C3
   const std::vector<std::uint8_t> bytes = {
-          0x55,                          // push rbp
-          0x48, 0x89, 0xE5,              // mov rbp, rsp
+          0x55, // push rbp
+          0x48, 0x89, 0xE5, // mov rbp, rsp
           0x48, 0x8D, 0x44, 0x8B, 0x08, // lea rax, [rbx + rcx*4 + 8]
-          0x5D,                          // pop rbp
-          0xC3,                          // ret
+          0x5D, // pop rbp
+          0xC3, // ret
   };
 
   dragon::Configuration cfg;
@@ -114,12 +112,12 @@ static void exampleConditionalBranch() {
   // 0x1009: 90         nop
   // 0x100A: C3         ret            (else-block)
   const std::vector<std::uint8_t> bytes = {
-          0x48, 0x39, 0xD8,  // cmp rax, rbx
-          0x7E, 0x05,        // jle 0x100A
-          0x48, 0x01, 0xD8,  // add rax, rbx
-          0xC3,              // ret
-          0x90,              // nop
-          0xC3,              // ret
+          0x48, 0x39, 0xD8, // cmp rax, rbx
+          0x7E, 0x05, // jle 0x100A
+          0x48, 0x01, 0xD8, // add rax, rbx
+          0xC3, // ret
+          0x90, // nop
+          0xC3, // ret
   };
 
   dragon::Configuration cfg;
@@ -143,10 +141,11 @@ static void debugDumpMCInst(dragon::Graph &g) {
   printSeparator('=');
   for (const dragon::Instruction *insn: g.instructions()) {
     const auto *mc = insn->mcInst();
-    if (!mc) continue;
-    std::cout << std::format("  0x{:x}  {}  opc={}  nops={}\n",
-                             insn->address(), insn->disassembly(),
-                             mc->getOpcode(), mc->getNumOperands());
+    if (!mc)
+      continue;
+    std::cout << std::format("  0x{:x}  {}  opc={}  nops={}\n", insn->address(),
+                             insn->disassembly(), mc->getOpcode(),
+                             mc->getNumOperands());
     for (unsigned i = 0; i < mc->getNumOperands(); ++i) {
       const auto &op = mc->getOperand(i);
       if (op.isReg())
@@ -162,12 +161,11 @@ int main() {
   // Raw MCInst dump to verify operand layout before running lifting examples
   {
     const std::vector<std::uint8_t> bytes = {
-            0x48, 0x01, 0xD8,  // add rax, rbx
-            0x48, 0x29, 0xD1,  // sub rcx, rdx
-            0x7E, 0x05,        // jle +5
-            0xC3,              // ret
-            0x90, 0x90, 0x90, 0x90, 0x90,
-            0xC3,
+            0x48, 0x01, 0xD8, // add rax, rbx
+            0x48, 0x29, 0xD1, // sub rcx, rdx
+            0x7E, 0x05, // jle +5
+            0xC3, // ret
+            0x90, 0x90, 0x90, 0x90, 0x90, 0xC3,
     };
     dragon::Configuration cfg;
     cfg.disassemblyStrategy = dragon::DisassemblyStrategy::LINEAR_SWEEP;

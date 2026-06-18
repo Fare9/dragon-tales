@@ -6,7 +6,7 @@
 
 #include <llvm/MC/MCInst.h>
 
-#include <dragon/Instruction.hpp>
+#include <dragon/disassembler/Instruction.hpp>
 
 namespace dragon {
 

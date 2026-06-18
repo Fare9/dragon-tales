@@ -1,8 +1,9 @@
 #pragma once
 
+#include <dragon/disassembler/BasicBlock.hpp>
+
 #include <cstddef>
 #include <cstdint>
-#include <dragon/BasicBlock.hpp>
 #include <map>
 #include <vector>
 

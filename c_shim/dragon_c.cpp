@@ -1,16 +1,16 @@
 #include "dragon_c.h"
 
 #include <dragon/Architecture.hpp>
-#include <dragon/Assembler.hpp>
-#include <dragon/BackwardSlicer.hpp>
-#include <dragon/BasicBlock.hpp>
+#include <dragon/assembler/Assembler.hpp>
+#include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/Configuration.hpp>
-#include <dragon/Disassembler.hpp>
-#include <dragon/Function.hpp>
-#include <dragon/Graph.hpp>
-#include <dragon/IGNIL.hpp>
-#include <dragon/Instruction.hpp>
-#include <dragon/SliceExpr.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
+#include <dragon/disassembler/Function.hpp>
+#include <dragon/disassembler/Graph.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
+#include <dragon/disassembler/Instruction.hpp>
+#include <dragon/analysis/SliceExpr.hpp>
 
 #include <cassert>
 #include <memory>

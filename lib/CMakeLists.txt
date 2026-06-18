@@ -5,6 +5,7 @@ add_library(libdragon SHARED
         Function.cpp
         Graph.cpp
         IGNIL.cpp
+        LLVMLifter.cpp
 )
 
 add_library(dragon::libdragon ALIAS libdragon)
@@ -35,6 +36,8 @@ llvm_map_components_to_libnames(LLVM_LIBS
         MCParser
         Object
         Support
+        Passes
+        TransformUtils
         X86
         X86Desc
         X86Info

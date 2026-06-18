@@ -1,16 +1,16 @@
 #pragma once
 
 #include <dragon/Architecture.hpp>
-#include <dragon/BasicBlock.hpp>
+#include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/Configuration.hpp>
-#include <dragon/Function.hpp>
-#include <dragon/Instruction.hpp>
+#include <dragon/disassembler/Function.hpp>
+#include <dragon/disassembler/Instruction.hpp>
 #include <map>
 #include <optional>
 #include <set>
 #include <vector>
 
-#include "IGNIL.hpp"
+#include <dragon/lifters/ignil/IGNIL.hpp>
 
 namespace dragon {
 

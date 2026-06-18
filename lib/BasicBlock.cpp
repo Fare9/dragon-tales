@@ -1,5 +1,5 @@
-#include <dragon/BasicBlock.hpp>
-#include <dragon/Graph.hpp>
+#include <dragon/disassembler/BasicBlock.hpp>
+#include <dragon/disassembler/Graph.hpp>
 
 dragon::BasicBlock::BasicBlock(const Graph *graph, std::uint64_t startAddress) :
     graph_(graph), startAddress_(startAddress), terminatorAddress_(0),

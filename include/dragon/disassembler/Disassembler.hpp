@@ -7,8 +7,8 @@
 
 #include <dragon/Architecture.hpp>
 #include <dragon/Configuration.hpp>
-#include <dragon/Graph.hpp>
-#include <dragon/Instruction.hpp>
+#include <dragon/disassembler/Graph.hpp>
+#include <dragon/disassembler/Instruction.hpp>
 
 namespace dragon {
 

@@ -1,4 +1,4 @@
-#include <dragon/Assembler.hpp>
+#include <dragon/assembler/Assembler.hpp>
 
 #include "assemblers/ARMAssemblerTarget.hpp"
 #include "assemblers/LLVMAssemblerTarget.hpp"

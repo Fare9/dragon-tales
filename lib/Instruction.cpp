@@ -1,4 +1,4 @@
-#include <dragon/Instruction.hpp>
+#include <dragon/disassembler/Instruction.hpp>
 
 // Must come after Instruction.hpp so that Instruction::Impl is defined before
 // unique_ptr needs to destroy it.

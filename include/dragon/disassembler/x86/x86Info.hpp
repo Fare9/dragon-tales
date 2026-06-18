@@ -1,7 +1,7 @@
 #pragma once
 
 #include <dragon/Architecture.hpp>
-#include <dragon/Instruction.hpp>
+#include <dragon/disassembler/Instruction.hpp>
 #include <span>
 #include <unordered_set>
 

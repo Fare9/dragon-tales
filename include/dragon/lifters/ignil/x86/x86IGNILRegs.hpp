@@ -1,6 +1,6 @@
 #pragma once
 
-#include <dragon/IGNIL.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
 
 /// IGNIL register descriptors for the x86 / x86-64 architecture.
 ///

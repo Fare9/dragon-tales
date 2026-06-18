@@ -1,7 +1,7 @@
 #pragma once
 
-#include <dragon/IGNIL.hpp>
-#include <dragon/SliceExpr.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
+#include <dragon/analysis/SliceExpr.hpp>
 
 #include <cstdint>
 #include <unordered_map>

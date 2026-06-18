@@ -1,7 +1,7 @@
 #include "disassemblers/x86/X86IGNILLifter.hpp"
 
-#include <dragon/BasicBlock.hpp>
-#include <dragon/Instruction.hpp>
+#include <dragon/disassembler/BasicBlock.hpp>
+#include <dragon/disassembler/Instruction.hpp>
 
 #include <array>
 #include <string_view>

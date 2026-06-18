@@ -1,4 +1,4 @@
-#include <dragon/Graph.hpp>
+#include <dragon/disassembler/Graph.hpp>
 #include <utility>
 
 // -- GraphQueue

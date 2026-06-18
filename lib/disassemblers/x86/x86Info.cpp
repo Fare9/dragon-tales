@@ -1,4 +1,4 @@
-#include <dragon/x86Info.hpp>
+#include <dragon/disassembler/x86/x86Info.hpp>
 
 #include <llvm/MC/MCInst.h>
 #include <llvm/MC/MCInstrDesc.h>
