@@ -84,6 +84,12 @@ class LLVMLifter {
                        llvm::Value *value, RegFile &regs,
                        llvm::IRBuilder<> &builder);
 
+  // Prologue: load each register's initial value from %regs and store into
+  // its alloca. Sub-register allocas are initialized by truncating the widest
+  // value at the same offset.
+  void initializeRegistersFromParam(llvm::Function *llfn, RegFile &regFile,
+                                    llvm::Value *regsPtr);
+
   Architecture arch_;
   std::unique_ptr<llvm::LLVMContext> ctx_;
   std::unique_ptr<llvm::Module> module_;

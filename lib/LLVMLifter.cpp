@@ -36,6 +36,8 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
 
   auto regFile = buildRegFile(llfn, &fn, graph);
 
+  initializeRegistersFromParam(llfn, regFile, regsPtr);
+
   for (const auto &[addr, block]: fn.blocks()) {
     const auto *ib = graph.getIGNILBlock(addr);
     if (!ib)
@@ -376,6 +378,31 @@ void dragon::llvmlifter::LLVMLifter::mergeIntoParent(
     auto *cleared = builder.CreateAnd(parent, mask);
     auto *ext = builder.CreateZExt(value, bigTy);
     builder.CreateStore(builder.CreateOr(cleared, ext), slot);
+  }
+}
+
+void dragon::llvmlifter::LLVMLifter::initializeRegistersFromParam(
+        llvm::Function *llfn, RegFile &regFile, llvm::Value *regsPtr) {
+  auto &entryBB = llfn->getEntryBlock();
+  auto insertPt = entryBB.begin();
+  while (insertPt != entryBB.end() && llvm::isa<llvm::AllocaInst>(*insertPt))
+    ++insertPt;
+  llvm::IRBuilder<> builder(&entryBB, insertPt);
+
+  for (auto &[offset, widthMap] : regFile) {
+    auto &[bigWidth, bigSlot] = *widthMap.rbegin();
+    auto *bigTy = llvm::IntegerType::get(*ctx_, bigWidth);
+    auto *ptr   = builder.CreateGEP(builder.getInt8Ty(), regsPtr,
+                                    builder.getInt32(offset));
+    auto *val   = builder.CreateLoad(bigTy, ptr);
+    builder.CreateStore(val, bigSlot);
+    for (auto &[width, slot] : widthMap) {
+      if (width == bigWidth)
+        continue;
+      builder.CreateStore(
+              builder.CreateTrunc(val, llvm::IntegerType::get(*ctx_, width)),
+              slot);
+    }
   }
 }
 
