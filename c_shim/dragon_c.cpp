@@ -2,6 +2,7 @@
 
 #include <dragon/Architecture.hpp>
 #include <dragon/assembler/Assembler.hpp>
+#include <dragon/lifters/llvm/LLVMLifter.hpp>
 #include <dragon/analysis/BackwardSlicer.hpp>
 #include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/Configuration.hpp>
@@ -604,6 +605,57 @@ struct dragon_slicer {
 
 dragon_slicer_t *dragon_slicer_create(int max_blocks) {
   return new dragon_slicer{dragon::BackwardSlicer{max_blocks > 0 ? max_blocks : 5}};
+}
+
+// =============================================================================
+// LLVMLifter
+// =============================================================================
+
+struct dragon_llvm_lifter {
+  dragon::llvmlifter::LLVMLifter lifter;
+};
+
+dragon_llvm_lifter_t *dragon_llvm_lifter_create(dragon_architecture_t arch,
+                                                const char *module_name) {
+  std::string name = (module_name && *module_name) ? module_name : "lifted";
+  return new dragon_llvm_lifter{
+          dragon::llvmlifter::LLVMLifter(to_arch(arch), name)};
+}
+
+void dragon_llvm_lifter_destroy(dragon_llvm_lifter_t *l) { delete l; }
+
+int dragon_llvm_lifter_lift(dragon_llvm_lifter_t *l,
+                             const dragon_function_t *fn,
+                             const dragon_graph_t *g) {
+  if (!l || !fn || !g)
+    return 0;
+  return l->lifter.lift(*as_fn(fn), *as_graph(g)) ? 1 : 0;
+}
+
+char *dragon_llvm_lifter_ir(const dragon_llvm_lifter_t *l) {
+  if (!l)
+    return dup_string("");
+  return dup_string(l->lifter.ir());
+}
+
+void dragon_llvm_lifter_run_mem2reg(dragon_llvm_lifter_t *l) {
+  if (l)
+    l->lifter.runMem2Reg();
+}
+
+void dragon_llvm_lifter_run_inst_combine(dragon_llvm_lifter_t *l) {
+  if (l)
+    l->lifter.runInstCombine();
+}
+
+void dragon_llvm_lifter_run_gvn(dragon_llvm_lifter_t *l) {
+  if (l)
+    l->lifter.runGVN();
+}
+
+void dragon_llvm_lifter_run_dce(dragon_llvm_lifter_t *l) {
+  if (l)
+    l->lifter.runDCE();
 }
 
 void dragon_slicer_destroy(dragon_slicer_t *s) { delete s; }

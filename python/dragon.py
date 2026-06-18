@@ -756,6 +756,78 @@ class BackwardSlicer:
         return '<BackwardSlicer>'
 
 
+# -- LLVMLifter ----------------------------------------------------------------
+
+class LLVMLifter:
+    """Lifts Functions to LLVM IR via the IGNIL graph.
+
+    Parameters
+    ----------
+    arch        : Architecture
+        Target architecture (default X86_64).
+    module_name : str
+        Name embedded in the LLVM module (default 'lifted').
+    """
+
+    def __init__(self, arch=Architecture.X86_64, module_name='lifted'):
+        self._ptr = lib.dragon_llvm_lifter_create(arch, module_name.encode())
+        if self._ptr == ffi.NULL:
+            raise RuntimeError('failed to create LLVMLifter')
+
+    def __del__(self):
+        if self._ptr:
+            lib.dragon_llvm_lifter_destroy(self._ptr)
+            self._ptr = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.__del__()
+
+    def lift(self, function, graph):
+        """Lift *function* using its IGNIL blocks in *graph*.
+
+        Returns True on success; False if any IGNIL block is missing.
+        """
+        return bool(lib.dragon_llvm_lifter_lift(
+            self._ptr, function._ptr, graph._ptr))
+
+    def ir(self):
+        """Return the textual LLVM IR for all lifted functions."""
+        raw = lib.dragon_llvm_lifter_ir(self._ptr)
+        try:
+            return ffi.string(raw).decode()
+        finally:
+            lib.dragon_cstr_free(raw)
+
+    def run_mem2reg(self):
+        """Promote allocas to SSA values."""
+        lib.dragon_llvm_lifter_run_mem2reg(self._ptr)
+
+    def run_inst_combine(self):
+        """Fold sub-register mask/OR patterns."""
+        lib.dragon_llvm_lifter_run_inst_combine(self._ptr)
+
+    def run_gvn(self):
+        """Eliminate redundant loads."""
+        lib.dragon_llvm_lifter_run_gvn(self._ptr)
+
+    def run_dce(self):
+        """Remove dead flag computations."""
+        lib.dragon_llvm_lifter_run_dce(self._ptr)
+
+    def optimize(self):
+        """Run the standard pipeline: mem2reg → instcombine → GVN → DCE."""
+        self.run_mem2reg()
+        self.run_inst_combine()
+        self.run_gvn()
+        self.run_dce()
+
+    def __repr__(self):
+        return '<LLVMLifter>'
+
+
 # -- x86 register descriptors --------------------------------------------------
 
 class x86:

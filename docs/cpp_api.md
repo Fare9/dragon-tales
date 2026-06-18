@@ -354,3 +354,68 @@ print(expr);
 | `UnaryOp` | `op`, `operand` | Unary operation |
 | `Load` | `addr`, `width` | Memory read |
 | `Undef` | — | Unresolvable value |
+
+---
+
+## LLVMLifter
+
+`LLVMLifter` lifts a `Function` (and its IGNIL blocks) to LLVM IR. The result
+is stored in an `llvm::Module` owned by the lifter. Call the optimization
+passes to clean up the raw output before inspecting or emitting the IR.
+
+`graph` must come from `Disassembler::disassemble(..., graph)` or
+`Disassembler::analyze()` — IGNIL blocks must be present.
+
+```cpp
+#include <dragon/lifters/llvm/LLVMLifter.hpp>
+
+// push rbp; mov rbp, rsp; add rax, rbx; pop rbp; ret
+std::vector<uint8_t> code = {
+    0x55, 0x48, 0x89, 0xE5, 0x48, 0x01, 0xD8, 0x5D, 0xC3
+};
+
+dragon::Configuration cfg;
+dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+dragon::Graph graph(dragon::Architecture::X86_64, cfg);
+dis.disassemble(code, 0x1000, graph);
+
+dragon::llvmlifter::LLVMLifter lifter(dragon::Architecture::X86_64, "my_module");
+
+dragon::Function fn(&graph, 0x1000);
+if (lifter.lift(fn, graph)) {
+    std::cout << lifter.ir();   // raw IR
+
+    lifter.runMem2Reg();
+    lifter.runInstCombine();
+    lifter.runGVN();
+    lifter.runDCE();
+
+    std::cout << lifter.ir();   // optimized IR
+}
+```
+
+### Optimization passes
+
+Run them in order for best results.
+
+| Method | Effect |
+|---|---|
+| `runMem2Reg()` | Promotes allocas to SSA values, inserts φ-nodes |
+| `runInstCombine()` | Folds sub-register mask/OR patterns |
+| `runGVN()` | Eliminates redundant loads |
+| `runDCE()` | Removes dead flag computations |
+
+### Lifted function signature
+
+Every lifted function has the signature:
+
+```llvm
+define void @sub_<addr>(ptr %mem, ptr %regs)
+```
+
+- `%mem` — flat memory image; loads and stores go through GEP offsets into this pointer.
+- `%regs` — register file; registers are loaded from it on entry and written back on `ret`.
+
+After `runMem2Reg()` the alloca-based register representation is promoted to
+SSA values. The `%regs` boundary loads/stores are the only register memory
+traffic that remains.

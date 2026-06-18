@@ -325,6 +325,27 @@
       uint8_t     reg_width,
       const char* reg_name);
 
+  // -- LLVMLifter ---------------------------------------------------------------
+
+  typedef struct dragon_llvm_lifter dragon_llvm_lifter_t;
+
+  dragon_llvm_lifter_t* dragon_llvm_lifter_create(dragon_architecture_t arch,
+                                                  const char* module_name);
+  void dragon_llvm_lifter_destroy(dragon_llvm_lifter_t* l);
+
+  // Lift one function. Returns 1 on success, 0 if any IGNIL block is missing.
+  int  dragon_llvm_lifter_lift(dragon_llvm_lifter_t* l,
+                               const dragon_function_t* fn,
+                               const dragon_graph_t* g);
+
+  // Dump textual LLVM IR. Caller must free with dragon_cstr_free.
+  char* dragon_llvm_lifter_ir(const dragon_llvm_lifter_t* l);
+
+  void dragon_llvm_lifter_run_mem2reg(dragon_llvm_lifter_t* l);
+  void dragon_llvm_lifter_run_inst_combine(dragon_llvm_lifter_t* l);
+  void dragon_llvm_lifter_run_gvn(dragon_llvm_lifter_t* l);
+  void dragon_llvm_lifter_run_dce(dragon_llvm_lifter_t* l);
+
   #ifdef __cplusplus
   }
   #endif
