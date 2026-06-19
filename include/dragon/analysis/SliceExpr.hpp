@@ -36,11 +36,14 @@ struct BinOp {
 struct UnaryOp {
   ignil::Opcode op; ///< Unary operation
   std::shared_ptr<Expr> operand; ///< Operand for unary operation
+  ignil::Width resultWidth{
+          0}; ///< Target width for ZEXT/SEXT/TRUNC; 0 = same as operand
 };
 
 /// Value loaded from memory at a computed address.
 struct Load {
-  std::shared_ptr<Expr> addr; ///< Keep for the address an expression that can be solved
+  std::shared_ptr<Expr>
+          addr; ///< Keep for the address an expression that can be solved
   ignil::Width width; ///< width for that address in bits
 };
 

@@ -34,6 +34,9 @@ if(WIN32 AND TARGET LLVMDebugInfoPDB)
   endif()
 endif()
 
+# Find Z3
+find_package(Z3 REQUIRED CONFIG)
+
 list(APPEND CMAKE_MODULE_PATH ${LLVM_CMAKE_DIR})
 include(AddLLVM)
 
