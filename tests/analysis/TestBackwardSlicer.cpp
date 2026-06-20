@@ -25,7 +25,7 @@ static void addValidBlock(dragon::Graph &g, dragon::ignil::Block block) {
 // Test 1: constant folded through a single COPY in one block
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BackwardSlicer — constant propagation through COPY",
+TEST_CASE("BackwardSlicer - constant propagation through COPY",
           "[slicer][ignil]") {
   constexpr std::uint64_t baseAddr = 0x1000;
   dragon::ignil::Block block{baseAddr};
@@ -53,10 +53,10 @@ TEST_CASE("BackwardSlicer — constant propagation through COPY",
 }
 
 // ---------------------------------------------------------------------------
-// Test 2: ADD expression — result is represented as BinOp(ADD, rax, rbx)
+// Test 2: ADD expression - result is represented as BinOp(ADD, rax, rbx)
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BackwardSlicer — ADD produces BinOp expression", "[slicer][ignil]") {
+TEST_CASE("BackwardSlicer - ADD produces BinOp expression", "[slicer][ignil]") {
   constexpr std::uint64_t baseAddr = 0x2000;
   dragon::ignil::Block block{baseAddr};
 
@@ -95,10 +95,10 @@ TEST_CASE("BackwardSlicer — ADD produces BinOp expression", "[slicer][ignil]")
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: cross-block propagation — rax defined in predecessor block
+// Test 3: cross-block propagation - rax defined in predecessor block
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BackwardSlicer — cross-block constant propagation",
+TEST_CASE("BackwardSlicer - cross-block constant propagation",
           "[slicer][ignil]") {
   // Block A (0x3000): COPY(rax, 99); JMP(0x3010)
   // Block B (0x3010): RET            <-- slice rax here
@@ -136,10 +136,10 @@ TEST_CASE("BackwardSlicer — cross-block constant propagation",
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: join node stops propagation — rax left as SymReg
+// Test 4: join node stops propagation - rax left as SymReg
 // ---------------------------------------------------------------------------
 
-TEST_CASE("BackwardSlicer — join node stops at SymReg",
+TEST_CASE("BackwardSlicer - join node stops at SymReg",
           "[slicer][ignil]") {
   // Block A (0x4000): JMP(0x4020)
   // Block B (0x4010): JMP(0x4020)

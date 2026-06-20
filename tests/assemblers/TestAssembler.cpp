@@ -115,7 +115,7 @@ TEST_CASE("Assembler round-trip x86_64", "[assembler][disassembler]") {
 }
 
 // -----------------------------------------------------------------------
-// Multiple calls — assemble() must be reusable
+// Multiple calls - assemble() must be reusable
 // -----------------------------------------------------------------------
 
 TEST_CASE("Assembler can be called multiple times", "[assembler]") {
@@ -135,7 +135,7 @@ TEST_CASE("Assembler can be called multiple times", "[assembler]") {
 // x86-32 assembly
 // -----------------------------------------------------------------------
 
-TEST_CASE("Assembler x86_32 — basic instructions", "[assembler][x86_32]") {
+TEST_CASE("Assembler x86_32 - basic instructions", "[assembler][x86_32]") {
   auto as = makeAssembler(dragon::Architecture::X86_32);
 
   SECTION("nop produces one byte 0x90") {
@@ -155,7 +155,7 @@ TEST_CASE("Assembler x86_32 — basic instructions", "[assembler][x86_32]") {
   }
 }
 
-TEST_CASE("Assembler x86_32 — round-trip", "[assembler][disassembler][x86_32]") {
+TEST_CASE("Assembler x86_32 - round-trip", "[assembler][disassembler][x86_32]") {
   auto as  = makeAssembler(dragon::Architecture::X86_32);
   auto dis = makeDisassembler(dragon::Architecture::X86_32);
 
@@ -189,7 +189,7 @@ TEST_CASE("Assembler x86_32 — round-trip", "[assembler][disassembler][x86_32]"
 // ARM64 assembly
 // -----------------------------------------------------------------------
 
-TEST_CASE("Assembler ARM64 — basic instructions", "[assembler][arm64]") {
+TEST_CASE("Assembler ARM64 - basic instructions", "[assembler][arm64]") {
   auto as = makeAssembler(dragon::Architecture::ARM64);
 
   SECTION("nop produces 4 bytes") {
@@ -212,7 +212,7 @@ TEST_CASE("Assembler ARM64 — basic instructions", "[assembler][arm64]") {
   }
 }
 
-TEST_CASE("Assembler ARM64 — round-trip", "[assembler][disassembler][arm64]") {
+TEST_CASE("Assembler ARM64 - round-trip", "[assembler][disassembler][arm64]") {
   auto as  = makeAssembler(dragon::Architecture::ARM64);
   auto dis = makeDisassembler(dragon::Architecture::ARM64);
 
@@ -249,7 +249,7 @@ TEST_CASE("Assembler x86_64 AT&T syntax", "[assembler][x86_64][syntax]") {
   auto attAsm   = makeAssembler(dragon::Architecture::X86_64, dragon::Syntax::ATT);
 
   SECTION("nop produces same bytes regardless of syntax") {
-    // nop has no operands — encoding is syntax-independent
+    // nop has no operands - encoding is syntax-independent
     REQUIRE(intelAsm.assemble("nop") == attAsm.assemble("nop"));
   }
 

@@ -12,6 +12,7 @@ add_library(dragon::libdragon ALIAS libdragon)
 
 set_target_properties(libdragon PROPERTIES
         OUTPUT_NAME dragon
+        WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
 
 target_compile_features(libdragon PUBLIC cxx_std_20)
@@ -21,9 +22,9 @@ target_include_directories(libdragon
         PUBLIC
         $<INSTALL_INTERFACE:include>
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+        ${LLVM_INCLUDE_DIRS}
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${LLVM_INCLUDE_DIRS}
 )
 
 # LLVM definitions (e.g. _DEBUG, NDEBUG)
