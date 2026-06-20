@@ -2,6 +2,7 @@
 
 #include "utils/Utils.hpp"
 
+#include <cassert>
 #include <format>
 
 namespace dragon::slice {
@@ -55,6 +56,7 @@ z3::expr SliceExprZ3::lower(const Expr &e) const {
             l = widenTo(l, w);
             r = widenTo(r, w);
 
+            // Construction of different expressions for Z3
             using Opc = ignil::Opcode;
             switch (b.op) {
               case Opc::ADD:
@@ -109,9 +111,11 @@ z3::expr SliceExprZ3::lower(const Expr &e) const {
               case Opc::SGE:
                 return z3::ite(l >= r, ctx_.bv_val(1, 1), ctx_.bv_val(0, 1));
               default:
-                return ctx_.bv_const("undef_binop", w);
+                assert(false && "unhandled BinOp opcode in SliceExprZ3");
+                return ctx_.bv_val(0, w);
             }
           },
+          // Unary operators
           [&](const UnaryOp &u) -> z3::expr {
             z3::expr v = lower(*u.operand);
             unsigned srcW = v.get_sort().bv_size();
@@ -130,7 +134,8 @@ z3::expr SliceExprZ3::lower(const Expr &e) const {
               case Opc::TRUNC:
                 return dstW < srcW ? v.extract(dstW - 1, 0) : v;
               default:
-                return ctx_.bv_const("undef_unary", srcW);
+                assert(false && "unhandled UnaryOp opcode in SliceExprZ3");
+                return ctx_.bv_val(0, srcW);
             }
           },
           [&](const Load &l) -> z3::expr {
@@ -148,7 +153,7 @@ z3::expr SliceExprZ3::lower(const Expr &e) const {
             return sym;
           },
           [&](const Undef &u) -> z3::expr {
-            return ctx_.bv_const("undef", 64);
+            return ctx_.bv_const("undef", u.width);
           }});
 }
 

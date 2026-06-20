@@ -49,7 +49,9 @@ struct Load {
 
 /// Slicer could not determine the value (UNDEF source, depth exceeded,
 /// or a join node was reached).
-struct Undef {};
+struct Undef {
+  ignil::Width width{64};
+};
 
 /// Neutral symbolic expression produced by backward slicing.
 /// Use the Z3 lowerer to turn it into a solver formula.

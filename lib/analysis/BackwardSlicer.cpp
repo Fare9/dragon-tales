@@ -95,7 +95,7 @@ slice::Expr BackwardSlicer::slice(const ignil::Value &root,
   const PredMap preds = buildPredecessorMap(graph);
   const ignil::Block *blk = graph.getIGNILBlock(blockAddr);
   if (!blk)
-    return slice::Expr{slice::Undef{}};
+    return slice::Expr{slice::Undef{ignil::widthOf(root)}};
   int startIdx = static_cast<int>(blk->ops().size()); // scan all ops
   return sliceValue(root, *blk, startIdx, graph, preds, maxBlocks_);
 }
@@ -135,7 +135,7 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
                     }
                     // Not defined in this block — temps never cross blocks,
                     // treat as undef.
-                    return slice::Expr{slice::Undef{}};
+                    return slice::Expr{slice::Undef{t.width}};
                   },
 
                   // Registers: scan backwards within the block for the last
@@ -186,8 +186,10 @@ slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
   using Opc = ignil::Opcode;
 
   auto src = [&](int i) -> slice::Expr {
-    if (i >= static_cast<int>(op.srcs.size()))
-      return slice::Expr{slice::Undef{}};
+    if (i >= static_cast<int>(op.srcs.size())) {
+      ignil::Width w = op.dst ? ignil::widthOf(*op.dst) : ignil::Width{64};
+      return slice::Expr{slice::Undef{w}};
+    }
     return sliceValue(op.srcs[i], block, opIdx, graph, preds, depth);
   };
 
@@ -249,8 +251,10 @@ slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
     }
 
     // UNDEF and control-flow ops produce no useful expression.
-    default:
-      return slice::Expr{slice::Undef{}};
+    default: {
+      ignil::Width w = op.dst ? ignil::widthOf(*op.dst) : ignil::Width{64};
+      return slice::Expr{slice::Undef{w}};
+    }
   }
 }
 

@@ -40,6 +40,23 @@ find_package(Z3 REQUIRED CONFIG)
 list(APPEND CMAKE_MODULE_PATH ${LLVM_CMAKE_DIR})
 include(AddLLVM)
 
+# Optional Z3 support for SMT-based indirect jump resolution.
+# Pass -DDRAGON_USE_Z3=OFF to build without Z3.
+option(DRAGON_USE_Z3 "Enable Z3 SMT solver for indirect-jump path discovery" ON)
+
+if(DRAGON_USE_Z3)
+    # System Z3 (apt) ships no CMake config file — use LLVM's FindZ3 module.
+    find_package(Z3 REQUIRED)
+    message(STATUS "Found Z3 ${Z3_VERSION_STRING} at ${Z3_LIBRARIES}")
+    if(NOT TARGET z3::libz3)
+        add_library(z3::libz3 UNKNOWN IMPORTED)
+        set_target_properties(z3::libz3 PROPERTIES
+            IMPORTED_LOCATION "${Z3_LIBRARIES}"
+            INTERFACE_INCLUDE_DIRECTORIES "${Z3_INCLUDE_DIR}"
+        )
+    endif()
+endif()
+
 # FetchContent must be included before any FetchContent_Declare calls
 include(FetchContent)
 
