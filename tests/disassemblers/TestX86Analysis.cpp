@@ -40,7 +40,7 @@ static bool hasBlock(const std::vector<dragon::BasicBlock> &blocks,
 // Basic sanity
 // -----------------------------------------------------------------------
 
-TEST_CASE("X86Analysis — empty bytes yields empty graph", "[x86][analysis]") {
+TEST_CASE("X86Analysis - empty bytes yields empty graph", "[x86][analysis]") {
   auto dis = makeAnalyzer(dragon::Architecture::X86_64);
   auto g = makeGraph(dragon::Architecture::X86_64);
   dis.disassemble({}, 0x1000, g);
@@ -53,7 +53,7 @@ TEST_CASE("X86Analysis — empty bytes yields empty graph", "[x86][analysis]") {
 // Prologue detection
 // -----------------------------------------------------------------------
 
-TEST_CASE("X86Analysis x86_64 — prologue detected as function start",
+TEST_CASE("X86Analysis x86_64 - prologue detected as function start",
           "[x86][analysis][x86_64]") {
   // push rbp      55
   // mov rbp, rsp  48 89 E5
@@ -87,7 +87,7 @@ TEST_CASE("X86Analysis x86_64 — prologue detected as function start",
   }
 }
 
-TEST_CASE("X86Analysis x86_32 — prologue detected as function start",
+TEST_CASE("X86Analysis x86_32 - prologue detected as function start",
           "[x86][analysis][x86_32]") {
   // push ebp      55
   // mov ebp, esp  89 E5
@@ -113,7 +113,7 @@ TEST_CASE("X86Analysis x86_32 — prologue detected as function start",
 // Call target → function start
 // -----------------------------------------------------------------------
 
-TEST_CASE("X86Analysis x86_64 — call target becomes a function start",
+TEST_CASE("X86Analysis x86_64 - call target becomes a function start",
           "[x86][analysis][x86_64]") {
   // 0x1000: E8 0A 00 00 00  call 0x100F  (0x1000 + 5 + 0xA = 0x100F)
   // 0x1005: C3              ret
@@ -144,7 +144,7 @@ TEST_CASE("X86Analysis x86_64 — call target becomes a function start",
 // Block discovery via conditional branch
 // -----------------------------------------------------------------------
 
-TEST_CASE("X86Analysis x86_64 — conditional branch creates multiple blocks",
+TEST_CASE("X86Analysis x86_64 - conditional branch creates multiple blocks",
           "[x86][analysis][x86_64]") {
   // 0x1000: 74 05  je  0x1007  (0x1000 + 2 + 5 = 0x1007)
   // 0x1002: C3     ret
@@ -171,7 +171,7 @@ TEST_CASE("X86Analysis x86_64 — conditional branch creates multiple blocks",
 // Full if/else function
 // -----------------------------------------------------------------------
 
-TEST_CASE("X86Analysis x86_64 — if/else function structure",
+TEST_CASE("X86Analysis x86_64 - if/else function structure",
           "[x86][analysis][x86_64]") {
   // Equivalent C:  int foo(int x) { if (x > 0) return 1; else return -1; }
   //
@@ -260,13 +260,13 @@ TEST_CASE("X86Analysis x86_64 — if/else function structure",
 }
 
 // -----------------------------------------------------------------------
-// Two adjacent functions — function boundary stops BFS
+// Two adjacent functions - function boundary stops BFS
 // -----------------------------------------------------------------------
 
-TEST_CASE("X86Analysis x86_64 — two adjacent prologues produce two distinct "
+TEST_CASE("X86Analysis x86_64 - two adjacent prologues produce two distinct "
           "functions",
           "[x86][analysis][x86_64]") {
-  // Function 1 (0x1000): push rbp; mov rbp, rsp; pop rbp  — no ret, falls
+  // Function 1 (0x1000): push rbp; mov rbp, rsp; pop rbp  - no ret, falls
   // through Function 2 (0x1005): push rbp; mov rbp, rsp; pop rbp; ret
   //
   // Without the function-boundary BFS guard in Function.cpp, function 1 would

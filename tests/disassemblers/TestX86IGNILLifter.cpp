@@ -48,10 +48,10 @@ static void printIgnilComparison(dragon::Graph &g) {
 }
 
 // -----------------------------------------------------------------------
-// Test 1: arithmetic — MOV, ADD, SUB, XOR, RET
+// Test 1: arithmetic - MOV, ADD, SUB, XOR, RET
 // -----------------------------------------------------------------------
 
-TEST_CASE("IGNIL lifting — arithmetic block", "[ignil][x86_64]") {
+TEST_CASE("IGNIL lifting - arithmetic block", "[ignil][x86_64]") {
   // 0x1000: 55            push rbp
   // 0x1001: 48 89 E5      mov rbp, rsp
   // 0x1004: 48 01 D8      add rax, rbx
@@ -84,10 +84,10 @@ TEST_CASE("IGNIL lifting — arithmetic block", "[ignil][x86_64]") {
 }
 
 // -----------------------------------------------------------------------
-// Test 2: LEA with complex addressing — base + index*scale + disp
+// Test 2: LEA with complex addressing - base + index*scale + disp
 // -----------------------------------------------------------------------
 
-TEST_CASE("IGNIL lifting — LEA with SIB addressing", "[ignil][x86_64]") {
+TEST_CASE("IGNIL lifting - LEA with SIB addressing", "[ignil][x86_64]") {
   // 0x1000: 55                  push rbp
   // 0x1001: 48 89 E5            mov rbp, rsp
   // 0x1004: 48 8D 44 8B 08      lea rax, [rbx + rcx*4 + 8]
@@ -116,10 +116,10 @@ TEST_CASE("IGNIL lifting — LEA with SIB addressing", "[ignil][x86_64]") {
 }
 
 // -----------------------------------------------------------------------
-// Test 3: conditional branch — CMP + JLE produces correct CJMP condition
+// Test 3: conditional branch - CMP + JLE produces correct CJMP condition
 // -----------------------------------------------------------------------
 
-TEST_CASE("IGNIL lifting — conditional branch (cmp/jle)", "[ignil][x86_64]") {
+TEST_CASE("IGNIL lifting - conditional branch (cmp/jle)", "[ignil][x86_64]") {
   // 0x1000: 48 39 D8   cmp rax, rbx
   // 0x1003: 7E 05      jle 0x100A          (offset +5 from next insn 0x1005)
   // 0x1005: 48 01 D8   add rax, rbx        (then-block)

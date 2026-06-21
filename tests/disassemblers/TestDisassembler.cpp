@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <dragon/disassembler/Disassembler.hpp>
 
+#include <algorithm>
+
 // -----------------------------------------------------------------------
 // Helper
 // -----------------------------------------------------------------------
@@ -79,10 +81,10 @@ TEST_CASE("Disassembler edge cases", "[disassembler]") {
 // x86-64
 // -----------------------------------------------------------------------
 
-TEST_CASE("Disassembler x86_64 — instruction fields", "[disassembler][x86_64]") {
+TEST_CASE("Disassembler x86_64 - instruction fields", "[disassembler][x86_64]") {
   auto dis = makeDisassembler(dragon::Architecture::X86_64);
 
-  SECTION("nop + ret — addresses and mnemonics") {
+  SECTION("nop + ret - addresses and mnemonics") {
     const std::vector<std::uint8_t> bytes = {0x90, 0xC3};
     auto instrs = dis.disassemble(bytes, 0x1000);
     REQUIRE(instrs.size() == 2);
@@ -92,7 +94,7 @@ TEST_CASE("Disassembler x86_64 — instruction fields", "[disassembler][x86_64]"
     REQUIRE(instrs[1].isReturn());
   }
 
-  SECTION("mov rax, rcx — size, mnemonic, no control-flow flags") {
+  SECTION("mov rax, rcx - size, mnemonic, no control-flow flags") {
     // 48 89 C8 = mov rax, rcx
     const std::vector<std::uint8_t> bytes = {0x48, 0x89, 0xC8};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -130,10 +132,10 @@ TEST_CASE("Disassembler x86_64 — instruction fields", "[disassembler][x86_64]"
   }
 }
 
-TEST_CASE("Disassembler x86_64 — branch detection", "[disassembler][x86_64][branch]") {
+TEST_CASE("Disassembler x86_64 - branch detection", "[disassembler][x86_64][branch]") {
   auto dis = makeDisassembler(dragon::Architecture::X86_64);
 
-  SECTION("unconditional direct jump — isJump, has target") {
+  SECTION("unconditional direct jump - isJump, has target") {
     // EB 05 = jmp +5  →  target = 0x1000 + 2 + 5 = 0x1007
     const std::vector<std::uint8_t> bytes = {0xEB, 0x05};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -144,7 +146,7 @@ TEST_CASE("Disassembler x86_64 — branch detection", "[disassembler][x86_64][br
     REQUIRE(instrs[0].branches().contains(0x1007));
   }
 
-  SECTION("conditional je — isJump, isConditional, has target") {
+  SECTION("conditional je - isJump, isConditional, has target") {
     // 74 05 = je +5  →  target = 0x1007
     const std::vector<std::uint8_t> bytes = {0x74, 0x05};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -154,7 +156,7 @@ TEST_CASE("Disassembler x86_64 — branch detection", "[disassembler][x86_64][br
     REQUIRE_FALSE(instrs[0].branches().empty());
   }
 
-  SECTION("indirect jump — isJump, no known target") {
+  SECTION("indirect jump - isJump, no known target") {
     // FF E0 = jmp rax
     const std::vector<std::uint8_t> bytes = {0xFF, 0xE0};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -164,10 +166,10 @@ TEST_CASE("Disassembler x86_64 — branch detection", "[disassembler][x86_64][br
   }
 }
 
-TEST_CASE("Disassembler x86_64 — call detection", "[disassembler][x86_64][call]") {
+TEST_CASE("Disassembler x86_64 - call detection", "[disassembler][x86_64][call]") {
   auto dis = makeDisassembler(dragon::Architecture::X86_64);
 
-  SECTION("direct call — isCall") {
+  SECTION("direct call - isCall") {
     // E8 00 00 00 00 = call +0  →  target = 0x1005
     const std::vector<std::uint8_t> bytes = {0xE8, 0x00, 0x00, 0x00, 0x00};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -177,7 +179,7 @@ TEST_CASE("Disassembler x86_64 — call detection", "[disassembler][x86_64][call
     REQUIRE_FALSE(instrs[0].isReturn());
   }
 
-  SECTION("indirect call — isCall, no branch target") {
+  SECTION("indirect call - isCall, no branch target") {
     // FF D0 = call rax
     const std::vector<std::uint8_t> bytes = {0xFF, 0xD0};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -253,7 +255,7 @@ TEST_CASE("Disassembler x86_32", "[disassembler][x86_32]") {
 TEST_CASE("Disassembler ARM64", "[disassembler][arm64]") {
   auto dis = makeDisassembler(dragon::Architecture::ARM64);
 
-  SECTION("nop — size and address") {
+  SECTION("nop - size and address") {
     // D503201F = nop
     const std::vector<std::uint8_t> bytes = {0x1F, 0x20, 0x03, 0xD5};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -262,7 +264,7 @@ TEST_CASE("Disassembler ARM64", "[disassembler][arm64]") {
     REQUIRE(instrs[0].size() == 4);
   }
 
-  SECTION("ret — isReturn") {
+  SECTION("ret - isReturn") {
     // D65F03C0 = ret
     const std::vector<std::uint8_t> bytes = {0xC0, 0x03, 0x5F, 0xD6};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -284,7 +286,7 @@ TEST_CASE("Disassembler ARM64", "[disassembler][arm64]") {
     REQUIRE(instrs[1].size() == 4);
   }
 
-  SECTION("bl — isCall") {
+  SECTION("bl - isCall") {
     // 94000001 = bl #4  (branch-and-link 1 instruction forward)
     const std::vector<std::uint8_t> bytes = {0x01, 0x00, 0x00, 0x94};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -293,7 +295,7 @@ TEST_CASE("Disassembler ARM64", "[disassembler][arm64]") {
     REQUIRE_FALSE(instrs[0].isReturn());
   }
 
-  SECTION("b — isJump, not a call") {
+  SECTION("b - isJump, not a call") {
     // 14000001 = b #4  (unconditional branch 1 instruction forward)
     const std::vector<std::uint8_t> bytes = {0x01, 0x00, 0x00, 0x14};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -302,7 +304,7 @@ TEST_CASE("Disassembler ARM64", "[disassembler][arm64]") {
     REQUIRE_FALSE(instrs[0].isCall());
   }
 
-  SECTION("cbz — isJump, isConditional") {
+  SECTION("cbz - isJump, isConditional") {
     // B4000001 = cbz x1, #4  (compare-and-branch-if-zero)
     const std::vector<std::uint8_t> bytes = {0x01, 0x00, 0x00, 0xB4};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -316,12 +318,12 @@ TEST_CASE("Disassembler ARM64", "[disassembler][arm64]") {
 // ARM32
 // -----------------------------------------------------------------------
 
-TEST_CASE("Disassembler ARM32 — generic CPU", "[disassembler][arm32]") {
+TEST_CASE("Disassembler ARM32 - generic CPU", "[disassembler][arm32]") {
   // "generic" targets ARMv4 baseline: B, BL, and data-processing work;
   // BX requires ARMv4T (HasV4TOps) and is not available here.
   auto dis = makeDisassembler(dragon::Architecture::ARM32);
 
-  SECTION("mov r0, r0 — decodes as one 4-byte instruction") {
+  SECTION("mov r0, r0 - decodes as one 4-byte instruction") {
     // E1A00000 = mov r0, r0
     const std::vector<std::uint8_t> bytes = {0x00, 0x00, 0xA0, 0xE1};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -330,7 +332,7 @@ TEST_CASE("Disassembler ARM32 — generic CPU", "[disassembler][arm32]") {
     REQUIRE(instrs[0].address() == 0x1000);
   }
 
-  SECTION("bl — isCall") {
+  SECTION("bl - isCall") {
     // EB000000 = bl #0  (target = PC+8 = 0x1008)
     const std::vector<std::uint8_t> bytes = {0x00, 0x00, 0x00, 0xEB};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -338,7 +340,7 @@ TEST_CASE("Disassembler ARM32 — generic CPU", "[disassembler][arm32]") {
     REQUIRE(instrs[0].isCall());
   }
 
-  SECTION("b — isJump, not a call") {
+  SECTION("b - isJump, not a call") {
     // EA000000 = b #0  (target = PC+8 = 0x1008)
     const std::vector<std::uint8_t> bytes = {0x00, 0x00, 0x00, 0xEA};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -359,14 +361,14 @@ TEST_CASE("Disassembler ARM32 — generic CPU", "[disassembler][arm32]") {
   }
 }
 
-TEST_CASE("Disassembler ARM32 — ARMv5TEJ CPU (arm926ej-s)", "[disassembler][arm32]") {
+TEST_CASE("Disassembler ARM32 - ARMv5TEJ CPU (arm926ej-s)", "[disassembler][arm32]") {
   // "arm926ej-s" enables HasV4TOps, making BX/BLX available.
   dragon::Configuration config;
   config.cpu = "arm926ej-s";
   auto dis = dragon::Disassembler(dragon::Architecture::ARM32, config);
   REQUIRE(dis.isValid());
 
-  SECTION("bx lr — isReturn or isJump") {
+  SECTION("bx lr - isReturn or isJump") {
     // E12FFF1E = bx lr
     const std::vector<std::uint8_t> bytes = {0x1E, 0xFF, 0x2F, 0xE1};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -375,7 +377,7 @@ TEST_CASE("Disassembler ARM32 — ARMv5TEJ CPU (arm926ej-s)", "[disassembler][ar
     REQUIRE_FALSE(instrs[0].isCall());
   }
 
-  SECTION("bx lr — address increments correctly alongside generic instructions") {
+  SECTION("bx lr - address increments correctly alongside generic instructions") {
     const std::vector<std::uint8_t> bytes = {
         0x00, 0x00, 0xA0, 0xE1,  // mov r0, r0  (0x1000)
         0x1E, 0xFF, 0x2F, 0xE1,  // bx lr       (0x1004)
@@ -394,7 +396,7 @@ TEST_CASE("Disassembler ARM32 — ARMv5TEJ CPU (arm926ej-s)", "[disassembler][ar
 TEST_CASE("Disassembler RISC-V 32", "[disassembler][riscv32]") {
   auto dis = makeDisassembler(dragon::Architecture::RISCV32);
 
-  SECTION("nop (addi x0, x0, 0) — size and address") {
+  SECTION("nop (addi x0, x0, 0) - size and address") {
     // 00000013 = addi x0, x0, 0
     const std::vector<std::uint8_t> bytes = {0x13, 0x00, 0x00, 0x00};
     auto instrs = dis.disassemble(bytes, 0x1000);
@@ -403,7 +405,7 @@ TEST_CASE("Disassembler RISC-V 32", "[disassembler][riscv32]") {
     REQUIRE(instrs[0].size() == 4);
   }
 
-  SECTION("ret (jalr x0, 0(x1)) — decodes to one 4-byte instruction") {
+  SECTION("ret (jalr x0, 0(x1)) - decodes to one 4-byte instruction") {
     // 00008067 = jalr x0, 0(x1)  (the ret pseudo-instruction)
     // LLVM's RISC-V MC layer sets isTerminator/isBarrier but not isBranch or
     // isReturn on JALR, so we only assert it decodes correctly.
@@ -440,7 +442,7 @@ TEST_CASE("Disassembler RISC-V 64", "[disassembler][riscv64]") {
     REQUIRE(instrs[0].size() == 4);
   }
 
-  SECTION("ret (jalr x0, 0(x1)) — decodes to one 4-byte instruction") {
+  SECTION("ret (jalr x0, 0(x1)) - decodes to one 4-byte instruction") {
     // LLVM's RISC-V MC layer sets isTerminator/isBarrier but not isBranch or
     // isReturn on JALR, so we only assert it decodes correctly.
     const std::vector<std::uint8_t> bytes = {0x67, 0x80, 0x00, 0x00};
@@ -483,7 +485,7 @@ TEST_CASE("Disassembler RISC-V 64", "[disassembler][riscv64]") {
 
 TEST_CASE("Linear sweep and recursive traversal agree on straight-line code",
           "[disassembler][strategy]") {
-  // nop; nop; ret — no branches, no dead code
+  // nop; nop; ret - no branches, no dead code
   const std::vector<std::uint8_t> bytes = {0x90, 0x90, 0xC3};
 
   auto linear    = makeDisassembler(dragon::Architecture::X86_64,
@@ -525,7 +527,7 @@ TEST_CASE("Recursive traversal skips dead code after ret",
 
 TEST_CASE("Recursive traversal skips dead code after indirect jump",
           "[disassembler][strategy]") {
-  // FF E0 = jmp rax (indirect, no known target — terminates the trace)
+  // FF E0 = jmp rax (indirect, no known target - terminates the trace)
   // 90    = nop (unreachable from 0x1000)
   const std::vector<std::uint8_t> bytes = {0xFF, 0xE0, 0x90};
 
@@ -549,11 +551,11 @@ TEST_CASE("Recursive traversal skips dead code after indirect jump",
 
 TEST_CASE("Recursive traversal follows direct branch targets",
           "[disassembler][strategy]") {
-  // je 0x1007 (74 05) — conditional branch to 0x1007
-  // nop (90)          — fall-through at 0x1002
-  // ret (C3)          — fall-through terminates at 0x1003
+  // je 0x1007 (74 05) - conditional branch to 0x1007
+  // nop (90)          - fall-through at 0x1002
+  // ret (C3)          - fall-through terminates at 0x1003
   //   [gap: 0x1004–0x1006 not in buffer, branch target is relative]
-  // nop (90) at 0x1007 — reachable via je
+  // nop (90) at 0x1007 - reachable via je
   // ret (C3) at 0x1008
   //
   // Buffer starts at 0x1000:
@@ -590,7 +592,7 @@ TEST_CASE("Recursive traversal follows direct branch targets",
   REQUIRE(found1007);
 }
 
-TEST_CASE("Recursive traversal — AT&T syntax produces same instruction count",
+TEST_CASE("Recursive traversal - AT&T syntax produces same instruction count",
           "[disassembler][strategy][syntax]") {
   const std::vector<std::uint8_t> bytes = {0x90, 0xC3};
 
