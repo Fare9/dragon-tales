@@ -419,3 +419,207 @@ define void @sub_<addr>(ptr %mem, ptr %regs)
 After `runMem2Reg()` the alloca-based register representation is promoted to
 SSA values. The `%regs` boundary loads/stores are the only register memory
 traffic that remains.
+
+---
+
+## Z3 integration
+
+Available when the library is built with `-DDRAGON_USE_Z3=ON`. The macro
+`DRAGON_WITH_Z3` is defined in that case.
+
+### SliceExprZ3 — lowering to Z3
+
+`SliceExprZ3` translates a `SliceExpr` tree into a Z3 bitvector expression.
+`SymReg` nodes become free bitvector constants; `Load` nodes become
+unconstrained symbols keyed by their address expression. Reusing the same
+`SliceExprZ3` instance across multiple `lower()` calls within one solver
+session shares symbols, so constraints written against one call remain
+consistent with the next.
+
+```cpp
+#ifdef DRAGON_WITH_Z3
+#include <dragon/analysis/SliceExprZ3.hpp>
+
+z3::context ctx;
+dragon::slice::SliceExprZ3 lowerer{ctx};
+
+z3::expr formula = lowerer.lower(expr);
+std::cout << formula << "\n";   // (bvadd rax #x0000000000000004)
+
+// Clear the symbol cache between independent solver sessions.
+lowerer.reset();
+#endif
+```
+
+### ValueEnumerator — enumerating satisfying values
+
+`enumeratedValues` asks Z3 for all distinct 64-bit concrete values the
+expression can take, adding a blocking clause after each model. `solveUnique`
+is a convenience wrapper that returns a value only when exactly one model
+exists.
+
+```cpp
+#ifdef DRAGON_WITH_Z3
+#include <dragon/analysis/ValueEnumerator.hpp>
+
+z3::context ctx;
+
+// Enumerate all values (up to 256 by default)
+auto values = dragon::slice::enumeratedValues(expr, ctx);
+for (uint64_t v : values)
+    std::cout << std::hex << v << "\n";
+
+// Limit the search and add extra constraints
+z3::expr rax = ctx.bv_const("RAX", 64);
+dragon::slice::EnumeratorConfig cfg{16};   // stop after 16 results
+auto bounded = dragon::slice::enumeratedValues(
+    expr, ctx,
+    {z3::ult(rax, ctx.bv_val(static_cast<uint64_t>(8), 64u))},
+    cfg);
+
+// Solve for a unique concrete value
+auto unique = dragon::slice::solveUnique(expr, ctx);
+if (unique)
+    std::cout << "unique target: 0x" << std::hex << *unique << "\n";
+else
+    std::cout << "not uniquely determined\n";
+#endif
+```
+
+**API summary**
+
+| Symbol | Description |
+|---|---|
+| `SliceExprZ3(ctx)` | Construct with a Z3 context |
+| `lower(expr)` → `z3::expr` | Lower a SliceExpr tree to a bitvector formula |
+| `reset()` | Clear the symbol cache between solver sessions |
+| `enumeratedValues(expr, ctx, constraints, cfg)` → `vector<uint64_t>` | Enumerate all satisfying 64-bit values |
+| `solveUnique(expr, ctx, constraints)` → `optional<uint64_t>` | Return value only when exactly one model exists |
+| `EnumeratorConfig::maxValues` | Maximum solutions to collect (default 256) |
+| `EnumeratorConfig::sorted` | Sort results ascending (default true) |
+
+---
+
+## SliceExprMatch
+
+`SliceExprMatch.hpp` provides LLVM PatternMatch.h-style composable structural
+matchers for `SliceExpr` trees. Matchers capture values as a side effect only
+on a **full** match — a partial match that ultimately fails leaves all
+captured variables untouched.
+
+```cpp
+#include <dragon/analysis/SliceExprMatch.hpp>
+
+using namespace dragon::slice::match;
+
+uint64_t base, scale;
+dragon::ignil::Reg idx;
+
+// Recognise LOAD( ADD(Const{base}, MUL(SymReg{idx}, Const{scale})) )
+// in any operand order (commutative ADD and MUL)
+if (match(expr,
+          m_Load(m_AddAnyOrder(m_Const(base),
+                               m_MulAnyOrder(m_SymReg(idx),
+                                             m_Const(scale)))))) {
+    // base, idx, scale are now bound
+}
+```
+
+### Leaf matchers
+
+| Matcher | Captures | Matches |
+|---|---|---|
+| `m_Any()` | — | Any node |
+| `m_Const()` | — | Any `Const` node |
+| `m_Const(value)` | `uint64_t&` | Any `Const`; binds value |
+| `m_Const(value, width)` | `uint64_t&`, `Width&` | Any `Const`; binds both fields |
+| `m_SymReg()` | — | Any `SymReg` node |
+| `m_SymReg(reg)` | `ignil::Reg&` | Any `SymReg`; binds the register descriptor |
+
+### Structural matchers
+
+| Matcher | Matches |
+|---|---|
+| `m_Load(addr_matcher)` | `Load` node whose address matches `addr_matcher` |
+| `m_Load(addr_matcher, width)` | Same; also captures the load width |
+| `m_BinOp(opcode, lm, rm)` | `BinOp` with exact opcode; left/right matched by `lm`/`rm` |
+| `m_Add(lm, rm)` | `ADD` — left then right, strict order |
+| `m_Sub(lm, rm)` | `SUB` |
+| `m_Mul(lm, rm)` | `MUL` — strict order |
+| `m_And(lm, rm)` | `AND` |
+| `m_Or(lm, rm)` | `OR` |
+| `m_Shl(lm, rm)` | `SHL` |
+| `m_UnaryOp(opcode, om)` | `UnaryOp` with exact opcode |
+| `m_ZExt(om)` | `ZEXT` |
+| `m_SExt(om)` | `SEXT` |
+| `m_Trunc(om)` | `TRUNC` |
+| `m_Neg(om)` | `NEG` |
+| `m_Not(om)` | `NOT` |
+
+### Commutative combinators
+
+`BinOp` matchers are **not** commutative by default. Use `m_AnyOrder` to try
+both operand orderings before failing:
+
+| Matcher | Equivalent to |
+|---|---|
+| `m_AnyOrder(opcode, lm, rm)` | Try `(lm, rm)` then `(rm, lm)` |
+| `m_AddAnyOrder(lm, rm)` | Commutative `ADD` |
+| `m_MulAnyOrder(lm, rm)` | Commutative `MUL` |
+
+---
+
+## SwitchDetector
+
+`SwitchDetector.hpp` identifies jump-table indirect branches from a
+backward-sliced expression and reads the table entries from the binary image.
+
+Recognition is two-phase:
+
+1. **Pattern match** — check whether the slice expression has the form
+   `LOAD( ADD(Const{base}, MUL(SymReg{idx}, Const{scale})) )` with
+   `scale` equal to 4 or 8. Both ADD and MUL are matched commutatively.
+2. **Bounds extraction** — walk the predecessor blocks of the switch block
+   looking for a unique CJMP whose sliced condition is a comparison of the
+   index register against a constant (`UGE`, `UGT`, or `NOT(ULT)`). The case
+   count is stored in `SwitchCandidate::numCases`.
+
+```cpp
+#include <dragon/analysis/SwitchDetector.hpp>
+
+// graph must come from Disassembler::analyze()
+dragon::BackwardSlicer slicer{5};
+dragon::slice::Expr jumpTarget =
+    slicer.slice(ignil::Value{reg}, blockAddr, graph);
+
+auto sw = dragon::slice::detectPossibleSwitch(jumpTarget, blockAddr, graph);
+
+if (sw) {
+    std::cout << "table @ 0x" << std::hex << sw->tableBase
+              << "  entrySize=" << sw->entrySize
+              << "  cases=" << sw->numCases << "\n";
+
+    if (sw->numCases > 0) {
+        // Read the actual target addresses from the binary image
+        auto targets = dragon::slice::readTableTargets(*sw, bytes, baseAddr);
+        for (uint64_t t : targets)
+            std::cout << "  case -> 0x" << std::hex << t << "\n";
+    }
+}
+```
+
+**`SwitchCandidate` fields**
+
+| Field | Type | Description |
+|---|---|---|
+| `tableBase` | `uint64_t` | Base address of the jump table in the binary image |
+| `entrySize` | `uint32_t` | Bytes per entry: 4 (32-bit) or 8 (64-bit) |
+| `numCases` | `uint32_t` | Number of table entries; 0 when bounds were not found |
+| `indexReg` | `ignil::Reg` | Register used as the table index |
+
+**API summary**
+
+| Function | Description |
+|---|---|
+| `detectPossibleSwitch(expr, blockAddr, graph)` → `optional<SwitchCandidate>` | Returns nullopt when the expression does not match the jump-table pattern |
+| `readTableTargets(sw, bytes, baseAddr)` → `vector<uint64_t>` | Reads `numCases` entries from the byte buffer; returns empty when out of range or `numCases == 0` |

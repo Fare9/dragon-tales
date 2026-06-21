@@ -352,7 +352,18 @@ with dragon.BackwardSlicer() as slicer:
 | `load_addr()` | owned `SliceExpr` | LOAD |
 | `load_width` | `int` | LOAD |
 
----
+### Z3 string representation
+
+Available when dragon was built with `-DDRAGON_USE_Z3=ON`.
+Raises `RuntimeError` if Z3 support is not present.
+
+```python
+z3_str = expr.to_z3_string()
+print(z3_str)   # (bvadd rax #x0000000000000004)
+```
+
+The returned string is the Z3 bitvector expression in SMT-LIB2 format —
+identical to what you would get from lowering with `SliceExprZ3` in C++.
 
 ---
 
