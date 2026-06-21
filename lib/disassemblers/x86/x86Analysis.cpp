@@ -4,6 +4,7 @@
 // Public headers
 #include <dragon/analysis/BackwardSlicer.hpp>
 #include <dragon/analysis/SliceExpr.hpp>
+#include <dragon/analysis/SwitchDetector.hpp>
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/disassembler/Instruction.hpp>
@@ -33,135 +34,40 @@ dragon::x86::X86Analysis::X86Analysis(Architecture architecture,
 
 dragon::x86::X86Analysis::~X86Analysis() = default;
 
+// =============================================================================
+// Public entry point
+// =============================================================================
+
 bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
                                        std::uint64_t baseAddr,
                                        Graph &graph) const {
-  std::unordered_set<std::uint64_t> basicBlockStarts;
-  std::unordered_set<std::uint64_t> functionStarts;
+  std::unordered_set<std::uint64_t> blockStarts;
+  std::unordered_set<std::uint64_t> fnStarts;
 
   std::vector<Instruction> instructions =
           disassembler_.disassemble(bytes, baseAddr);
 
-  discoverBlockStarts(instructions, basicBlockStarts);
-
-  discoverFunctionStarts(instructions, basicBlockStarts, functionStarts);
+  discoverBlockStarts(instructions, blockStarts);
+  discoverFunctionStarts(instructions, blockStarts, fnStarts);
 
   for (auto &insn: instructions)
     graph.addInstruction(std::move(insn));
 
-  for (std::uint64_t addr: basicBlockStarts)
-    graph.addBlock(addr);
-
-  for (std::uint64_t addr: functionStarts)
-    graph.addFunction(addr);
-
-  // Fixpoint loop
-  // Each iteration:
-  //   1. Commit pending block/function starts to the graph
-  //   2. Lift IGNIL for any block that doesn't have it yet
-  //   3. Resolve indirect JMPs via backward slicing
-  //      ---> if a resolved target is new, add it and loop again
   bool changed = true;
   while (changed) {
     changed = false;
-
-    for (std::uint64_t addr: basicBlockStarts)
-      graph.addBlock(addr);
-    for (std::uint64_t addr: functionStarts)
-      graph.addFunction(addr);
-
-    for (BasicBlock &block: graph.blocks()) {
-      if (graph.getIGNILBlock(block.startAddress()))
-        continue;
-      auto ib = x86IgnilLifter_->liftBlock(block, graph);
-      logger_.log("Lifted block @ 0x{:x} -> {} IGNIL ops", block.startAddress(),
-                  ib.size());
-      graph.addIGNILBlock(std::move(ib));
-    }
-
-    // Go over the ignil blocks, here we will do the analyses
-    for (const auto &block: graph.blocks()) {
-      const auto *ignilBlock = graph.getIGNILBlock(block.startAddress());
-      if (!ignilBlock || ignilBlock->ops().empty())
-        continue;
-
-      // We are looking for jump instructions
-      // pointed with a register, we try to
-      // resolve it to a constant
-      const auto &last = ignilBlock->ops().back();
-      // JMP REG, the jumps to memory will be generated
-      // as a jump to a register
-      if (last.opcode != ignil::Opcode::JMP || last.srcs.empty() ||
-          !std::holds_alternative<ignil::Reg>(last.srcs[0]))
-        continue;
-
-      // Backward slicing algorithm, it will just go back in the basic blocks
-      // looking for the instruction generating the value
-      const auto &reg = std::get<ignil::Reg>(last.srcs[0]);
-
-      // Need from backward slicing, maximum of 5 blocks behind for the analysis
-      BackwardSlicer slicer{5};
-      slice::Expr result = slicer.slice(ignil::Value{reg},
-                                        ignilBlock->startAddress(), graph);
-
-      // Collect candidate jump targets.
-      // Fast path: slicer resolved the register to a single constant.
-      std::vector<std::uint64_t> targets;
-      if (const auto *c = std::get_if<slice::Const>(&result.data)) {
-        targets.push_back(c->value);
-      }
-#ifdef DRAGON_WITH_Z3
-      // Slow path: ask Z3 to enumerate all satisfying values.
-      else if (configuration_.useZ3ForPathDiscovery) {
-        z3::context ctx;
-        // we use the utility enumeratedValues, just provide with the expression
-        // result, and the z3 context
-        targets = slice::enumeratedValues(result, ctx);
-        logger_.log("Z3 enumerated {} candidate target(s) for indirect jump @ "
-                    "0x{:x}",
-                    targets.size(), block.startAddress());
-      }
-#endif
-
-      if (targets.empty())
-        continue;
-
-      for (std::uint64_t target: targets) {
-        if (target < baseAddr || target >= baseAddr + bytes.size()) {
-          logger_.log("Resolved target 0x{:x} is out of range, skipping",
-                      target);
-          continue;
-        }
-
-        logger_.log("Resolved indirect jump @ 0x{:x} -> 0x{:x}",
-                    block.startAddress(), target);
-
-        if (basicBlockStarts.insert(target).second)
-          changed = true;
-
-        // If instructions at the target are not yet in the graph, disassemble
-        // the block starting there and integrate the results so the next
-        // iteration can lift and analyze it.
-        if (!graph.get(target)) {
-          auto newInstrs =
-                  disassembler_.disassembleBlock(bytes, baseAddr, target);
-          if (!newInstrs.empty()) {
-            discoverBlockStarts(newInstrs, basicBlockStarts);
-            discoverFunctionStarts(newInstrs, basicBlockStarts, functionStarts);
-            for (auto &insn: newInstrs) {
-              if (!graph.get(insn.address()))
-                graph.addInstruction(std::move(insn));
-            }
-            changed = true;
-          }
-        }
-      }
-    }
+    commitPending(graph, blockStarts, fnStarts);
+    liftPendingBlocks(graph);
+    if (resolveIndirectJumps(graph, bytes, baseAddr, blockStarts, fnStarts))
+      changed = true;
   }
 
   return true;
 }
 
+// =============================================================================
+// CFG seed discovery
+// =============================================================================
 
 void dragon::x86::X86Analysis::discoverBlockStarts(
         std::vector<Instruction> &instructions,
@@ -172,10 +78,7 @@ void dragon::x86::X86Analysis::discoverBlockStarts(
   basicBlockStarts.insert(instructions[0].address());
 
   for (const auto &I: instructions) {
-
     if (I.hasIndirectTarget()) {
-      // For the moment, not possible to retrieve an indirect target
-      // we'll have to think about a way to do it
       logger_.log("Instruction {} at address 0x{:x} has an indirect target.",
                   I.disassembly(), I.address());
     }
@@ -192,12 +95,10 @@ void dragon::x86::X86Analysis::discoverBlockStarts(
       }
     }
   }
-  // Set some information about the instructions
+
   for (auto &I: instructions) {
-    // For those instructions that we found,
-    if (basicBlockStarts.contains(I.address())) {
+    if (basicBlockStarts.contains(I.address()))
       I.setBlockStart(true);
-    }
   }
 }
 
@@ -205,7 +106,6 @@ void dragon::x86::X86Analysis::discoverFunctionStarts(
         std::vector<Instruction> &instructions,
         std::unordered_set<std::uint64_t> &basicBlockStarts,
         std::unordered_set<std::uint64_t> &functionStarts) const {
-
   for (auto &I: instructions) {
     if (I.isCall()) {
       for (auto callee: I.callees()) {
@@ -229,4 +129,137 @@ void dragon::x86::X86Analysis::discoverFunctionStarts(
                   addr);
     }
   }
+}
+
+// =============================================================================
+// Fixpoint helpers
+// =============================================================================
+
+void dragon::x86::X86Analysis::commitPending(
+        Graph &graph, const std::unordered_set<std::uint64_t> &blockStarts,
+        const std::unordered_set<std::uint64_t> &fnStarts) const {
+  for (std::uint64_t addr: blockStarts)
+    graph.addBlock(addr);
+  for (std::uint64_t addr: fnStarts)
+    graph.addFunction(addr);
+}
+
+void dragon::x86::X86Analysis::liftPendingBlocks(Graph &graph) const {
+  for (BasicBlock &block: graph.blocks()) {
+    if (graph.getIGNILBlock(block.startAddress()))
+      continue;
+    auto ib = x86IgnilLifter_->liftBlock(block, graph);
+    logger_.log("Lifted block @ 0x{:x} -> {} IGNIL ops", block.startAddress(),
+                ib.size());
+    graph.addIGNILBlock(std::move(ib));
+  }
+}
+
+std::vector<std::uint64_t>
+dragon::x86::X86Analysis::collectTargets(const slice::Expr &result,
+                                         std::uint64_t blockAddr) const {
+  if (const auto *c = std::get_if<slice::Const>(&result.data))
+    return {c->value};
+
+#ifdef DRAGON_WITH_Z3
+  if (configuration_.useZ3ForPathDiscovery) {
+    z3::context ctx;
+    auto targets = slice::enumeratedValues(result, ctx);
+    logger_.log(
+            "Z3 enumerated {} candidate target(s) for indirect jump @ 0x{:x}",
+            targets.size(), blockAddr);
+    return targets;
+  }
+#else
+  // just to avoid warnings
+  (void) blockAddr;
+#endif
+
+  return {};
+}
+
+bool dragon::x86::X86Analysis::integrateNewBlock(
+        std::uint64_t target, std::span<const std::uint8_t> bytes,
+        std::uint64_t baseAddr, Graph &graph,
+        std::unordered_set<std::uint64_t> &blockStarts,
+        std::unordered_set<std::uint64_t> &fnStarts) const {
+  if (graph.get(target))
+    return false;
+
+  // Try to retrieve new blocks with the disassembler
+  auto newInstrs = disassembler_.disassembleBlock(bytes, baseAddr, target);
+  if (newInstrs.empty())
+    return false;
+
+  // This will lead to new blocks, but could be that it takes to new
+  // functions start too.
+  discoverBlockStarts(newInstrs, blockStarts);
+  discoverFunctionStarts(newInstrs, blockStarts, fnStarts);
+  // finally add instructions to the graph
+  for (auto &insn: newInstrs) {
+    if (!graph.get(insn.address()))
+      graph.addInstruction(std::move(insn));
+  }
+  return true;
+}
+
+bool dragon::x86::X86Analysis::resolveIndirectJumps(
+        Graph &graph, std::span<const std::uint8_t> bytes,
+        std::uint64_t baseAddr, std::unordered_set<std::uint64_t> &blockStarts,
+        std::unordered_set<std::uint64_t> &fnStarts) const {
+
+  bool changed = false;
+
+  for (const auto &block: graph.blocks()) {
+    const auto *ignilBlock = graph.getIGNILBlock(block.startAddress());
+    if (!ignilBlock || ignilBlock->ops().empty())
+      continue;
+
+    const auto &last = ignilBlock->ops().back();
+    if (last.opcode != ignil::Opcode::JMP || last.srcs.empty() ||
+        !std::holds_alternative<ignil::Reg>(last.srcs[0]))
+      continue;
+
+    const auto &reg = std::get<ignil::Reg>(last.srcs[0]);
+    BackwardSlicer slicer{5};
+    slice::Expr result =
+            slicer.slice(ignil::Value{reg}, ignilBlock->startAddress(), graph);
+
+    std::vector<std::uint64_t> targets;
+    if (auto sw = slice::detectPossibleSwitch(result, block.startAddress(),
+                                              graph)) {
+      if (sw->numCases > 0) {
+        logger_.log("Switch at 0x{:x}: table=0x{:x} entries={} entrySize={}",
+                    block.startAddress(), sw->tableBase, sw->numCases,
+                    sw->entrySize);
+        targets = slice::readTableTargets(*sw, bytes, baseAddr);
+      } else {
+        logger_.log(
+                "Switch at 0x{:x}: table=0x{:x} (bounds unknown, falling back)",
+                block.startAddress(), sw->tableBase);
+        targets = collectTargets(result, block.startAddress());
+      }
+    } else {
+      targets = collectTargets(result, block.startAddress());
+    }
+
+    for (std::uint64_t target: targets) {
+      if (target < baseAddr || target >= baseAddr + bytes.size()) {
+        logger_.log("Resolved target 0x{:x} is out of range, skipping", target);
+        continue;
+      }
+
+      logger_.log("Resolved indirect jump @ 0x{:x} -> 0x{:x}",
+                  block.startAddress(), target);
+
+      if (blockStarts.insert(target).second)
+        changed = true;
+
+      if (integrateNewBlock(target, bytes, baseAddr, graph, blockStarts,
+                            fnStarts))
+        changed = true;
+    }
+  }
+
+  return changed;
 }

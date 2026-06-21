@@ -2,6 +2,7 @@ target_sources(libdragon
         PRIVATE
         SliceExpr.cpp
         BackwardSlicer.cpp
+        SwitchDetector.cpp
 )
 
 if(DRAGON_USE_Z3)

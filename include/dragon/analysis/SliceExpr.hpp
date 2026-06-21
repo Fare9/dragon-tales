@@ -57,7 +57,7 @@ struct Undef {
 /// Use the Z3 lowerer to turn it into a solver formula.
 struct Expr {
   using Var = std::variant<Const, SymReg, BinOp, UnaryOp, Load, Undef>;
-  Var data;
+  Var data; ///< Data represents any of the possible expressions with ignil
 
   template<typename T>
   explicit Expr(T &&v) : data(std::forward<T>(v)) {}

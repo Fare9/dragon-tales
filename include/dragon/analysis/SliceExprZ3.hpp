@@ -22,18 +22,18 @@ namespace dragon::slice {
 /// Call reset() between independent solver queries to clear the cache.
 class SliceExprZ3 {
   public:
-  explicit SliceExprZ3(z3::context& ctx);
+  explicit SliceExprZ3(z3::context &ctx);
 
   /// Lower a SliceExpr into a Z3 bitvector expression.
   /// The width of the returned expression matches the width of the root node.
-  [[nodiscard]] z3::expr lower(const Expr& e) const;
+  [[nodiscard]] z3::expr lower(const Expr &e) const;
 
   /// Clear the symbol cache between independent queries.
   void reset() const;
 
   private:
   /// Return the cached Z3 symbol for a SymReg (creates it on first call).
-  [[nodiscard]] z3::expr symFor(const SymReg& r) const;
+  [[nodiscard]] z3::expr symFor(const SymReg &r) const;
 
   z3::context &ctx_;
   mutable std::unordered_map<std::string, z3::expr> symCache_;

@@ -5,6 +5,7 @@ add_executable(dragon_tests
         disassemblers/TestX86IGNILLifter.cpp
         assemblers/TestAssembler.cpp
         analysis/TestBackwardSlicer.cpp
+        analysis/TestSwitchDetector.cpp
 )
 
 if(DRAGON_USE_Z3)

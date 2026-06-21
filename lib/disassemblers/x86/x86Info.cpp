@@ -2,8 +2,10 @@
 
 #include <llvm/MC/MCInst.h>
 #include <llvm/MC/MCInstrDesc.h>
+#include <llvm/MC/MCRegisterInfo.h>
 
 #include "InstructionImpl.hpp"
+
 
 dragon::X86Info::X86Info(Architecture architecture,
                          const llvm::MCInstrInfo &instrInfo,

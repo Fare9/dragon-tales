@@ -278,6 +278,13 @@
   // Caller must free the returned string with dragon_cstr_free.
   char* dragon_slice_expr_to_string(const dragon_slice_expr_t* e);
 
+  // Lower a SliceExpr through Z3 and return the Z3 bitvector expression as a
+  // string. Only available when the library is built with -DDRAGON_USE_Z3=ON.
+  // Caller must free with dragon_cstr_free.
+#ifdef DRAGON_WITH_Z3
+  char* dragon_slice_expr_to_z3_string(const dragon_slice_expr_t* e);
+#endif
+
   // DRAGON_SLICE_CONST
   uint64_t dragon_slice_expr_const_value(const dragon_slice_expr_t* e);
   uint8_t  dragon_slice_expr_const_width(const dragon_slice_expr_t* e);

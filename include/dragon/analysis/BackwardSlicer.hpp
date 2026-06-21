@@ -1,7 +1,7 @@
 #pragma once
 
-#include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/analysis/SliceExpr.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
 
 #include <cstdint>
 #include <unordered_map>
@@ -41,16 +41,19 @@ class BackwardSlicer {
 
   // Resolve `v` starting the backward scan at `beforeIdx` (exclusive) inside
   // `block`.  Crosses into predecessor blocks when `depth` > 0.
-  [[nodiscard]] slice::Expr sliceValue(const ignil::Value &v, const ignil::Block &block,
-                         int beforeIdx, const Graph &graph,
-                         const PredMap &preds, int depth) const;
+  [[nodiscard]] slice::Expr sliceValue(const ignil::Value &v,
+                                       const ignil::Block &block, int beforeIdx,
+                                       const Graph &graph, const PredMap &preds,
+                                       int depth) const;
 
   // Turn the op that defines a value into a SliceExpr by recursively slicing
   // each source operand.
-  [[nodiscard]] slice::Expr buildFromOp(const ignil::Op &op, const ignil::Block &block,
-                          int opIdx, const Graph &graph, const PredMap &preds,
-                          int depth) const;
-
+  [[nodiscard]] slice::Expr buildFromOp(const ignil::Op &op,
+                                        const ignil::Block &block, int opIdx,
+                                        const Graph &graph,
+                                        const PredMap &preds, int depth) const;
+  // To keep the maximum number to go backward
+  // this is selected by user with the configuration.
   int maxBlocks_;
 };
 

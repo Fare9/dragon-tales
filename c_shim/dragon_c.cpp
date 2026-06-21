@@ -1,6 +1,9 @@
 #include "dragon_c.h"
 
 #include <dragon/Architecture.hpp>
+#ifdef DRAGON_WITH_Z3
+#include <dragon/analysis/SliceExprZ3.hpp>
+#endif
 #include <dragon/assembler/Assembler.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 #include <dragon/analysis/BackwardSlicer.hpp>
@@ -594,6 +597,16 @@ uint8_t dragon_slice_expr_load_width(const dragon_slice_expr_t *e) {
   const auto *l = std::get_if<dragon::slice::Load>(&e->expr->data);
   return l ? l->width : 0;
 }
+
+#ifdef DRAGON_WITH_Z3
+char *dragon_slice_expr_to_z3_string(const dragon_slice_expr_t *e) {
+  if (!e)
+    return dup_string("undef");
+  z3::context ctx;
+  dragon::slice::SliceExprZ3 lowerer{ctx};
+  return dup_string(lowerer.lower(*e->expr).to_string());
+}
+#endif
 
 // =============================================================================
 // BackwardSlicer

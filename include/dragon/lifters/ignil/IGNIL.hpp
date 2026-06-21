@@ -154,8 +154,8 @@ class Block {
   [[nodiscard]] size_t size() const;
 
   // Used for iteration
-  std::vector<Op>::const_iterator begin() const;
-  std::vector<Op>::const_iterator end() const;
+  [[nodiscard]] std::vector<Op>::const_iterator begin() const;
+  [[nodiscard]] std::vector<Op>::const_iterator end() const;
 
   private:
   std::uint64_t startAddress_;

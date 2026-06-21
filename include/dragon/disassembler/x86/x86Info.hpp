@@ -6,7 +6,7 @@
 #include <unordered_set>
 
 #include <llvm/MC/MCInstrInfo.h>
-#include <llvm/MC/MCRegisterInfo.h>
+
 
 namespace dragon {
 
@@ -88,7 +88,7 @@ class X86Info {
 
   // Opcode sets for variable-count instruction families
   std::unordered_set<unsigned> trapOpcodes_; // int3, ud2, ud1, ...
-  std::unordered_set<unsigned> nopOpcodes_; // nop, multi-byte nops, fnop
+  std::unordered_set<unsigned> nopOpcodes_; // nop, multibyte nops, fnop
   std::unordered_set<unsigned> iretOpcodes_; // iret, iretd, iretq
 
   // Cached register integers

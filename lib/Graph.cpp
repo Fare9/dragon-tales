@@ -122,7 +122,7 @@ std::vector<dragon::Instruction *> dragon::Graph::instructions() {
   return result;
 }
 
-std::vector<dragon::BasicBlock> dragon::Graph::blocks() {
+std::vector<dragon::BasicBlock> dragon::Graph::blocks() const {
   std::vector<BasicBlock> result;
   for (std::uint64_t addr: blocks_q.valid()) {
     if (BasicBlock bb{this, addr}; bb.isValid())
