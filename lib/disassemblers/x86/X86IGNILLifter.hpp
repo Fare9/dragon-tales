@@ -2,8 +2,11 @@
 
 #include <dragon/Architecture.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
+
 #include <llvm/MC/MCInstrInfo.h>
 #include <llvm/MC/MCRegisterInfo.h>
+
+#include "utils/Logger.hpp"
 
 #include <functional>
 #include <map>
@@ -34,7 +37,7 @@ using FlagSetter = std::function<void(ignil::Block &, std::uint32_t &)>;
 /// Not all the instruction set is supported.
 class X86IGNILLifter {
   public:
-  X86IGNILLifter(Architecture architecture, const llvm::MCInstrInfo &instrInfo,
+  X86IGNILLifter(internal::Logger& logger, Architecture architecture, const llvm::MCInstrInfo &instrInfo,
                  const llvm::MCRegisterInfo &regInfo);
 
   /// Lift a complete basic block into an ignil::Block.
@@ -42,6 +45,8 @@ class X86IGNILLifter {
                                        const Graph &graph) const;
 
   private:
+  internal::Logger& logger_;
+
   Architecture architecture_;
   const llvm::MCInstrInfo *instrInfo_; // used for MCInstrDesc flag checks
 

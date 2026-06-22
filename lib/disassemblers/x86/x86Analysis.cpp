@@ -26,10 +26,10 @@ dragon::x86::X86Analysis::X86Analysis(Architecture architecture,
     configuration_(configuration), instrInfo_(instrInfo), regInfo_(regInfo) {
   static const X86Info x86Info32{Architecture::X86_32, instrInfo, regInfo};
   static const X86Info x86Info64{Architecture::X86_64, instrInfo, regInfo};
-  x86IgnilLifter_ =
-          std::make_unique<X86IGNILLifter>(architecture, instrInfo, regInfo);
-  x86Info_ = (architecture == Architecture::X86_32) ? &x86Info32 : &x86Info64;
   logger_ = internal::Logger{configuration_.logging};
+  x86IgnilLifter_ = std::make_unique<X86IGNILLifter>(logger_, architecture,
+                                                     instrInfo, regInfo);
+  x86Info_ = (architecture == Architecture::X86_32) ? &x86Info32 : &x86Info64;
 }
 
 dragon::x86::X86Analysis::~X86Analysis() = default;
@@ -116,9 +116,13 @@ void dragon::x86::X86Analysis::discoverFunctionStarts(
     }
   }
 
-  for (size_t i = 0, e = instructions.size(); i + 1 < e; ++i) {
-    const Instruction *window[2] = {&instructions[i], &instructions[i + 1]};
-    if (x86Info_->isCommonFunctionPrologue({window, 2})) {
+  for (size_t i = 0, e = instructions.size(); i < e; ++i) {
+    const size_t windowSize = std::min(e - i, size_t{3});
+    const Instruction *window[3] = {};
+    for (size_t j = 0; j < windowSize; ++j)
+      window[j] = &instructions[i + j];
+    if (size_t matched =
+                x86Info_->isCommonFunctionPrologue({window, windowSize})) {
       std::uint64_t addr = instructions[i].address();
       functionStarts.insert(addr);
       basicBlockStarts.insert(addr);
@@ -127,6 +131,7 @@ void dragon::x86::X86Analysis::discoverFunctionStarts(
       instructions[i].setPrologue(true);
       logger_.log("Discovered function start via prologue at address 0x{:x}",
                   addr);
+      i += matched - 1;
     }
   }
 }

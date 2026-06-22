@@ -28,15 +28,14 @@ class X86Info {
                    const llvm::MCInstrInfo &instrInfo,
                    const llvm::MCRegisterInfo &regInfo);
 
-  /// Returns true if the instruction sequence matches a common x86 function
-  /// prologue for the architecture this object was constructed with.
+  /// Returns the number of instructions consumed if the sequence matches a
+  /// common x86 function prologue, or 0 if no match.
   ///
-  /// At least two instructions must be provided. Returns false if insns is
-  /// shorter than the minimum required window.
-  ///
-  /// x86_64: push rbp followed by mov rbp, rsp
-  /// x86_32: push ebp followed by mov ebp, esp
-  [[nodiscard]] bool
+  /// x86_64: endbr64                            -> 1 (CET landing pad alone)
+  ///         push rbp / mov rbp, rsp            -> 2
+  ///         endbr64 / push rbp / mov rbp, rsp  -> 3 (CET + full frame setup)
+  /// x86_32: push ebp / mov ebp, esp            -> 2
+  [[nodiscard]] size_t
   isCommonFunctionPrologue(std::span<const Instruction *> insns) const;
 
   /// Returns true if the instruction sequence matches a common x86 function
@@ -67,11 +66,11 @@ class X86Info {
   [[nodiscard]] bool isHalt(const Instruction &insn) const;
 
   private:
-  [[nodiscard]] bool
+  [[nodiscard]] size_t
   x8664bitIsCommonPrologue(std::span<const Instruction *> insns) const;
   [[nodiscard]] bool
   x8664bitIsCommonEpilogue(std::span<const Instruction *> insns) const;
-  [[nodiscard]] bool
+  [[nodiscard]] size_t
   x8632bitIsCommonPrologue(std::span<const Instruction *> insns) const;
   [[nodiscard]] bool
   x8632bitIsCommonEpilogue(std::span<const Instruction *> insns) const;
@@ -85,6 +84,7 @@ class X86Info {
   unsigned opLeave64_{}, opLeave_{};
   unsigned opRet64_{}, opRetL_{};
   unsigned opHlt_{};
+  unsigned opEndbr64_{};
 
   // Opcode sets for variable-count instruction families
   std::unordered_set<unsigned> trapOpcodes_; // int3, ud2, ud1, ...

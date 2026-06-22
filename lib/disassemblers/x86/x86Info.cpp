@@ -42,6 +42,8 @@ dragon::X86Info::X86Info(Architecture architecture,
       opRetL_ = i;
     else if (name == "HLT")
       opHlt_ = i;
+    else if (name == "ENDBR64")
+      opEndbr64_ = i;
     else if (name.starts_with("NOOP") || name == "FNOP")
       nopOpcodes_.insert(i);
     else if (name.starts_with("IRET"))
@@ -61,13 +63,13 @@ dragon::X86Info::X86Info(Architecture architecture,
   }
 }
 
-bool dragon::X86Info::isCommonFunctionPrologue(
+size_t dragon::X86Info::isCommonFunctionPrologue(
         const std::span<const Instruction *> insns) const {
   if (architecture_ == Architecture::X86_32)
     return x8632bitIsCommonPrologue(insns);
   if (architecture_ == Architecture::X86_64)
     return x8664bitIsCommonPrologue(insns);
-  return false;
+  return 0;
 }
 
 bool dragon::X86Info::isCommonFunctionEpilogue(
@@ -79,29 +81,36 @@ bool dragon::X86Info::isCommonFunctionEpilogue(
   return false;
 }
 
-bool dragon::X86Info::x8664bitIsCommonPrologue(
+size_t dragon::X86Info::x8664bitIsCommonPrologue(
         const std::span<const Instruction *> insns) const {
-  if (insns.size() < 2)
-    return false;
-  const auto *i0 = insns[0]->mcInst();
-  const auto *i1 = insns[1]->mcInst();
-  if (!i0 || !i1)
-    return false;
-  // push rbp
-  if (i0->getOpcode() != opPush64r_)
-    return false;
-  if (i0->getNumOperands() < 1 || i0->getOperand(0).getReg() != regRBP_)
-    return false;
-  // mov rbp, rsp
-  if (i1->getOpcode() != opMov64rr_)
-    return false;
-  if (i1->getNumOperands() < 2)
-    return false;
-  if (i1->getOperand(0).getReg() != regRBP_)
-    return false;
-  if (i1->getOperand(1).getReg() != regRSP_)
-    return false;
-  return true;
+  if (insns.empty())
+    return 0;
+
+  size_t offset = 0;
+
+  // endbr64 alone is already a valid CET landing pad / function entry.
+  // If followed by push rbp / mov rbp, rsp the full frame setup is consumed.
+  if (const auto *mc0 = insns[0]->mcInst();
+      mc0 && mc0->getOpcode() == opEndbr64_) {
+    offset = 1;
+  }
+
+  // Try to match push rbp / mov rbp, rsp starting at offset.
+  if (insns.size() >= offset + 2) {
+    const auto *push = insns[offset]->mcInst();
+    const auto *mov = insns[offset + 1]->mcInst();
+    if (push && mov && push->getOpcode() == opPush64r_ &&
+        push->getNumOperands() >= 1 &&
+        push->getOperand(0).getReg() == regRBP_ &&
+        mov->getOpcode() == opMov64rr_ && mov->getNumOperands() >= 2 &&
+        mov->getOperand(0).getReg() == regRBP_ &&
+        mov->getOperand(1).getReg() == regRSP_) {
+      return offset + 2;
+    }
+  }
+
+  // endbr64 alone — still a function entry, skip just that one instruction.
+  return offset;
 }
 
 bool dragon::X86Info::x8664bitIsCommonEpilogue(
@@ -122,29 +131,29 @@ bool dragon::X86Info::x8664bitIsCommonEpilogue(
   return i0->getOpcode() == opLeave64_;
 }
 
-bool dragon::X86Info::x8632bitIsCommonPrologue(
+size_t dragon::X86Info::x8632bitIsCommonPrologue(
         const std::span<const Instruction *> insns) const {
   if (insns.size() < 2)
-    return false;
+    return 0;
   const auto *i0 = insns[0]->mcInst();
   const auto *i1 = insns[1]->mcInst();
   if (!i0 || !i1)
-    return false;
+    return 0;
   // push ebp
   if (i0->getOpcode() != opPush32r_)
-    return false;
+    return 0;
   if (i0->getNumOperands() < 1 || i0->getOperand(0).getReg() != regEBP_)
-    return false;
+    return 0;
   // mov ebp, esp
   if (i1->getOpcode() != opMov32rr_)
-    return false;
+    return 0;
   if (i1->getNumOperands() < 2)
-    return false;
+    return 0;
   if (i1->getOperand(0).getReg() != regEBP_)
-    return false;
+    return 0;
   if (i1->getOperand(1).getReg() != regESP_)
-    return false;
-  return true;
+    return 0;
+  return 2;
 }
 
 bool dragon::X86Info::x8632bitIsCommonEpilogue(

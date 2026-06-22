@@ -4,6 +4,7 @@
 #include <dragon/disassembler/Instruction.hpp>
 
 #include <array>
+#include <cmath>
 #include <string_view>
 #include <unordered_map>
 
@@ -23,9 +24,10 @@ static const std::unordered_map<std::string_view, dragon::ignil::Reg>
 
 
 dragon::x86::X86IGNILLifter::X86IGNILLifter(
-        Architecture architecture, const llvm::MCInstrInfo &instrInfo,
+        internal::Logger &logger, Architecture architecture,
+        const llvm::MCInstrInfo &instrInfo,
         const llvm::MCRegisterInfo &regInfo) :
-    architecture_(architecture), instrInfo_(&instrInfo) {
+    logger_(logger), architecture_(architecture), instrInfo_(&instrInfo) {
 
   // Build LLVM register integer -> ignil::Reg mapping
   for (unsigned i = 0; i < regInfo.getNumRegs(); ++i) {
@@ -204,8 +206,10 @@ void dragon::x86::X86IGNILLifter::liftMov(const llvm::MCInst &mc,
                                           std::uint64_t addr, ignil::Block &out,
                                           std::uint32_t &tmp) const {
   auto dst = toReg(mc.getOperand(0).getReg());
-  if (!dst)
+  if (!dst) {
+    logger_.log("Error liftMov in addr {:#x} no dst", addr);
     return;
+  }
 
   const auto &srcOp = mc.getOperand(1);
   if (srcOp.isImm()) {
@@ -227,8 +231,10 @@ void dragon::x86::X86IGNILLifter::liftMovLoad(const llvm::MCInst &mc,
                                               std::uint32_t &tmp) const {
   // op[0]=dst, op[1..5]=mem(base,scale,index,disp,seg)
   auto dst = toReg(mc.getOperand(0).getReg());
-  if (!dst)
+  if (!dst) {
+    logger_.log("Error liftMovLoad in addr {:#x} no dst", addr);
     return;
+  }
 
   ignil::Width ptrWidth = (architecture_ == Architecture::X86_64) ? 64 : 32;
   auto addrTemp = emitAddress(mc, 1, ptrWidth, addr, out, tmp);
@@ -242,8 +248,10 @@ void dragon::x86::X86IGNILLifter::liftMovStore(const llvm::MCInst &mc,
                                                std::uint32_t &tmp) const {
   // op[0..4]=mem(base,scale,index,disp,seg), op[5]=src
   auto src = toReg(mc.getOperand(5).getReg());
-  if (!src)
+  if (!src) {
+    logger_.log("Error liftMovStore in addr {:#x} no src", addr);
     return;
+  }
 
   ignil::Width ptrWidth = (architecture_ == Architecture::X86_64) ? 64 : 32;
   auto addrTemp = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
@@ -254,8 +262,10 @@ void dragon::x86::X86IGNILLifter::liftAdd(const llvm::MCInst &mc,
                                           std::uint32_t &tmp) const {
   // op[0]=dst(out), op[1]=src1(tied=dst), op[2]=src2(reg or imm)
   auto dst = toReg(mc.getOperand(0).getReg());
-  if (!dst)
+  if (!dst) {
+    logger_.log("Error liftAdd in addr {:#x} no dst", addr);
     return;
+  }
 
   ignil::Value src;
   const auto &srcOp = mc.getOperand(2);
@@ -264,6 +274,7 @@ void dragon::x86::X86IGNILLifter::liftAdd(const llvm::MCInst &mc,
   } else {
     auto srcReg = toReg(srcOp.getReg());
     if (!srcReg) {
+      logger_.log("Error liftAdd in addr {:#x} no src", addr);
       emitUndef(*dst, addr, out);
       return;
     }
@@ -290,8 +301,10 @@ void dragon::x86::X86IGNILLifter::liftSub(const llvm::MCInst &mc,
                                           std::uint32_t &tmp) const {
   // op[0]=dst(out), op[1]=src1(tied=dst), op[2]=src2(reg or imm)
   auto dst = toReg(mc.getOperand(0).getReg());
-  if (!dst)
+  if (!dst) {
+    logger_.log("Error liftSub in addr {:#x} no dst", addr);
     return;
+  }
 
   ignil::Value src;
   const auto &srcOp = mc.getOperand(2);
@@ -300,6 +313,7 @@ void dragon::x86::X86IGNILLifter::liftSub(const llvm::MCInst &mc,
   } else {
     auto srcReg = toReg(srcOp.getReg());
     if (!srcReg) {
+      logger_.log("Error liftSub in addr {:#x} no src", addr);
       emitUndef(*dst, addr, out);
       return;
     }
@@ -327,7 +341,12 @@ void dragon::x86::X86IGNILLifter::liftXor(const llvm::MCInst &mc,
   auto dst = toReg(mc.getOperand(0).getReg());
   auto src = toReg(mc.getOperand(2).getReg());
 
-  if (!dst || !src) {
+  if (!dst) {
+    logger_.log("Error liftXor in addr {:#x} no dst", addr);
+    return;
+  }
+  if (!src) {
+    logger_.log("Error liftXor in addr {:#x} no src", addr);
     emitUndef(*dst, addr, out);
     return;
   }
@@ -350,7 +369,12 @@ void dragon::x86::X86IGNILLifter::liftAnd(const llvm::MCInst &mc,
   auto dst = toReg(mc.getOperand(0).getReg());
   auto src = toReg(mc.getOperand(2).getReg());
 
-  if (!dst || !src) {
+  if (!dst) {
+    logger_.log("Error liftAnd in addr {:#x} no dst", addr);
+    return;
+  }
+  if (!src) {
+    logger_.log("Error liftAnd in addr {:#x} no src", addr);
     emitUndef(*dst, addr, out);
     return;
   }
@@ -371,7 +395,12 @@ void dragon::x86::X86IGNILLifter::liftOr(const llvm::MCInst &mc,
   auto dst = toReg(mc.getOperand(0).getReg());
   auto src = toReg(mc.getOperand(2).getReg());
 
-  if (!dst || !src) {
+  if (!dst) {
+    logger_.log("Error liftOr in addr {:#x} no dst", addr);
+    return;
+  }
+  if (!src) {
+    logger_.log("Error liftOr in addr {:#x} no src", addr);
     emitUndef(*dst, addr, out);
     return;
   }
@@ -391,8 +420,10 @@ void dragon::x86::X86IGNILLifter::liftPush(const llvm::MCInst &mc,
                                            ignil::Block &out,
                                            std::uint32_t &tmp) const {
   auto src = toReg(mc.getOperand(0).getReg());
-  if (!src)
+  if (!src) {
+    logger_.log("Error liftPush in addr {:#x} no src", addr);
     return;
+  }
 
   const ignil::Width ptrWidth =
           (architecture_ == Architecture::X86_64) ? 64 : 32;
@@ -414,8 +445,10 @@ void dragon::x86::X86IGNILLifter::liftPop(const llvm::MCInst &mc,
                                           std::uint64_t addr, ignil::Block &out,
                                           std::uint32_t &tmp) const {
   auto dst = toReg(mc.getOperand(0).getReg());
-  if (!dst)
+  if (!dst) {
+    logger_.log("Error liftPop in addr {:#x} no dst", addr);
     return;
+  }
 
   const ignil::Width ptrWidth =
           (architecture_ == Architecture::X86_64) ? 64 : 32;
@@ -440,8 +473,10 @@ void dragon::x86::X86IGNILLifter::liftLea(const llvm::MCInst &mc,
                                           std::uint64_t addr, ignil::Block &out,
                                           std::uint32_t &tmp) const {
   auto dst = toReg(mc.getOperand(0).getReg());
-  if (!dst)
+  if (!dst) {
+    logger_.log("Error liftLea in addr {:#x} no dst", addr);
     return;
+  }
 
   const ignil::Width ptrWidth =
           (architecture_ == Architecture::X86_64) ? 64 : 32;
@@ -453,16 +488,20 @@ void dragon::x86::X86IGNILLifter::liftCmp(const llvm::MCInst &mc,
                                           std::uint32_t &tmp) const {
   // CMP has no output: op[0]=lhs, op[1]=rhs(reg or imm)
   auto lhs = toReg(mc.getOperand(0).getReg());
-  if (!lhs)
+  if (!lhs) {
+    logger_.log("Error liftCmp in addr {:#x} no lhs", addr);
     return;
+  }
 
   ignil::Value rhs;
   if (const auto &rhsOp = mc.getOperand(1); rhsOp.isImm()) {
     rhs = ignil::Const{static_cast<std::uint64_t>(rhsOp.getImm()), lhs->width};
   } else {
     auto rhsReg = toReg(rhsOp.getReg());
-    if (!rhsReg)
+    if (!rhsReg) {
+      logger_.log("Error liftCmp in addr {:#x} no rhs", addr);
       return;
+    }
     rhs = *rhsReg;
   }
 
@@ -484,8 +523,10 @@ void dragon::x86::X86IGNILLifter::liftTest(const llvm::MCInst &mc,
                                            std::uint32_t &tmp) const {
   auto lhs = toReg(mc.getOperand(0).getReg());
   auto rhs = toReg(mc.getOperand(1).getReg());
-  if (!lhs || !rhs)
+  if (!lhs || !rhs) {
+    logger_.log("Error liftTest in addr {:#x} no lhs or rhs", addr);
     return;
+  }
 
   // TEST is AND that discards the result but keeps flags; CF and OF always 0.
   auto result = newTemp(tmp, lhs->width);
@@ -536,8 +577,10 @@ void dragon::x86::X86IGNILLifter::liftJmp(const llvm::MCInst &mc,
                 addr});
   } else if (op.isReg()) {
     auto targetReg = toReg(op.getReg());
-    if (!targetReg)
+    if (!targetReg) {
+      logger_.log("Error liftJmp in addr {:#x} no target register", addr);
       return;
+    }
     out.append({ignil::Opcode::JMP, std::nullopt, {*targetReg}, addr});
   }
 }
@@ -585,8 +628,10 @@ void dragon::x86::X86IGNILLifter::liftCall(const llvm::MCInst &mc,
   } else if (op.isReg()) {
     // Indirect call through register
     auto targetReg = toReg(op.getReg());
-    if (!targetReg)
+    if (!targetReg) {
+      logger_.log("Error liftCall in addr {:#x} no target register", addr);
       return;
+    }
     out.append({ignil::Opcode::CALL, std::nullopt, {*targetReg}, addr});
   }
 }
