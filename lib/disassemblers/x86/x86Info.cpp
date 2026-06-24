@@ -7,7 +7,7 @@
 #include "InstructionImpl.hpp"
 
 
-dragon::X86Info::X86Info(Architecture architecture,
+dragon::X86Info::X86Info(const Architecture architecture,
                          const llvm::MCInstrInfo &instrInfo,
                          const llvm::MCRegisterInfo &regInfo) :
     architecture_(architecture) {
@@ -40,6 +40,14 @@ dragon::X86Info::X86Info(Architecture architecture,
       opRet64_ = i;
     else if (name == "RETL")
       opRetL_ = i;
+    else if (name == "RETI64")
+      opRetI64_ = i;
+    else if (name == "RETIL")
+      opRetIL_ = i;
+    else if (name == "ADD64ri8" || name == "ADD64ri32")
+      addSP64Opcodes_.insert(i);
+    else if (name == "ADD32ri8" || name == "ADD32ri")
+      addSP32Opcodes_.insert(i);
     else if (name == "HLT")
       opHlt_ = i;
     else if (name == "ENDBR64")
@@ -72,13 +80,13 @@ size_t dragon::X86Info::isCommonFunctionPrologue(
   return 0;
 }
 
-bool dragon::X86Info::isCommonFunctionEpilogue(
+size_t dragon::X86Info::isCommonFunctionEpilogue(
         const std::span<const Instruction *> insns) const {
   if (architecture_ == Architecture::X86_32)
     return x8632bitIsCommonEpilogue(insns);
   if (architecture_ == Architecture::X86_64)
     return x8664bitIsCommonEpilogue(insns);
-  return false;
+  return 0;
 }
 
 size_t dragon::X86Info::x8664bitIsCommonPrologue(
@@ -113,22 +121,51 @@ size_t dragon::X86Info::x8664bitIsCommonPrologue(
   return offset;
 }
 
-bool dragon::X86Info::x8664bitIsCommonEpilogue(
+size_t dragon::X86Info::x8664bitIsCommonEpilogue(
         const std::span<const Instruction *> insns) const {
-  if (insns.size() < 2)
-    return false;
+  if (insns.empty())
+    return 0;
+
   const auto *i0 = insns[0]->mcInst();
+  if (!i0)
+    return 0;
+
+  // Single-instruction endings.
+  const unsigned op0 = i0->getOpcode();
+  if (op0 == opRet64_ || op0 == opRetI64_)
+    return 1;
+  if (op0 == opHlt_)
+    return 1;
+  if (trapOpcodes_.contains(op0))
+    return 1;
+
+  if (insns.size() < 2)
+    return 0;
+
   const auto *i1 = insns[1]->mcInst();
-  if (!i0 || !i1)
-    return false;
-  // second instruction must be ret
-  if (i1->getOpcode() != opRet64_)
-    return false;
-  // pop rbp + ret
-  if (i0->getOpcode() == opPop64r_)
-    return i0->getNumOperands() >= 1 && i0->getOperand(0).getReg() == regRBP_;
-  // leave + ret
-  return i0->getOpcode() == opLeave64_;
+  if (!i1)
+    return 0;
+
+  // All 2-instruction patterns require ret[N] as the second instruction.
+  const unsigned op1 = i1->getOpcode();
+  if (op1 != opRet64_ && op1 != opRetI64_)
+    return 0;
+
+  // pop rbp ; ret[N]
+  if (op0 == opPop64r_ && i0->getNumOperands() >= 1 &&
+      i0->getOperand(0).getReg() == regRBP_)
+    return 2;
+
+  // leave ; ret[N]
+  if (op0 == opLeave64_)
+    return 2;
+
+  // add rsp, N ; ret[N]  (frameless function with locals)
+  if (addSP64Opcodes_.contains(op0) && i0->getNumOperands() >= 1 &&
+      i0->getOperand(0).getReg() == regRSP_)
+    return 2;
+
+  return 0;
 }
 
 size_t dragon::X86Info::x8632bitIsCommonPrologue(
@@ -156,22 +193,51 @@ size_t dragon::X86Info::x8632bitIsCommonPrologue(
   return 2;
 }
 
-bool dragon::X86Info::x8632bitIsCommonEpilogue(
-        std::span<const Instruction *> insns) const {
-  if (insns.size() < 2)
-    return false;
+size_t dragon::X86Info::x8632bitIsCommonEpilogue(
+        const std::span<const Instruction *> insns) const {
+  if (insns.empty())
+    return 0;
+
   const auto *i0 = insns[0]->mcInst();
+  if (!i0)
+    return 0;
+
+  // Single-instruction endings.
+  const unsigned op0 = i0->getOpcode();
+  if (op0 == opRetL_ || op0 == opRetIL_) // ret N covers stdcall / fastcall
+    return 1;
+  if (op0 == opHlt_)
+    return 1;
+  if (trapOpcodes_.contains(op0))
+    return 1;
+
+  if (insns.size() < 2)
+    return 0;
+
   const auto *i1 = insns[1]->mcInst();
-  if (!i0 || !i1)
-    return false;
-  // second instruction must be ret
-  if (i1->getOpcode() != opRetL_)
-    return false;
-  // pop ebp + ret
-  if (i0->getOpcode() == opPop32r_)
-    return i0->getNumOperands() >= 1 && i0->getOperand(0).getReg() == regEBP_;
-  // leave + ret
-  return i0->getOpcode() == opLeave_;
+  if (!i1)
+    return 0;
+
+  // All 2-instruction patterns require ret[N] as the second instruction.
+  const unsigned op1 = i1->getOpcode();
+  if (op1 != opRetL_ && op1 != opRetIL_)
+    return 0;
+
+  // pop ebp ; ret[N]
+  if (op0 == opPop32r_ && i0->getNumOperands() >= 1 &&
+      i0->getOperand(0).getReg() == regEBP_)
+    return 2;
+
+  // leave ; ret[N]
+  if (op0 == opLeave_)
+    return 2;
+
+  // add esp, N ; ret[N]  (cdecl frameless function with locals)
+  if (addSP32Opcodes_.contains(op0) && i0->getNumOperands() >= 1 &&
+      i0->getOperand(0).getReg() == regESP_)
+    return 2;
+
+  return 0;
 }
 
 bool dragon::X86Info::isTrap(const Instruction &insn) const {

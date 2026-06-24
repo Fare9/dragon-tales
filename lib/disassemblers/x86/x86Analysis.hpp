@@ -51,6 +51,14 @@ class X86Analysis {
           std::vector<Instruction> &instructions,
           std::unordered_set<std::uint64_t> &basicBlockStarts) const;
 
+  /// Scan for epilogue sequences and mark the instruction that follows each
+  /// one (after skipping up to 16 bytes of nop/trap padding) as a candidate
+  /// function and block start.
+  void discoverEpilogues(
+          std::vector<Instruction> &instructions,
+          std::unordered_set<std::uint64_t> &blockStarts,
+          std::unordered_set<std::uint64_t> &functionStarts) const;
+
   /// We apply a simple analysis to retrieve the beginning of the functions
   /// we follow calls to look for functions, those points will be marked
   /// as function beginnings and as basic blocks too.

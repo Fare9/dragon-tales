@@ -49,6 +49,7 @@ bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
 
   discoverBlockStarts(instructions, blockStarts);
   discoverFunctionStarts(instructions, blockStarts, fnStarts);
+  discoverEpilogues(instructions, blockStarts, fnStarts);
 
   for (auto &insn: instructions)
     graph.addInstruction(std::move(insn));
@@ -99,6 +100,63 @@ void dragon::x86::X86Analysis::discoverBlockStarts(
   for (auto &I: instructions) {
     if (basicBlockStarts.contains(I.address()))
       I.setBlockStart(true);
+  }
+}
+
+void dragon::x86::X86Analysis::discoverEpilogues(
+        std::vector<Instruction> &instructions,
+        std::unordered_set<std::uint64_t> &blockStarts,
+        std::unordered_set<std::uint64_t> &functionStarts) const {
+  const size_t n = instructions.size();
+  size_t i = 0;
+  while (i < n) {
+    const size_t windowSize = std::min(n - i, size_t{2});
+    const Instruction *window[2] = {};
+    for (size_t j = 0; j < windowSize; ++j)
+      window[j] = &instructions[i + j];
+
+    const size_t matched =
+            x86Info_->isCommonFunctionEpilogue({window, windowSize});
+    if (!matched) {
+      ++i;
+      continue;
+    }
+
+    // hlt followed by an unconditional jmp is a kernel idle loop — the jmp
+    // stays inside the same function, so don't promote the target to a
+    // function start (block boundary only).
+    const bool isHltEpilogue =
+            matched == 1 && x86Info_->isHalt(instructions[i]);
+
+    // Skip nop/trap padding after the epilogue, up to 16 bytes.
+    size_t j = i + matched;
+    std::uint64_t paddingBytes = 0;
+    while (j < n && paddingBytes < 16) {
+      const auto &pad = instructions[j];
+      if (!x86Info_->isNop(pad) && !x86Info_->isTrap(pad))
+        break;
+      paddingBytes += pad.size();
+      ++j;
+    }
+
+    if (j < n) {
+      auto &next = instructions[j];
+      if (isHltEpilogue && next.isJump() && !next.isConditional()) {
+        blockStarts.insert(next.address());
+        logger_.log("hlt+jmp idle loop at 0x{:x}, 0x{:x} is block boundary only",
+                    instructions[i].address(), next.address());
+      } else {
+        functionStarts.insert(next.address());
+        blockStarts.insert(next.address());
+        next.setFunctionStart(true);
+        next.setBlockStart(true);
+        logger_.log(
+                "Discovered function start via epilogue at address 0x{:x}",
+                next.address());
+      }
+    }
+
+    i += matched;
   }
 }
 
