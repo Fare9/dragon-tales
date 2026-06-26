@@ -8,7 +8,7 @@
 namespace dragon::internal {
 
 /// Initialize LLVM for ARM/AArch64 and return a populated LLVMTarget.
-/// Registration is done once via std::call_once — thread safe.
+/// Registration is done once via std::call_once - thread safe.
 ///
 /// @param is64bit  true for AArch64, false for ARM32.
 /// @param cpu      LLVM CPU name.  Empty → "generic".

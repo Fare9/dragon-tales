@@ -17,7 +17,7 @@ dragon::Function::Function(const Graph *graph, std::uint64_t startAddress) :
     processed.insert(blockAddr);
 
     if (graph_->blocks_q.is_invalid(blockAddr))
-      return; // bad block inside the function — bail entirely
+      return; // bad block inside the function - bail entirely
     // generate a new block as a starting address and
     // the same graph object
     BasicBlock block{graph_, blockAddr};

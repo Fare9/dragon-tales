@@ -25,3 +25,14 @@ target_include_directories(llvmir_lifting PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${LLVM_INCLUDE_DIRS}
 )
+
+if(DRAGON_USE_Z3)
+    add_executable(z3_path_discovery z3_path_discovery.cpp)
+
+    target_link_libraries(z3_path_discovery PRIVATE dragon::libdragon z3::libz3)
+
+    target_include_directories(z3_path_discovery PRIVATE
+            ${CMAKE_SOURCE_DIR}/include
+            ${LLVM_INCLUDE_DIRS}
+    )
+endif()

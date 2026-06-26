@@ -159,3 +159,75 @@ TEST_CASE("IGNIL lifting - conditional branch (cmp/jle)", "[ignil][x86_64]") {
   std::cout << "\n=== IGNIL Lifting: conditional branch (cmp/jle) ===";
   printIgnilComparison(g);
 }
+
+// -----------------------------------------------------------------------
+// Test 4: indirect jump through memory - jmp [rax]
+// -----------------------------------------------------------------------
+
+TEST_CASE("IGNIL lifting - indirect jump through memory (jmp [rax])", "[ignil][x86_64]") {
+  // 0x1000: FF 20   jmp [rax]
+  // 0x1002: C3      ret       (unreachable; gives the block a terminator)
+  const std::vector<std::uint8_t> bytes = {
+          0xFF, 0x20,  // jmp [rax]
+          0xC3,        // ret
+  };
+
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g   = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE_FALSE(ib->empty());
+
+  // There must be a LOAD op somewhere in the block (dereference of [rax])
+  const auto &ops = ib->ops();
+  auto loadIt = std::find_if(ops.begin(), ops.end(),
+          [](const auto &op) { return op.opcode == dragon::ignil::Opcode::LOAD; });
+  REQUIRE(loadIt != ops.end());
+
+  // The JMP op must exist and its target must be the Temp produced by LOAD
+  auto jmpIt = std::find_if(ops.begin(), ops.end(),
+          [](const auto &op) { return op.opcode == dragon::ignil::Opcode::JMP; });
+  REQUIRE(jmpIt != ops.end());
+  REQUIRE(std::holds_alternative<dragon::ignil::Temp>(jmpIt->srcs[0]));
+
+  std::cout << "\n=== IGNIL Lifting: indirect jump through memory (jmp [rax]) ===";
+  printIgnilComparison(g);
+}
+
+// -----------------------------------------------------------------------
+// Test 5: indirect call through memory - call [rbx + rcx*8]
+// -----------------------------------------------------------------------
+
+TEST_CASE("IGNIL lifting - indirect call through memory (call [rbx + rcx*8])", "[ignil][x86_64]") {
+  // 0x1000: FF 14 CB   call [rbx + rcx*8]   (virtual dispatch / jump table)
+  // 0x1003: C3         ret
+  const std::vector<std::uint8_t> bytes = {
+          0xFF, 0x14, 0xCB,  // call [rbx + rcx*8]
+          0xC3,              // ret
+  };
+
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g   = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE_FALSE(ib->empty());
+
+  // There must be a LOAD op (dereference of the computed address)
+  const auto &ops = ib->ops();
+  auto loadIt = std::find_if(ops.begin(), ops.end(),
+          [](const auto &op) { return op.opcode == dragon::ignil::Opcode::LOAD; });
+  REQUIRE(loadIt != ops.end());
+
+  // The CALL op must exist and its target must be the Temp produced by LOAD
+  auto callIt = std::find_if(ops.begin(), ops.end(),
+          [](const auto &op) { return op.opcode == dragon::ignil::Opcode::CALL; });
+  REQUIRE(callIt != ops.end());
+  REQUIRE(std::holds_alternative<dragon::ignil::Temp>(callIt->srcs[0]));
+
+  std::cout << "\n=== IGNIL Lifting: indirect call through memory (call [rbx + rcx*8]) ===";
+  printIgnilComparison(g);
+}

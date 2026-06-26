@@ -62,6 +62,14 @@ struct Configuration {
   /// When true, the library emits diagnostic messages to stderr.
   /// Set to false by default so library users are not surprised by output.
   bool logging = false;
+
+#ifdef DRAGON_WITH_Z3
+  /// When true, the disassembler uses Z3 to enumerate possible targets of
+  /// indirect jumps that the backward slicer cannot resolve to a single
+  /// constant. Has no effect when the library is built without Z3
+  /// (-DDRAGON_USE_Z3=OFF).
+  bool useZ3ForPathDiscovery = false;
+#endif
 };
 
 } // namespace dragon

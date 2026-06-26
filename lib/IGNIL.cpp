@@ -4,6 +4,14 @@
 
 #include <format>
 
+
+#define OP_NAME(OP) #OP,
+static constexpr std::string_view kNames[] = {
+#include "IGNIL_OPS.def"
+
+};
+#undef OP_NAME
+
 dragon::ignil::Width dragon::ignil::widthOf(const Value &v) {
   return std::visit([](const auto &val) { return val.width; }, v);
 }
@@ -22,105 +30,34 @@ std::uint64_t dragon::ignil::Block::startAddress() const {
 bool dragon::ignil::Block::empty() const { return ops_.empty(); }
 size_t dragon::ignil::Block::size() const { return ops_.size(); }
 std::vector<dragon::ignil::Op>::const_iterator
-dragon::ignil::Block::begin() const { return ops_.begin(); }
+dragon::ignil::Block::begin() const {
+  return ops_.begin();
+}
 std::vector<dragon::ignil::Op>::const_iterator
-dragon::ignil::Block::end() const { return ops_.end(); }
+dragon::ignil::Block::end() const {
+  return ops_.end();
+}
 
 std::string_view dragon::ignil::opcodeName(Opcode op) {
-  switch (op) {
-    case Opcode::COPY:
-      return "COPY";
-    case Opcode::LOAD:
-      return "LOAD";
-    case Opcode::STORE:
-      return "STORE";
-    case Opcode::ADD:
-      return "ADD";
-    case Opcode::SUB:
-      return "SUB";
-    case Opcode::NEG:
-      return "NEG";
-    case Opcode::MUL:
-      return "MUL";
-    case Opcode::SDIV:
-      return "SDIV";
-    case Opcode::UDIV:
-      return "UDIV";
-    case Opcode::SMOD:
-      return "SMOD";
-    case Opcode::UMOD:
-      return "UMOD";
-    case Opcode::AND:
-      return "AND";
-    case Opcode::OR:
-      return "OR";
-    case Opcode::XOR:
-      return "XOR";
-    case Opcode::NOT:
-      return "NOT";
-    case Opcode::SHL:
-      return "SHL";
-    case Opcode::SHR:
-      return "SHR";
-    case Opcode::SAR:
-      return "SAR";
-    case Opcode::ZEXT:
-      return "ZEXT";
-    case Opcode::SEXT:
-      return "SEXT";
-    case Opcode::TRUNC:
-      return "TRUNC";
-    case Opcode::EQ:
-      return "EQ";
-    case Opcode::NEQ:
-      return "NEQ";
-    case Opcode::ULT:
-      return "ULT";
-    case Opcode::ULE:
-      return "ULE";
-    case Opcode::UGT:
-      return "UGT";
-    case Opcode::UGE:
-      return "UGE";
-    case Opcode::SLT:
-      return "SLT";
-    case Opcode::SLE:
-      return "SLE";
-    case Opcode::SGT:
-      return "SGT";
-    case Opcode::SGE:
-      return "SGE";
-    case Opcode::JMP:
-      return "JMP";
-    case Opcode::CJMP:
-      return "CJMP";
-    case Opcode::CALL:
-      return "CALL";
-    case Opcode::RET:
-      return "RET";
-    case Opcode::UNDEF:
-      return "UNDEF";
-  }
-  return "?";
+  auto i = static_cast<std::size_t>(op);
+  return i < std::size(kNames) ? kNames[i] : "?";
 }
 
 std::string dragon::ignil::toString(const Value &v) {
-  return std::visit(utils::overloaded{[](const Const &c) {
-                                        return std::format("0x{:x}:i{}",
-                                                           c.value, c.width);
-                                      },
-                                      [](const Reg &r) {
-                                        if (!r.name.empty())
-                                          return std::format("{}:i{}", r.name,
-                                                             r.width);
-                                        return std::format("reg[{}]:i{}",
-                                                           r.offset, r.width);
-                                      },
-                                      [](const Temp &t) {
-                                        return std::format("t{}:i{}", t.id,
-                                                           t.width);
-                                      }},
-                    v);
+  return std::visit(
+          utils::overloaded{
+                  [](const Const &c) {
+                    return std::format("0x{:x}:i{}", c.value, c.width);
+                  },
+                  [](const Reg &r) {
+                    if (!r.name.empty())
+                      return std::format("{}:i{}", r.name, r.width);
+                    return std::format("reg[{}]:i{}", r.offset, r.width);
+                  },
+                  [](const Temp &t) {
+                    return std::format("t{}:i{}", t.id, t.width);
+                  }},
+          v);
 }
 
 std::string dragon::ignil::toString(const Op &op) {

@@ -73,18 +73,29 @@ class Graph {
 
   void addIGNILBlock(ignil::Block block);
   ignil::Block *getIGNILBlock(std::uint64_t addr);
-  const ignil::Block *getIGNILBlock(std::uint64_t addr) const;
+  [[nodiscard]] const ignil::Block *getIGNILBlock(std::uint64_t addr) const;
 
+  /// Retrieve a pointer to an instruction given its address
+  /// in case there's no instruction in that address, returns null
   [[nodiscard]] const Instruction *get(std::uint64_t address) const;
+  /// Retrieve a pointer to an instruction given its address
+  /// in case there's no instruction in that address, returns null
   [[nodiscard]] Instruction *get(std::uint64_t address);
 
+  /// Retrieve the list of instructions together with its address
   [[nodiscard]] const std::map<std::uint64_t, Instruction> &listing() const {
     return listing_;
   }
 
-  // View accessors — iterate valid sets, construct views on the fly
+  // View accessors - iterate valid sets, construct views on the fly
+
+  /// Retrieve the pointers to all instructions in a vector.
   [[nodiscard]] std::vector<Instruction *> instructions();
-  [[nodiscard]] std::vector<BasicBlock> blocks();
+  /// Retrieve BasicBlocks, as the basic blocks are simply views
+  /// to the instructions of them, we return objects, not pointers.
+  [[nodiscard]] std::vector<BasicBlock> blocks() const;
+  ///  Retrieve Functions, as the functions are simply views
+  ///  to the instructions of them, we return objects, not pointers.
   [[nodiscard]] std::vector<Function> functions();
 
   [[nodiscard]] std::size_t size() const { return listing_.size(); }

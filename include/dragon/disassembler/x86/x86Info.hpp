@@ -6,7 +6,7 @@
 #include <unordered_set>
 
 #include <llvm/MC/MCInstrInfo.h>
-#include <llvm/MC/MCRegisterInfo.h>
+
 
 namespace dragon {
 
@@ -28,27 +28,27 @@ class X86Info {
                    const llvm::MCInstrInfo &instrInfo,
                    const llvm::MCRegisterInfo &regInfo);
 
-  /// Returns true if the instruction sequence matches a common x86 function
-  /// prologue for the architecture this object was constructed with.
+  /// Returns the number of instructions consumed if the sequence matches a
+  /// common x86 function prologue, or 0 if no match.
   ///
-  /// At least two instructions must be provided. Returns false if insns is
-  /// shorter than the minimum required window.
-  ///
-  /// x86_64: push rbp followed by mov rbp, rsp
-  /// x86_32: push ebp followed by mov ebp, esp
-  [[nodiscard]] bool
+  /// x86_64: endbr64                            -> 1 (CET landing pad alone)
+  ///         push rbp / mov rbp, rsp            -> 2
+  ///         endbr64 / push rbp / mov rbp, rsp  -> 3 (CET + full frame setup)
+  /// x86_32: push ebp / mov ebp, esp            -> 2
+  [[nodiscard]] size_t
   isCommonFunctionPrologue(std::span<const Instruction *> insns) const;
 
-  /// Returns true if the instruction sequence matches a common x86 function
-  /// epilogue for the architecture this object was constructed with.
+  /// Returns the number of instructions consumed if the sequence matches a
+  /// common x86 function epilogue, or 0 if no match.
   ///
-  /// At least two instructions must be provided. Returns false if insns is
-  /// shorter than the minimum required window.
-  ///
-  /// Recognised patterns for both modes:
-  ///   pop rbp/ebp followed by ret
-  ///   leave followed by ret
-  [[nodiscard]] bool
+  /// Recognised patterns (both modes, longer matches take priority):
+  ///   ret / ret N                   -> 1
+  ///   hlt                           -> 1  (kernel idle / OS halt)
+  ///   ud2 / int3 / any trap         -> 1  (noreturn sink)
+  ///   pop rbp/ebp ; ret[N]          -> 2
+  ///   leave[64] ; ret[N]            -> 2
+  ///   add rsp/esp, N ; ret[N]       -> 2  (frameless stack cleanup)
+  [[nodiscard]] size_t
   isCommonFunctionEpilogue(std::span<const Instruction *> insns) const;
 
   /// Returns true if the instruction is an unconditional software trap
@@ -67,13 +67,13 @@ class X86Info {
   [[nodiscard]] bool isHalt(const Instruction &insn) const;
 
   private:
-  [[nodiscard]] bool
+  [[nodiscard]] size_t
   x8664bitIsCommonPrologue(std::span<const Instruction *> insns) const;
-  [[nodiscard]] bool
+  [[nodiscard]] size_t
   x8664bitIsCommonEpilogue(std::span<const Instruction *> insns) const;
-  [[nodiscard]] bool
+  [[nodiscard]] size_t
   x8632bitIsCommonPrologue(std::span<const Instruction *> insns) const;
-  [[nodiscard]] bool
+  [[nodiscard]] size_t
   x8632bitIsCommonEpilogue(std::span<const Instruction *> insns) const;
 
   Architecture architecture_;
@@ -84,12 +84,16 @@ class X86Info {
   unsigned opPop64r_{}, opPop32r_{};
   unsigned opLeave64_{}, opLeave_{};
   unsigned opRet64_{}, opRetL_{};
+  unsigned opRetI64_{}, opRetIL_{}; // ret with immediate (pop N bytes off stack)
   unsigned opHlt_{};
+  unsigned opEndbr64_{};
 
   // Opcode sets for variable-count instruction families
-  std::unordered_set<unsigned> trapOpcodes_; // int3, ud2, ud1, ...
-  std::unordered_set<unsigned> nopOpcodes_; // nop, multi-byte nops, fnop
-  std::unordered_set<unsigned> iretOpcodes_; // iret, iretd, iretq
+  std::unordered_set<unsigned> trapOpcodes_;    // int3, ud2, ud1, ...
+  std::unordered_set<unsigned> nopOpcodes_;     // nop, multibyte nops, fnop
+  std::unordered_set<unsigned> iretOpcodes_;    // iret, iretd, iretq
+  std::unordered_set<unsigned> addSP64Opcodes_; // add rsp, imm (imm8 and imm32)
+  std::unordered_set<unsigned> addSP32Opcodes_; // add esp, imm (imm8 and imm32)
 
   // Cached register integers
   unsigned regRBP_{}, regRSP_{};

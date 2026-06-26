@@ -37,7 +37,7 @@
   typedef struct dragon_block       dragon_block_t;
   typedef struct dragon_function    dragon_function_t;
 
-  // dragon_instruction_t is a pointer INTO the graph listing — no destroy needed,
+  // dragon_instruction_t is a pointer INTO the graph listing - no destroy needed,
   // valid as long as the owning graph is alive.
   typedef struct dragon_instruction dragon_instruction_t;
 
@@ -72,11 +72,11 @@
   size_t dragon_graph_size(const dragon_graph_t* g);
   int    dragon_graph_empty(const dragon_graph_t* g);
 
-  // Returns pointer into the graph — valid while graph is alive. No destroy.
+  // Returns pointer into the graph - valid while graph is alive. No destroy.
   const dragon_instruction_t* dragon_graph_get_instruction(
       const dragon_graph_t* g, uint64_t address);
 
-  // Returns heap-allocated views — caller must destroy.
+  // Returns heap-allocated views - caller must destroy.
   dragon_block_t*    dragon_graph_get_block(const dragon_graph_t* g, uint64_t address);
   dragon_function_t* dragon_graph_get_function(const dragon_graph_t* g, uint64_t address);
 
@@ -234,7 +234,7 @@
 
   // -- IGNIL block ---------------------------------------------------------------
 
-  // Borrowed pointer into the graph — valid while the owning graph is alive.
+  // Borrowed pointer into the graph - valid while the owning graph is alive.
   // No destroy needed.
   typedef struct dragon_ignil_block dragon_ignil_block_t;
 
@@ -278,6 +278,13 @@
   // Caller must free the returned string with dragon_cstr_free.
   char* dragon_slice_expr_to_string(const dragon_slice_expr_t* e);
 
+  // Lower a SliceExpr through Z3 and return the Z3 bitvector expression as a
+  // string. Only available when the library is built with -DDRAGON_USE_Z3=ON.
+  // Caller must free with dragon_cstr_free.
+#ifdef DRAGON_WITH_Z3
+  char* dragon_slice_expr_to_z3_string(const dragon_slice_expr_t* e);
+#endif
+
   // DRAGON_SLICE_CONST
   uint64_t dragon_slice_expr_const_value(const dragon_slice_expr_t* e);
   uint8_t  dragon_slice_expr_const_width(const dragon_slice_expr_t* e);
@@ -285,21 +292,21 @@
   // DRAGON_SLICE_SYM_REG
   uint32_t    dragon_slice_expr_symreg_offset(const dragon_slice_expr_t* e);
   uint8_t     dragon_slice_expr_symreg_width(const dragon_slice_expr_t* e);
-  // Returns a pointer into internal storage — valid while the expr is alive.
+  // Returns a pointer into internal storage - valid while the expr is alive.
   // Empty string ("") when no name was set.
   const char* dragon_slice_expr_symreg_name(const dragon_slice_expr_t* e);
 
-  // DRAGON_SLICE_BINOP / DRAGON_SLICE_UNARYOP — shared opcode accessor
+  // DRAGON_SLICE_BINOP / DRAGON_SLICE_UNARYOP - shared opcode accessor
   dragon_ignil_opcode_t dragon_slice_expr_opcode(const dragon_slice_expr_t* e);
 
-  // DRAGON_SLICE_BINOP — caller must destroy returned handles.
+  // DRAGON_SLICE_BINOP - caller must destroy returned handles.
   dragon_slice_expr_t* dragon_slice_expr_left(const dragon_slice_expr_t* e);
   dragon_slice_expr_t* dragon_slice_expr_right(const dragon_slice_expr_t* e);
 
-  // DRAGON_SLICE_UNARYOP — caller must destroy returned handle.
+  // DRAGON_SLICE_UNARYOP - caller must destroy returned handle.
   dragon_slice_expr_t* dragon_slice_expr_operand(const dragon_slice_expr_t* e);
 
-  // DRAGON_SLICE_LOAD — caller must destroy the address handle.
+  // DRAGON_SLICE_LOAD - caller must destroy the address handle.
   dragon_slice_expr_t* dragon_slice_expr_load_addr(const dragon_slice_expr_t* e);
   uint8_t              dragon_slice_expr_load_width(const dragon_slice_expr_t* e);
 

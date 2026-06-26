@@ -320,6 +320,22 @@ dragon_slicer_destroy(slicer);
 | `dragon_slice_expr_load_addr(e)` | owned `dragon_slice_expr_t*` | LOAD |
 | `dragon_slice_expr_load_width(e)` | `uint8_t` | LOAD |
 
+### Z3 string representation
+
+Available when the library is built with `-DDRAGON_USE_Z3=ON`
+(`DRAGON_WITH_Z3` is defined).
+
+```c
+#ifdef DRAGON_WITH_Z3
+char* z3s = dragon_slice_expr_to_z3_string(expr);
+printf("Z3: %s\n", z3s);   // (bvadd rax #x0000000000000004)
+dragon_cstr_free(z3s);
+#endif
+```
+
+The returned string is a heap-allocated Z3 expression in SMT-LIB2 format.
+Free it with `dragon_cstr_free`. Returns `"undef"` for a null pointer.
+
 ---
 
 ## LLVMLifter

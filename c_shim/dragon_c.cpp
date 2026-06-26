@@ -1,6 +1,9 @@
 #include "dragon_c.h"
 
 #include <dragon/Architecture.hpp>
+#ifdef DRAGON_WITH_Z3
+#include <dragon/analysis/SliceExprZ3.hpp>
+#endif
 #include <dragon/assembler/Assembler.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 #include <dragon/analysis/BackwardSlicer.hpp>
@@ -52,7 +55,7 @@ static dragon::Syntax to_syntax(dragon_syntax_t s) {
   return s == DRAGON_SYNTAX_ATT ? dragon::Syntax::ATT : dragon::Syntax::INTEL;
 }
 
-// -- dragon_config — full definition
+// -- dragon_config - full definition
 struct dragon_config {
   dragon::Configuration config;
 };
@@ -105,7 +108,7 @@ int dragon_config_logging(const dragon_config_t *c) {
   return c && c->config.logging ? 1 : 0;
 }
 
-// -- dragon_asm_t — full definition
+// -- dragon_asm_t - full definition
 struct dragon_asm {
   dragon::Assembler assembler;
 };
@@ -139,7 +142,7 @@ uint8_t *dragon_asm_assemble(dragon_asm_t *a, const char *source,
 
 void dragon_bytes_free(uint8_t *bytes) { delete[] bytes; }
 
-// -- dragon_disasm_t — full definition
+// -- dragon_disasm_t - full definition
 struct dragon_disasm {
   dragon::Architecture arch;
   dragon::Configuration config;
@@ -438,7 +441,7 @@ const char *dragon_ignil_opcode_name(dragon_ignil_opcode_t op) {
 }
 
 // =============================================================================
-// IGNIL block — borrowed from graph via reinterpret_cast
+// IGNIL block - borrowed from graph via reinterpret_cast
 // =============================================================================
 
 static const dragon::ignil::Block *
@@ -594,6 +597,16 @@ uint8_t dragon_slice_expr_load_width(const dragon_slice_expr_t *e) {
   const auto *l = std::get_if<dragon::slice::Load>(&e->expr->data);
   return l ? l->width : 0;
 }
+
+#ifdef DRAGON_WITH_Z3
+char *dragon_slice_expr_to_z3_string(const dragon_slice_expr_t *e) {
+  if (!e)
+    return dup_string("undef");
+  z3::context ctx;
+  dragon::slice::SliceExprZ3 lowerer{ctx};
+  return dup_string(lowerer.lower(*e->expr).to_string());
+}
+#endif
 
 // =============================================================================
 // BackwardSlicer

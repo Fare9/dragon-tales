@@ -26,7 +26,7 @@ dragon::Instruction::Instruction(std::uint64_t address, std::uint8_t size,
 }
 
 // -----------------------------------------------------------------------
-// Special members — all defined here so Impl is complete at point of use
+// Special members - all defined here so Impl is complete at point of use
 // -----------------------------------------------------------------------
 
 // Destructor: unique_ptr<Impl> needs Impl to be complete to call its deleter.
@@ -38,7 +38,7 @@ dragon::Instruction &
 dragon::Instruction::operator=(Instruction &&) noexcept = default;
 
 // Copy: deep-copy the Impl so each Instruction owns its own MCInst.
-// impl_ may be null for instructions that failed to decode — handle that case.
+// impl_ may be null for instructions that failed to decode - handle that case.
 dragon::Instruction::Instruction(const Instruction &other) :
     address_(other.address_), size_(other.size_), mnemonic_(other.mnemonic_),
     operands_(other.operands_), disassembly_(other.disassembly_),

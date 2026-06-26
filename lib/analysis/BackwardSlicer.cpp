@@ -14,24 +14,36 @@ namespace dragon {
 
 namespace {
 
+struct SuccessorInfo {
+  std::vector<std::uint64_t> known;
+  bool hasIndirect = false;
+};
+
 // Collect all direct successors of a block by inspecting its terminal Op.
 // Returns up to two target addresses (JMP → one, CJMP → two).
-std::vector<std::uint64_t> successorsOf(const ignil::Block &block) {
+SuccessorInfo successorsOf(const ignil::Block &block) {
   if (block.empty())
     return {};
+  // Retrieve the last instruction, it must be a jump, ret,
+  // etc.
   const ignil::Op &last = block.ops().back();
-  std::vector<std::uint64_t> succs;
-  auto pushConst = [&](const ignil::Value &v) {
+  SuccessorInfo info;
+
+  auto pushValue = [&](const ignil::Value &v) {
+    // If the value from the JMP instruction is a constant
+    // we don't need any calculation
     if (const auto *c = std::get_if<ignil::Const>(&v))
-      succs.push_back(c->value);
+      info.known.push_back(c->value);
+    else
+      info.hasIndirect = true;
   };
   if (last.opcode == ignil::Opcode::JMP && !last.srcs.empty()) {
-    pushConst(last.srcs[0]);
+    pushValue(last.srcs[0]);
   } else if (last.opcode == ignil::Opcode::CJMP && last.srcs.size() >= 3) {
-    pushConst(last.srcs[1]); // taken
-    pushConst(last.srcs[2]); // fallthrough
+    pushValue(last.srcs[1]); // taken
+    pushValue(last.srcs[2]); // fallthrough
   }
-  return succs;
+  return info;
 }
 
 } // namespace
@@ -59,7 +71,7 @@ BackwardSlicer::buildPredecessorMap(const Graph &graph) const {
       continue;
     // look for the list of successors using the IGNIL instructions
     // this will make the search, architecture-agnostic.
-    for (std::uint64_t succ: successorsOf(*blk)) {
+    for (std::uint64_t succ: successorsOf(*blk).known) {
       if (auto it = incoming.find(succ); it != incoming.end())
         it->second.push_back(addr);
     }
@@ -83,13 +95,13 @@ slice::Expr BackwardSlicer::slice(const ignil::Value &root,
   const PredMap preds = buildPredecessorMap(graph);
   const ignil::Block *blk = graph.getIGNILBlock(blockAddr);
   if (!blk)
-    return slice::Expr{slice::Undef{}};
+    return slice::Expr{slice::Undef{ignil::widthOf(root)}};
   int startIdx = static_cast<int>(blk->ops().size()); // scan all ops
   return sliceValue(root, *blk, startIdx, graph, preds, maxBlocks_);
 }
 
 // ---------------------------------------------------------------------------
-// sliceValue — resolve a Value backwards through ops
+// sliceValue - resolve a Value backwards through ops
 // ---------------------------------------------------------------------------
 
 slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
@@ -121,9 +133,9 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
                           return buildFromOp(op, block, i, graph, preds, depth);
                       }
                     }
-                    // Not defined in this block — temps never cross blocks,
+                    // Not defined in this block - temps never cross blocks,
                     // treat as undef.
-                    return slice::Expr{slice::Undef{}};
+                    return slice::Expr{slice::Undef{t.width}};
                   },
 
                   // Registers: scan backwards within the block for the last
@@ -145,7 +157,7 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
                           return buildFromOp(op, block, i, graph, preds, depth);
                       }
                     }
-                    // Not defined here — try predecessor block.
+                    // Not defined here - try predecessor block.
                     if (depth <= 0)
                       return slice::Expr{slice::SymReg{r}};
                     auto predIt = preds.find(block.startAddress());
@@ -164,7 +176,7 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
 }
 
 // ---------------------------------------------------------------------------
-// buildFromOp — turn the defining Op into a SliceExpr
+// buildFromOp - turn the defining Op into a SliceExpr
 // ---------------------------------------------------------------------------
 
 slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
@@ -174,17 +186,19 @@ slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
   using Opc = ignil::Opcode;
 
   auto src = [&](int i) -> slice::Expr {
-    if (i >= static_cast<int>(op.srcs.size()))
-      return slice::Expr{slice::Undef{}};
+    if (i >= static_cast<int>(op.srcs.size())) {
+      ignil::Width w = op.dst ? ignil::widthOf(*op.dst) : ignil::Width{64};
+      return slice::Expr{slice::Undef{w}};
+    }
     return sliceValue(op.srcs[i], block, opIdx, graph, preds, depth);
   };
 
   switch (op.opcode) {
-    // Data movement — just forward the single source.
+    // Data movement - just forward the single source.
     case Opc::COPY:
       return src(0);
 
-    // Memory load — fold address expression.
+    // Memory load - fold address expression.
     case Opc::LOAD: {
       auto addrExpr = src(0);
       ignil::Width w = op.dst ? ignil::widthOf(*op.dst) : 64;
@@ -230,13 +244,17 @@ slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
     case Opc::SEXT:
     case Opc::TRUNC: {
       auto operand = src(0);
+      ignil::Width dstWidth = op.dst ? ignil::widthOf(*op.dst) : 0;
       return slice::Expr{slice::UnaryOp{
-              op.opcode, std::make_shared<slice::Expr>(std::move(operand))}};
+              op.opcode, std::make_shared<slice::Expr>(std::move(operand)),
+              dstWidth}};
     }
 
     // UNDEF and control-flow ops produce no useful expression.
-    default:
-      return slice::Expr{slice::Undef{}};
+    default: {
+      ignil::Width w = op.dst ? ignil::widthOf(*op.dst) : ignil::Width{64};
+      return slice::Expr{slice::Undef{w}};
+    }
   }
 }
 

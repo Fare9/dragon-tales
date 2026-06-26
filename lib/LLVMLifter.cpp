@@ -42,7 +42,7 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
     const auto *ib = graph.getIGNILBlock(addr);
     if (!ib)
       continue;
-    TempMap temps{}; // fresh per block — Temp ids don't cross block boundaries
+    TempMap temps{}; // fresh per block - Temp ids don't cross block boundaries
     liftBlock(ib, llfn, &regFile, &temps, memPtr, regsPtr, bbMap.value());
   }
   return true;

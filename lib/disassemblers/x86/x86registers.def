@@ -32,6 +32,12 @@ REG("ESI",  48,  32)
 REG("EDI",  56,  32)
 REG("R8D",  64,  32)
 REG("R9D",  72,  32)
+REG("R10D", 80,  32)
+REG("R11D", 88,  32)
+REG("R12D", 96,  32)
+REG("R13D", 104, 32)
+REG("R14D", 112, 32)
+REG("R15D", 120, 32)
 
 // 16-bit
 REG("AX",   0,   16)
@@ -59,7 +65,7 @@ REG("CH",   9,   8)
 REG("DH",   17,  8)
 REG("BH",   25,  8)
 
-// Flags — 1-byte slots, 1-bit semantics; offsets start at 136
+// Flags - 1-byte slots, 1-bit semantics; offsets start at 136
 REG("CF",   136, 8)
 REG("PF",   137, 8)
 REG("AF",   138, 8)

@@ -56,6 +56,10 @@ class Disassembler {
   disassemble(std::span<const std::uint8_t> bytes,
               std::uint64_t baseAddress) const;
 
+  /// disassemble receives a list of bytes to apply the disassembly
+  /// process, but this time, taking the base address, a disassembly
+  /// process is applied, and basic block and functions are generated,
+  /// all these values are stored into the Graph object.
   void disassemble(std::span<const std::uint8_t> bytes,
                    std::uint64_t baseAddress, Graph &graph) const;
 
@@ -69,6 +73,7 @@ class Disassembler {
   private:
   struct Impl;
 
+  // Use the LLVM internals for disassembling one instruction
   Instruction decodeOne(std::span<const std::uint8_t> bytes,
                         std::uint64_t address, std::size_t &offset) const;
 

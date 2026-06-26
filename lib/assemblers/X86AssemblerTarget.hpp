@@ -8,7 +8,7 @@
 namespace dragon::internal {
 
 /// Initialize LLVM for x86/x86-64 assembly and return a populated target.
-/// LLVM registration is performed once via std::call_once — thread safe.
+/// LLVM registration is performed once via std::call_once - thread safe.
 ///
 /// @param is64bit  true for x86-64, false for i386.
 /// @param cpu      LLVM CPU name.  Empty → "generic".

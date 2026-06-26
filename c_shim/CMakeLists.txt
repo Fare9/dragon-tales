@@ -17,3 +17,7 @@ target_link_libraries(libdragon_c
     PRIVATE
     dragon::libdragon
 )
+
+if(DRAGON_USE_Z3)
+    target_link_libraries(libdragon_c PRIVATE z3::libz3)
+endif()

@@ -626,6 +626,19 @@ class SliceExpr:
         finally:
             lib.dragon_cstr_free(raw)
 
+    def to_z3_string(self):
+        """Lower this expression through Z3 and return the Z3 bitvector
+        expression as a string.
+        Raises RuntimeError if the library was built without Z3 support."""
+        try:
+            raw = lib.dragon_slice_expr_to_z3_string(self._ptr)
+        except AttributeError:
+            raise RuntimeError('dragon was built without Z3 support (-DDRAGON_USE_Z3=ON required)')
+        try:
+            return ffi.string(raw).decode()
+        finally:
+            lib.dragon_cstr_free(raw)
+
     # -- CONST
 
     @property

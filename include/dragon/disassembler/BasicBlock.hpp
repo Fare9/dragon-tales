@@ -24,6 +24,7 @@ class BasicBlock {
   /// the address is not in blocks_q.valid or the block is non-contiguous.
   BasicBlock(const Graph *graph, std::uint64_t startAddress);
 
+  /// Return if the basic block was properly built
   [[nodiscard]] bool isValid() const { return valid_; }
 
   [[nodiscard]] std::uint64_t startAddress() const { return startAddress_; }
@@ -31,20 +32,20 @@ class BasicBlock {
     return terminatorAddress_;
   }
 
-  // Walk listing from startAddress to terminator (inclusive).
+  /// Walk listing from startAddress to terminator (inclusive).
   [[nodiscard]] std::vector<const Instruction *> instructions() const;
 
-  // Lookup a single instruction within this block by address.
+  /// Lookup a single instruction within this block by address.
   [[nodiscard]] const Instruction *get(std::uint64_t address) const;
 
-  // Terminator instruction (the last one in the block).
+  /// Terminator instruction (the last one in the block).
   [[nodiscard]] const Instruction *terminator() const;
 
   [[nodiscard]] std::size_t size() const; // instruction count
   [[nodiscard]] std::size_t byteSize() const; // total byte size
   [[nodiscard]] bool empty() const;
 
-  // For the successors of current block
+  /// For the successors of current block
   [[nodiscard]] std::set<std::uint64_t> successors() const;
 
   private:

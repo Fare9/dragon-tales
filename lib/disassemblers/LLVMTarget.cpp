@@ -42,18 +42,18 @@ dragon::LLVMTarget dragon::internal::buildTarget(const std::string &triple,
   if (!target.subtargetInfo)
     return target;
 
-  // 6. Context — ties everything together, needed for disassembler
+  // 6. Context - ties everything together, needed for disassembler
   target.context = std::make_unique<llvm::MCContext>(
           llvm::Triple(triple), target.asmInfo.get(), target.regInfo.get(),
           target.subtargetInfo.get());
 
-  // 7. Disassembler — the actual decoder
+  // 7. Disassembler - the actual decoder
   target.disassembler.reset(llvmTarget->createMCDisassembler(
           *target.subtargetInfo, *target.context));
   if (!target.disassembler)
     return target;
 
-  // 8. Printer — converts MCInst to mnemonic + operands strings
+  // 8. Printer - converts MCInst to mnemonic + operands strings
   // For x86: 0 = AT&T, 1 = Intel. Other arches only have 0.
   target.printer.reset(llvmTarget->createMCInstPrinter(
           llvm::Triple(triple), syntaxVariant, *target.asmInfo, *target.instrInfo,

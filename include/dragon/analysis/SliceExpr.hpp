@@ -36,23 +36,28 @@ struct BinOp {
 struct UnaryOp {
   ignil::Opcode op; ///< Unary operation
   std::shared_ptr<Expr> operand; ///< Operand for unary operation
+  ignil::Width resultWidth{
+          0}; ///< Target width for ZEXT/SEXT/TRUNC; 0 = same as operand
 };
 
 /// Value loaded from memory at a computed address.
 struct Load {
-  std::shared_ptr<Expr> addr; ///< Keep for the address an expression that can be solved
+  std::shared_ptr<Expr>
+          addr; ///< Keep for the address an expression that can be solved
   ignil::Width width; ///< width for that address in bits
 };
 
 /// Slicer could not determine the value (UNDEF source, depth exceeded,
 /// or a join node was reached).
-struct Undef {};
+struct Undef {
+  ignil::Width width{64};
+};
 
 /// Neutral symbolic expression produced by backward slicing.
 /// Use the Z3 lowerer to turn it into a solver formula.
 struct Expr {
   using Var = std::variant<Const, SymReg, BinOp, UnaryOp, Load, Undef>;
-  Var data;
+  Var data; ///< Data represents any of the possible expressions with ignil
 
   template<typename T>
   explicit Expr(T &&v) : data(std::forward<T>(v)) {}

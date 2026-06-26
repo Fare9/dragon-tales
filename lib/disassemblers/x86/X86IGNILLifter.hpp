@@ -2,8 +2,11 @@
 
 #include <dragon/Architecture.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
+
 #include <llvm/MC/MCInstrInfo.h>
 #include <llvm/MC/MCRegisterInfo.h>
+
+#include "utils/Logger.hpp"
 
 #include <functional>
 #include <map>
@@ -34,7 +37,7 @@ using FlagSetter = std::function<void(ignil::Block &, std::uint32_t &)>;
 /// Not all the instruction set is supported.
 class X86IGNILLifter {
   public:
-  X86IGNILLifter(Architecture architecture, const llvm::MCInstrInfo &instrInfo,
+  X86IGNILLifter(internal::Logger& logger, Architecture architecture, const llvm::MCInstrInfo &instrInfo,
                  const llvm::MCRegisterInfo &regInfo);
 
   /// Lift a complete basic block into an ignil::Block.
@@ -42,6 +45,8 @@ class X86IGNILLifter {
                                        const Graph &graph) const;
 
   private:
+  internal::Logger& logger_;
+
   Architecture architecture_;
   const llvm::MCInstrInfo *instrInfo_; // used for MCInstrDesc flag checks
 
@@ -83,11 +88,19 @@ class X86IGNILLifter {
   void liftJmp(const llvm::MCInst &mc, std::uint64_t addr,
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;
+  void liftJmpMem(const llvm::MCInst &mc, std::uint64_t addr,
+                  std::uint8_t insnSize, ignil::Block &out,
+                  std::uint32_t &tmp) const;
+  void liftCallMem(const llvm::MCInst &mc, std::uint64_t addr,
+                   std::uint8_t insnSize, ignil::Block &out,
+                   std::uint32_t &tmp) const;
   void liftCall(const llvm::MCInst &mc, std::uint64_t addr,
                 std::uint8_t insnSize, ignil::Block &out,
                 std::uint32_t &tmp) const;
   void liftRet(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
+  void liftLeave(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                 std::uint32_t &tmp) const;
 
   // Helpers
   // Translate an LLVM register integer to an ignil::Reg.
@@ -118,12 +131,12 @@ class X86IGNILLifter {
   // instructions we do not yet lift).
   void emitUndef(ignil::Reg dst, std::uint64_t addr, ignil::Block &out) const;
 
-  // EFLAGS helpers — iterate every EFLAGS register; for each flag present in
+  // EFLAGS helpers - iterate every EFLAGS register; for each flag present in
   // flagMap the corresponding FlagSetter is called, otherwise UNDEF is emitted.
   void emitArithFlags(std::uint64_t addr, ignil::Block &out, std::uint32_t &tmp,
                       const std::map<X86Flag, FlagSetter> &flagMap = {}) const;
 
-  // FlagSetter factories — each captures the operands it needs and returns a
+  // FlagSetter factories - each captures the operands it needs and returns a
   // callable suitable for the flagMap passed to emitArithFlags.
 
   // ZF = (value == 0)
@@ -173,10 +186,14 @@ class X86IGNILLifter {
   unsigned opCmp64ri_{}, opCmp32ri_{}, opCmp64ri8_{}, opCmp32ri8_{};
   unsigned opTest64rr_{}, opTest32rr_{};
   unsigned opJmp64r_{}, opJmp32r_{}; // indirect
+  unsigned opJmp64m_{}, opJmp32m_{}; // indirect memory jump
+  unsigned opCall64m_{}, opCall32m_{}; // indirect memory call
   unsigned opJmp_{}; // direct
   unsigned opCall64r_{}; // indirect
   unsigned opCall_{}; // direct
   unsigned opRet64_{}, opRetL_{};
+  unsigned opRetI64_{}, opRetIL_{}; // ret N  (callee-cleanup variant)
+  unsigned opLeave64_{}, opLeave_{}; // leave (decomposed to mov rsp,rbp / pop rbp)
 
   // LLVM register integer -> ignil::Reg mapping
   // Built once in constructor by scanning MCRegisterInfo +
@@ -187,7 +204,8 @@ class X86IGNILLifter {
   // in the constructor by name).
   ignil::Reg regCF_{}, regPF_{}, regAF_{};
   ignil::Reg regZF_{}, regSF_{}, regOF_{}, regDF_{};
-  ignil::Reg regRSP_{}, regESP_{}; // needed for push/pop
+  ignil::Reg regRSP_{}, regESP_{}; // needed for push/pop/leave
+  ignil::Reg regRBP_{}, regEBP_{}; // needed for leave decomposition
 };
 
 } // namespace x86
