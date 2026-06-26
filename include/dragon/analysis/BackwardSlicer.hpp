@@ -17,7 +17,7 @@ class Graph;
 /// Temp definitions are single-assignment so tracing is trivial.
 /// When a Reg value is not defined in the current block the slicer
 /// follows the unique predecessor (if one exists).  Blocks with more
-/// than one predecessor — join nodes — are not crossed: the Reg is
+/// than one predecessor - join nodes - are not crossed: the Reg is
 /// returned as SymReg (unknown).
 ///
 /// The depth parameter caps the number of inter-block steps, so the

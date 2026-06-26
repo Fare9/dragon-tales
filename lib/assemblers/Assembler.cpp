@@ -23,7 +23,7 @@
 #include <llvm/TargetParser/Triple.h>
 
 // -----------------------------------------------------------------------
-// Impl — holds the LLVM assembler target state, hidden from the public header
+// Impl - holds the LLVM assembler target state, hidden from the public header
 // -----------------------------------------------------------------------
 
 /// The Impl for Assembler contains the objects to use LLVM
@@ -169,7 +169,7 @@ dragon::Assembler::assemble(std::string_view text) const {
   llvm::SmallVector<char, 4096> outputBuffer;
   llvm::raw_svector_ostream outputStream(outputBuffer);
 
-  // Context and objectFileInfo recreated per call — MCContext is stateful
+  // Context and objectFileInfo recreated per call - MCContext is stateful
   auto context = std::make_unique<llvm::MCContext>(
           llvm::Triple(triple), target.asmInfo.get(), target.regInfo.get(),
           target.subtargetInfo.get());

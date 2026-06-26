@@ -14,7 +14,7 @@ namespace dragon::ignil {
 using Width = std::uint8_t;
 
 // -----------------------------------------------------------------------
-// Values — the operands and destinations of IGNIL operations
+// Values - the operands and destinations of IGNIL operations
 // -----------------------------------------------------------------------
 
 /// A constant integer value of a given bit width.

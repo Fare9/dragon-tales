@@ -161,10 +161,10 @@ TEST_CASE("IGNIL lifting - conditional branch (cmp/jle)", "[ignil][x86_64]") {
 }
 
 // -----------------------------------------------------------------------
-// Test 4: indirect jump through memory — jmp [rax]
+// Test 4: indirect jump through memory - jmp [rax]
 // -----------------------------------------------------------------------
 
-TEST_CASE("IGNIL lifting — indirect jump through memory (jmp [rax])", "[ignil][x86_64]") {
+TEST_CASE("IGNIL lifting - indirect jump through memory (jmp [rax])", "[ignil][x86_64]") {
   // 0x1000: FF 20   jmp [rax]
   // 0x1002: C3      ret       (unreachable; gives the block a terminator)
   const std::vector<std::uint8_t> bytes = {
@@ -197,10 +197,10 @@ TEST_CASE("IGNIL lifting — indirect jump through memory (jmp [rax])", "[ignil]
 }
 
 // -----------------------------------------------------------------------
-// Test 5: indirect call through memory — call [rbx + rcx*8]
+// Test 5: indirect call through memory - call [rbx + rcx*8]
 // -----------------------------------------------------------------------
 
-TEST_CASE("IGNIL lifting — indirect call through memory (call [rbx + rcx*8])", "[ignil][x86_64]") {
+TEST_CASE("IGNIL lifting - indirect call through memory (call [rbx + rcx*8])", "[ignil][x86_64]") {
   // 0x1000: FF 14 CB   call [rbx + rcx*8]   (virtual dispatch / jump table)
   // 0x1003: C3         ret
   const std::vector<std::uint8_t> bytes = {

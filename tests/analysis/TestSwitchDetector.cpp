@@ -35,7 +35,7 @@ static Expr makeJumpTableExpr(std::uint64_t base, const ignil::Reg &reg,
 }
 
 // ---------------------------------------------------------------------------
-// Phase 1 — structural pattern matching (empty graph, no bounds extraction)
+// Phase 1 - structural pattern matching (empty graph, no bounds extraction)
 // ---------------------------------------------------------------------------
 
 TEST_CASE("SwitchDetector -- detects 8-byte jump-table pattern", "[switch]") {
@@ -67,7 +67,7 @@ TEST_CASE("SwitchDetector -- detects 4-byte jump-table pattern", "[switch]") {
 }
 
 TEST_CASE("SwitchDetector -- commutative outer ADD (MUL before base)", "[switch]") {
-  // ADD(MUL(idx, scale), base) — base is the right operand
+  // ADD(MUL(idx, scale), base) - base is the right operand
   auto g   = emptyGraph();
   ignil::Reg rax{0, 64, "RAX"};
   auto baseE  = std::make_shared<Expr>(slice::Const{0x5000, 64});
@@ -84,7 +84,7 @@ TEST_CASE("SwitchDetector -- commutative outer ADD (MUL before base)", "[switch]
 }
 
 TEST_CASE("SwitchDetector -- commutative inner MUL (scale before index)", "[switch]") {
-  // LOAD(ADD(base, MUL(scale, idx))) — scale is the left MUL operand
+  // LOAD(ADD(base, MUL(scale, idx))) - scale is the left MUL operand
   auto g   = emptyGraph();
   ignil::Reg rdx{24, 64, "RDX"};
   auto baseE  = std::make_shared<Expr>(slice::Const{0x6000, 64});
@@ -130,7 +130,7 @@ TEST_CASE("SwitchDetector -- rejects ADD without Load wrapper", "[switch]") {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2 — bounds extraction from a CJMP predecessor block
+// Phase 2 - bounds extraction from a CJMP predecessor block
 // ---------------------------------------------------------------------------
 
 TEST_CASE("SwitchDetector -- extracts numCases from UGE predecessor",

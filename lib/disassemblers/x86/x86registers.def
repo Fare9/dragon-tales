@@ -65,7 +65,7 @@ REG("CH",   9,   8)
 REG("DH",   17,  8)
 REG("BH",   25,  8)
 
-// Flags — 1-byte slots, 1-bit semantics; offsets start at 136
+// Flags - 1-byte slots, 1-bit semantics; offsets start at 136
 REG("CF",   136, 8)
 REG("PF",   137, 8)
 REG("AF",   138, 8)

@@ -101,7 +101,7 @@ slice::Expr BackwardSlicer::slice(const ignil::Value &root,
 }
 
 // ---------------------------------------------------------------------------
-// sliceValue — resolve a Value backwards through ops
+// sliceValue - resolve a Value backwards through ops
 // ---------------------------------------------------------------------------
 
 slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
@@ -133,7 +133,7 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
                           return buildFromOp(op, block, i, graph, preds, depth);
                       }
                     }
-                    // Not defined in this block — temps never cross blocks,
+                    // Not defined in this block - temps never cross blocks,
                     // treat as undef.
                     return slice::Expr{slice::Undef{t.width}};
                   },
@@ -157,7 +157,7 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
                           return buildFromOp(op, block, i, graph, preds, depth);
                       }
                     }
-                    // Not defined here — try predecessor block.
+                    // Not defined here - try predecessor block.
                     if (depth <= 0)
                       return slice::Expr{slice::SymReg{r}};
                     auto predIt = preds.find(block.startAddress());
@@ -176,7 +176,7 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
 }
 
 // ---------------------------------------------------------------------------
-// buildFromOp — turn the defining Op into a SliceExpr
+// buildFromOp - turn the defining Op into a SliceExpr
 // ---------------------------------------------------------------------------
 
 slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
@@ -194,11 +194,11 @@ slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
   };
 
   switch (op.opcode) {
-    // Data movement — just forward the single source.
+    // Data movement - just forward the single source.
     case Opc::COPY:
       return src(0);
 
-    // Memory load — fold address expression.
+    // Memory load - fold address expression.
     case Opc::LOAD: {
       auto addrExpr = src(0);
       ignil::Width w = op.dst ? ignil::widthOf(*op.dst) : 64;

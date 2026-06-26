@@ -25,7 +25,7 @@ namespace dragon {
 /// afterwards via setters once the surrounding CFG is understood.
 ///
 /// String fields (mnemonic, operands, disassembly, pattern) are stored as
-/// std::string internally and exposed as std::string_view — the views are
+/// std::string internally and exposed as std::string_view - the views are
 /// valid for the lifetime of the Instruction.
 ///
 /// The opaque Impl holds the raw LLVM MCInst. It is null for instructions

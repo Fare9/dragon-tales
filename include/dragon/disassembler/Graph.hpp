@@ -87,7 +87,7 @@ class Graph {
     return listing_;
   }
 
-  // View accessors — iterate valid sets, construct views on the fly
+  // View accessors - iterate valid sets, construct views on the fly
 
   /// Retrieve the pointers to all instructions in a vector.
   [[nodiscard]] std::vector<Instruction *> instructions();

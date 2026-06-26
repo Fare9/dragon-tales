@@ -19,7 +19,7 @@ dragon::BasicBlock::BasicBlock(const Graph *graph, std::uint64_t startAddress) :
     if (hasPrev && insn.address() != expectedNext)
       return;
 
-    // Next block starts here (not the entry) — previous insn is the terminator
+    // Next block starts here (not the entry) - previous insn is the terminator
     if (insn.address() != startAddress_ && insn.isBlockStart()) {
       if (!prevInsn)
         return;

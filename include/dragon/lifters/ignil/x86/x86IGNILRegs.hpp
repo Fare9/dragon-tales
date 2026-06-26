@@ -25,7 +25,7 @@
 namespace dragon::x86 {
 
 // ---------------------------------------------------------------------------
-// Offset constants — use these if you need the raw byte offset.
+// Offset constants - use these if you need the raw byte offset.
 // ---------------------------------------------------------------------------
 
 inline constexpr ignil::Width k8  =  8;
@@ -146,7 +146,7 @@ inline const ignil::Reg R15B{kOffR15, k8, "R15B"};
 
 // ---------------------------------------------------------------------------
 // 8-bit high registers (byte 1 of the parent 64-bit register).
-// Only available for RAX, RCX, RDX, RBX — the legacy high-byte aliases.
+// Only available for RAX, RCX, RDX, RBX - the legacy high-byte aliases.
 // ---------------------------------------------------------------------------
 
 inline const ignil::Reg AH{kOffRAX + 1, k8, "AH"};
@@ -155,7 +155,7 @@ inline const ignil::Reg DH{kOffRDX + 1, k8, "DH"};
 inline const ignil::Reg BH{kOffRBX + 1, k8, "BH"};
 
 // ---------------------------------------------------------------------------
-// EFLAGS — 8-bit wide in the IGNIL register space (one byte slot each).
+// EFLAGS - 8-bit wide in the IGNIL register space (one byte slot each).
 // ---------------------------------------------------------------------------
 
 inline const ignil::Reg CF{kOffCF, k8, "CF"}; ///< Carry flag

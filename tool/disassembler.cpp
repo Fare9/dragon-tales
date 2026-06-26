@@ -206,7 +206,7 @@ int main(int argc, char **argv) {
   dis.disassemble(std::span{sectionData, sectionSize}, sectionAddress, g);
 
   if (g.empty()) {
-    std::cerr << "No instructions decoded — check architecture or section.\n";
+    std::cerr << "No instructions decoded - check architecture or section.\n";
     return 1;
   }
 

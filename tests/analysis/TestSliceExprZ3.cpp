@@ -21,10 +21,10 @@ static std::shared_ptr<Expr> sym(const dragon::ignil::Reg &r) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 1: lower() on a Const node — Z3 bitvector equals that value
+// Test 1: lower() on a Const node - Z3 bitvector equals that value
 // ---------------------------------------------------------------------------
 
-TEST_CASE("SliceExprZ3 — lower Const node", "[z3][lowerer]") {
+TEST_CASE("SliceExprZ3 - lower Const node", "[z3][lowerer]") {
     z3::context ctx;
     SliceExprZ3 lowerer{ctx};
 
@@ -50,7 +50,7 @@ TEST_CASE("SliceExprZ3 — lower Const node", "[z3][lowerer]") {
 // the fast path misses it.  Z3 resolves it to the single value 0x3008.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("SliceExprZ3 — enumeratedValues collapses constant ADD",
+TEST_CASE("SliceExprZ3 - enumeratedValues collapses constant ADD",
           "[z3][enumerator]") {
     z3::context ctx;
     Expr e{BinOp{dragon::ignil::Opcode::ADD, cst(0x3000), cst(8)}};
@@ -69,7 +69,7 @@ TEST_CASE("SliceExprZ3 — enumeratedValues collapses constant ADD",
 // for RAX: ctx.bv_const("RAX:64", 64).
 // ---------------------------------------------------------------------------
 
-TEST_CASE("SliceExprZ3 — enumeratedValues with OR constraint on SymReg",
+TEST_CASE("SliceExprZ3 - enumeratedValues with OR constraint on SymReg",
           "[z3][enumerator]") {
     z3::context ctx;
     Expr e{SymReg{x86::RAX}};
@@ -96,7 +96,7 @@ TEST_CASE("SliceExprZ3 — enumeratedValues with OR constraint on SymReg",
 // Models: mov rbx, rax ; add rbx, 8 ; jmp rbx  where rax == 0x1000.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("SliceExprZ3 — enumeratedValues on ADD(SymReg, Const) with bound",
+TEST_CASE("SliceExprZ3 - enumeratedValues on ADD(SymReg, Const) with bound",
           "[z3][enumerator]") {
     z3::context ctx;
     Expr e{BinOp{dragon::ignil::Opcode::ADD, sym(x86::RAX), cst(8)}};
@@ -111,10 +111,10 @@ TEST_CASE("SliceExprZ3 — enumeratedValues on ADD(SymReg, Const) with bound",
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: solveUnique — constant expression has a unique solution
+// Test 5: solveUnique - constant expression has a unique solution
 // ---------------------------------------------------------------------------
 
-TEST_CASE("SliceExprZ3 — solveUnique on Const returns that value",
+TEST_CASE("SliceExprZ3 - solveUnique on Const returns that value",
           "[z3][enumerator]") {
     z3::context ctx;
     Expr e{Const{0xdeadbeef, 64}};
@@ -126,10 +126,10 @@ TEST_CASE("SliceExprZ3 — solveUnique on Const returns that value",
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: solveUnique — multiple solutions → nullopt
+// Test 6: solveUnique - multiple solutions → nullopt
 // ---------------------------------------------------------------------------
 
-TEST_CASE("SliceExprZ3 — solveUnique returns nullopt when not unique",
+TEST_CASE("SliceExprZ3 - solveUnique returns nullopt when not unique",
           "[z3][enumerator]") {
     z3::context ctx;
     Expr e{SymReg{x86::RAX}};
@@ -146,10 +146,10 @@ TEST_CASE("SliceExprZ3 — solveUnique returns nullopt when not unique",
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: solveUnique — single-value constraint → that value
+// Test 7: solveUnique - single-value constraint → that value
 // ---------------------------------------------------------------------------
 
-TEST_CASE("SliceExprZ3 — solveUnique finds the one constrained value",
+TEST_CASE("SliceExprZ3 - solveUnique finds the one constrained value",
           "[z3][enumerator]") {
     z3::context ctx;
     Expr e{SymReg{x86::RAX}};

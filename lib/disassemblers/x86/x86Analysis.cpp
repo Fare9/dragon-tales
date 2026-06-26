@@ -122,7 +122,7 @@ void dragon::x86::X86Analysis::discoverEpilogues(
       continue;
     }
 
-    // hlt followed by an unconditional jmp is a kernel idle loop — the jmp
+    // hlt followed by an unconditional jmp is a kernel idle loop - the jmp
     // stays inside the same function, so don't promote the target to a
     // function start (block boundary only).
     const bool isHltEpilogue =
@@ -144,6 +144,12 @@ void dragon::x86::X86Analysis::discoverEpilogues(
       if (isHltEpilogue && next.isJump() && !next.isConditional()) {
         blockStarts.insert(next.address());
         logger_.log("hlt+jmp idle loop at 0x{:x}, 0x{:x} is block boundary only",
+                    instructions[i].address(), next.address());
+      } else if (blockStarts.contains(next.address())) {
+        // Already a known branch target - it belongs to the current function's
+        // CFG, not a new function entry (e.g. the else-block after a then-ret).
+        logger_.log("Epilogue at 0x{:x}: 0x{:x} is a branch target, skipping "
+                    "function-start promotion",
                     instructions[i].address(), next.address());
       } else {
         functionStarts.insert(next.address());

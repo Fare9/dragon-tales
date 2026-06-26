@@ -117,7 +117,7 @@ size_t dragon::X86Info::x8664bitIsCommonPrologue(
     }
   }
 
-  // endbr64 alone — still a function entry, skip just that one instruction.
+  // endbr64 alone - still a function entry, skip just that one instruction.
   return offset;
 }
 

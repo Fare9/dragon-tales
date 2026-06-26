@@ -1,5 +1,5 @@
 // X-macro: OP_NAME(op)
-// Entries must stay in the same order as ignil::Opcode — the array is indexed by value.
+// Entries must stay in the same order as ignil::Opcode - the array is indexed by value.
 
 OP_NAME(COPY)
 OP_NAME(LOAD)

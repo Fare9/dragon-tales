@@ -65,6 +65,8 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   regDF_ = findFlagReg("DF");
   regRSP_ = findGprReg("RSP");
   regESP_ = findGprReg("ESP");
+  regRBP_ = findGprReg("RBP");
+  regEBP_ = findGprReg("EBP");
 
   // Scan opcodes by name: map LLVM mnemonic string -> pointer-to-member field.
   using OpcField = unsigned X86IGNILLifter::*;
@@ -121,6 +123,10 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"CALL64pcrel32", &X86IGNILLifter::opCall_},
           {"RET64", &X86IGNILLifter::opRet64_},
           {"RETL", &X86IGNILLifter::opRetL_},
+          {"RETI64", &X86IGNILLifter::opRetI64_},
+          {"RETIL", &X86IGNILLifter::opRetIL_},
+          {"LEAVE64", &X86IGNILLifter::opLeave64_},
+          {"LEAVE", &X86IGNILLifter::opLeave_},
   };
 
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
@@ -185,8 +191,11 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftTest(*mc, addr, out, tempId);
   else if (opc == opCall_ || opc == opCall64r_)
     liftCall(*mc, addr, insn.size(), out, tempId);
-  else if (opc == opRet64_ || opc == opRetL_)
+  else if (opc == opRet64_ || opc == opRetL_ ||
+           opc == opRetI64_ || opc == opRetIL_)
     liftRet(*mc, addr, out, tempId);
+  else if (opc == opLeave64_ || opc == opLeave_)
+    liftLeave(*mc, addr, out, tempId);
   else if (opc == opJmp64m_ || opc == opJmp32m_)
     liftJmpMem(*mc, addr, insn.size(), out, tempId);
   else if (opc == opCall64m_ || opc == opCall32m_)
@@ -639,7 +648,39 @@ void dragon::x86::X86IGNILLifter::liftCall(const llvm::MCInst &mc,
 void dragon::x86::X86IGNILLifter::liftRet(const llvm::MCInst &mc,
                                           std::uint64_t addr, ignil::Block &out,
                                           std::uint32_t &tmp) const {
+  // ret N (RETI64/RETIL) pops N extra bytes after the return address, but
+  // control transfers before that cleanup is visible to the callee, so a
+  // plain RET is sufficient for intra-function analysis.
   out.append({ignil::Opcode::RET, std::nullopt, {}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftLeave(const llvm::MCInst &mc,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  // leave ≡  mov rsp, rbp  ;  pop rbp
+  // Decomposed into IGNIL primitives (P-CODE / VEX style):
+  //   rsp  = rbp
+  //   t0   = memory[rsp]
+  //   rbp  = t0
+  //   rsp  = rsp + ptrBytes
+  const bool is64 = (architecture_ == Architecture::X86_64);
+  const ignil::Width ptrWidth = is64 ? 64 : 32;
+  const std::uint64_t ptrBytes = is64 ? 8 : 4;
+  ignil::Reg sp = is64 ? regRSP_ : regESP_;
+  ignil::Reg bp = is64 ? regRBP_ : regEBP_;
+
+  // mov rsp, rbp
+  out.append({ignil::Opcode::COPY, sp, {bp}, addr});
+
+  // pop rbp
+  auto loaded = newTemp(tmp, bp.width);
+  out.append({ignil::Opcode::LOAD, loaded, {sp}, addr});
+  out.append({ignil::Opcode::COPY, bp, {loaded}, addr});
+  auto newSP = newTemp(tmp, ptrWidth);
+  out.append({ignil::Opcode::ADD, newSP,
+              {sp, ignil::Const{ptrBytes, ptrWidth}}, addr});
+  out.append({ignil::Opcode::COPY, sp, {newSP}, addr});
 }
 std::optional<dragon::ignil::Reg>
 dragon::x86::X86IGNILLifter::toReg(unsigned llvmReg) const {

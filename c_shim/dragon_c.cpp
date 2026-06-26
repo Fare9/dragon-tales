@@ -55,7 +55,7 @@ static dragon::Syntax to_syntax(dragon_syntax_t s) {
   return s == DRAGON_SYNTAX_ATT ? dragon::Syntax::ATT : dragon::Syntax::INTEL;
 }
 
-// -- dragon_config — full definition
+// -- dragon_config - full definition
 struct dragon_config {
   dragon::Configuration config;
 };
@@ -108,7 +108,7 @@ int dragon_config_logging(const dragon_config_t *c) {
   return c && c->config.logging ? 1 : 0;
 }
 
-// -- dragon_asm_t — full definition
+// -- dragon_asm_t - full definition
 struct dragon_asm {
   dragon::Assembler assembler;
 };
@@ -142,7 +142,7 @@ uint8_t *dragon_asm_assemble(dragon_asm_t *a, const char *source,
 
 void dragon_bytes_free(uint8_t *bytes) { delete[] bytes; }
 
-// -- dragon_disasm_t — full definition
+// -- dragon_disasm_t - full definition
 struct dragon_disasm {
   dragon::Architecture arch;
   dragon::Configuration config;
@@ -441,7 +441,7 @@ const char *dragon_ignil_opcode_name(dragon_ignil_opcode_t op) {
 }
 
 // =============================================================================
-// IGNIL block — borrowed from graph via reinterpret_cast
+// IGNIL block - borrowed from graph via reinterpret_cast
 // =============================================================================
 
 static const dragon::ignil::Block *
