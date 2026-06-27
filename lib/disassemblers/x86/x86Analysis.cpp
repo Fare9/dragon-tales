@@ -54,12 +54,20 @@ bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
   for (auto &insn: instructions)
     graph.addInstruction(std::move(insn));
 
+  // Indirect-jump resolution via backward slicing / Z3 requires a
+  // control-flow-accurate block set. Linear sweep decodes the whole section
+  // sequentially, so resolved targets routinely land mid-instruction or inside
+  // data (jump tables, SIMD constants), corrupting the existing block layout.
+  const bool canResolve = configuration_.disassemblyStrategy !=
+                          DisassemblyStrategy::LINEAR_SWEEP;
+
   bool changed = true;
   while (changed) {
     changed = false;
     commitPending(graph, blockStarts, fnStarts);
     liftPendingBlocks(graph);
-    if (resolveIndirectJumps(graph, bytes, baseAddr, blockStarts, fnStarts))
+    if (canResolve &&
+        resolveIndirectJumps(graph, bytes, baseAddr, blockStarts, fnStarts))
       changed = true;
   }
 

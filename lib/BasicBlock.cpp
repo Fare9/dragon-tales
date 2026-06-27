@@ -4,7 +4,7 @@
 dragon::BasicBlock::BasicBlock(const Graph *graph, std::uint64_t startAddress) :
     graph_(graph), startAddress_(startAddress), terminatorAddress_(0),
     valid_(false) {
-  if (!graph_ || !graph_->blocks_q.is_valid(startAddress_))
+  if (!graph_ || !graph_->isValidBlock(startAddress_))
     return;
 
   std::uint64_t expectedNext = 0;
@@ -71,8 +71,8 @@ const dragon::Instruction *dragon::BasicBlock::terminator() const {
   return graph_->get(terminatorAddress_);
 }
 
-std::set<std::uint64_t> dragon::BasicBlock::successors() const {
-  const Instruction *term = terminator();
+static std::set<std::uint64_t>
+computeSuccessors(const dragon::Instruction *term) {
   if (!term || term->isReturn() || term->isTrap())
     return {};
   if (term->isJump() && term->isConditional()) {
@@ -82,8 +82,35 @@ std::set<std::uint64_t> dragon::BasicBlock::successors() const {
   }
   if (!term->branches().empty())
     return term->branches();
-  // Non-jump block end: fall-through is the instruction immediately after
   return {term->address() + term->size()};
+}
+
+const std::set<std::uint64_t> &dragon::BasicBlock::successors() const {
+  if (!successors_)
+    successors_ = computeSuccessors(terminator());
+  return *successors_;
+}
+
+const std::set<std::uint64_t> &dragon::BasicBlock::predecessors() const {
+  if (!predecessors_) {
+    std::set<std::uint64_t> result;
+    if (valid_) {
+      for (std::uint64_t addr : graph_->validBlockAddresses()) {
+        if (addr == startAddress_)
+          continue;
+        BasicBlock bb{graph_, addr};
+        if (bb.isValid() && bb.successors().contains(startAddress_))
+          result.insert(addr);
+      }
+    }
+    predecessors_ = std::move(result);
+  }
+  return *predecessors_;
+}
+
+void dragon::BasicBlock::clearCache() {
+  successors_.reset();
+  predecessors_.reset();
 }
 
 std::size_t dragon::BasicBlock::size() const { return instructions().size(); }

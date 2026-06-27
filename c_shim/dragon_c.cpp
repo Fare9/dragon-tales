@@ -214,14 +214,14 @@ void dragon_graph_each_instruction(const dragon_graph_t *g,
 
 void dragon_graph_each_block_address(const dragon_graph_t *g,
                                      void (*cb)(uint64_t, void *), void *user) {
-  for (uint64_t addr: as_graph(g)->blocks_q.valid())
+  for (uint64_t addr: as_graph(g)->validBlockAddresses())
     cb(addr, user);
 }
 
 void dragon_graph_each_function_address(const dragon_graph_t *g,
                                         void (*cb)(uint64_t, void *),
                                         void *user) {
-  for (uint64_t addr: as_graph(g)->functions_q.valid())
+  for (uint64_t addr: as_graph(g)->validFunctionAddresses())
     cb(addr, user);
 }
 

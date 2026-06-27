@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <format>
 #include <iostream>
+#include <set>
 #include <span>
 #include <string>
 
@@ -59,6 +60,9 @@ struct Options {
           dragon::DisassemblyStrategy::LINEAR_SWEEP;
   dragon::Syntax syntax = dragon::Syntax::INTEL;
   std::string sectionName = ".text";
+#ifdef DRAGON_WITH_Z3
+  bool z3 = false;
+#endif
 };
 
 static void printUsage(const char *prog) {
@@ -68,6 +72,8 @@ static void printUsage(const char *prog) {
                "riscv32, riscv64\n"
             << "  --strategy <s>     Disassembly strategy: linear (default), "
                "recursive\n"
+            << "  --z3               Use Z3 to discover new paths in indirect"
+               "jumps\n"
             << "  --syntax <s>       Output syntax: intel (default), att\n"
             << "  --section <name>   Section name (default: .text)\n";
 }
@@ -107,7 +113,13 @@ static Options parseArgs(int argc, char **argv) {
       }
     } else if ((arg == "--section") && i + 1 < argc) {
       opts.sectionName = argv[++i];
-    } else {
+    }
+#ifdef DRAGON_WITH_Z3
+    else if (arg == "--z3") {
+      opts.z3 = true;
+    }
+#endif
+    else {
       std::cerr << "Unknown option: " << arg << '\n';
       printUsage(argv[0]);
       std::exit(1);
@@ -194,6 +206,10 @@ int main(int argc, char **argv) {
   cfg.disassemblyStrategy = opts.strategy;
   cfg.syntax = opts.syntax;
   cfg.logging = true;
+#ifdef DRAGON_WITH_Z3
+  cfg.useZ3ForPathDiscovery = opts.z3;
+#endif
+
 
   dragon::Disassembler dis(arch, cfg);
   if (!dis.isValid()) {
@@ -210,16 +226,26 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // Build function-start address set for annotation
+  std::vector<dragon::Function> fns = g.functions();
+  std::set<std::uint64_t> fnStarts;
+  for (const dragon::Function &fn: fns)
+    fnStarts.insert(fn.startAddress());
+
   // Print basic blocks
   const std::string sep(72, '-');
   const std::string hdr(72, '=');
   std::cout << hdr << '\n'
-            << std::format(
-                       "  Disassembly of '{}' ({} instructions, {} blocks)\n",
-                       opts.sectionName, g.size(), g.blocks().size())
+            << std::format("  Disassembly of '{}' ({} instructions, {} blocks,"
+                           " {} functions)\n",
+                           opts.sectionName, g.size(), g.blocks().size(),
+                           fns.size())
             << hdr << '\n';
 
   for (const dragon::BasicBlock &block: g.blocks()) {
+    if (fnStarts.contains(block.startAddress()))
+      std::cout << std::format("\n; ---- function sub_{:x} ----\n",
+                               block.startAddress());
     std::cout << std::format("\nBlock @ 0x{:x}\n{}\n", block.startAddress(),
                              sep);
     auto ignilBlock = g.getIGNILBlock(block.startAddress());

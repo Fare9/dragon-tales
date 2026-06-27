@@ -4,7 +4,7 @@
 
 dragon::Function::Function(const Graph *graph, std::uint64_t startAddress) :
     graph_(graph), startAddress_(startAddress), valid_(false) {
-  if (!graph_ || !graph_->functions_q.is_valid(startAddress_))
+  if (!graph_ || !graph_->isValidFunction(startAddress_))
     return;
 
   std::set<std::uint64_t> queue;
@@ -16,7 +16,7 @@ dragon::Function::Function(const Graph *graph, std::uint64_t startAddress) :
     queue.erase(queue.begin());
     processed.insert(blockAddr);
 
-    if (graph_->blocks_q.is_invalid(blockAddr))
+    if (graph_->isInvalidBlock(blockAddr))
       return; // bad block inside the function - bail entirely
     // generate a new block as a starting address and
     // the same graph object
@@ -25,7 +25,7 @@ dragon::Function::Function(const Graph *graph, std::uint64_t startAddress) :
       continue;
     // Add successors to add them to the function
     for (std::uint64_t succ: block.successors()) {
-      if (!processed.count(succ) && !graph_->functions_q.is_valid(succ))
+      if (!processed.count(succ) && !graph_->isValidFunction(succ))
         queue.insert(succ);
     }
 
