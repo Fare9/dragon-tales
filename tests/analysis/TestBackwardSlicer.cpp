@@ -17,8 +17,7 @@ namespace x86 = dragon::x86;
 static void addValidBlock(dragon::Graph &g, dragon::ignil::Block block) {
   std::uint64_t addr = block.startAddress();
   g.addIGNILBlock(std::move(block));
-  g.blocks_q.mark_processed(addr);
-  g.blocks_q.mark_valid(addr);
+  g.addBlock(addr);
 }
 
 // ---------------------------------------------------------------------------

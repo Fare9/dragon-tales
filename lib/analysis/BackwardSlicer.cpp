@@ -60,11 +60,11 @@ BackwardSlicer::PredMap
 BackwardSlicer::buildPredecessorMap(const Graph &graph) const {
   // predecessor count: addr → list of predecessor addresses
   std::unordered_map<std::uint64_t, std::vector<std::uint64_t>> incoming;
-  for (std::uint64_t addr: graph.blocks_q.valid()) {
+  for (std::uint64_t addr: graph.validBlockAddresses()) {
     // Initialize the incoming maps with all the blocks
     incoming.emplace(addr, std::vector<std::uint64_t>{});
   }
-  for (std::uint64_t addr: graph.blocks_q.valid()) {
+  for (std::uint64_t addr: graph.validBlockAddresses()) {
     // retrieve the ignil block from address
     const ignil::Block *blk = graph.getIGNILBlock(addr);
     if (!blk)

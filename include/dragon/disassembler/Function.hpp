@@ -23,7 +23,7 @@ class Function {
   public:
   /// Constructs a view over the function starting at startAddress.
   /// BFS over blocks via their successors, collects all reachable blocks.
-  /// Sets valid_ = false if address is not in functions_q.valid or has no
+  /// Sets valid_ = false if address is not a known valid function or has no
   /// blocks.
   Function(const Graph *graph, std::uint64_t startAddress);
 
