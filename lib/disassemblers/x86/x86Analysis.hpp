@@ -31,8 +31,8 @@ class X86Analysis {
   /// and the configuration for logging.
   X86Analysis(Architecture architecture, const Disassembler &disassembler,
               const Configuration &configuration,
-                  const llvm::MCInstrInfo &instrInfo,
-                  const llvm::MCRegisterInfo &regInfo);
+              const llvm::MCInstrInfo &instrInfo,
+              const llvm::MCRegisterInfo &regInfo);
   ~X86Analysis();
   /// Populate the graph received with the decoded
   /// instructions, blocks and functions.
@@ -54,10 +54,10 @@ class X86Analysis {
   /// Scan for epilogue sequences and mark the instruction that follows each
   /// one (after skipping up to 16 bytes of nop/trap padding) as a candidate
   /// function and block start.
-  void discoverEpilogues(
-          std::vector<Instruction> &instructions,
-          std::unordered_set<std::uint64_t> &blockStarts,
-          std::unordered_set<std::uint64_t> &functionStarts) const;
+  void
+  discoverEpilogues(std::vector<Instruction> &instructions,
+                    std::unordered_set<std::uint64_t> &blockStarts,
+                    std::unordered_set<std::uint64_t> &functionStarts) const;
 
   /// We apply a simple analysis to retrieve the beginning of the functions
   /// we follow calls to look for functions, those points will be marked
@@ -86,16 +86,14 @@ class X86Analysis {
   /// Returns true if new instructions were added.
   bool integrateNewBlock(std::uint64_t target,
                          std::span<const std::uint8_t> bytes,
-                         std::uint64_t baseAddr,
-                         Graph &graph,
+                         std::uint64_t baseAddr, Graph &graph,
                          std::unordered_set<std::uint64_t> &blockStarts,
                          std::unordered_set<std::uint64_t> &fnStarts) const;
 
   /// Scan all lifted IGNIL blocks for unresolved indirect JMPs, resolve them
   /// via backward slicing (and optionally Z3), and integrate new targets.
   /// Returns true if at least one new block start was discovered.
-  bool resolveIndirectJumps(Graph &graph,
-                            std::span<const std::uint8_t> bytes,
+  bool resolveIndirectJumps(Graph &graph, std::span<const std::uint8_t> bytes,
                             std::uint64_t baseAddr,
                             std::unordered_set<std::uint64_t> &blockStarts,
                             std::unordered_set<std::uint64_t> &fnStarts) const;
