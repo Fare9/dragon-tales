@@ -1,5 +1,7 @@
 #include <dragon/analysis/ValueEnumerator.hpp>
 
+#include <algorithm>
+
 #include <dragon/analysis/SliceExprZ3.hpp>
 
 std::vector<std::uint64_t>

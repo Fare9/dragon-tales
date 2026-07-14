@@ -105,7 +105,7 @@ class ARMAnalysis {
   const Configuration &configuration_;
   const llvm::MCInstrInfo &instrInfo_;
   const llvm::MCRegisterInfo &regInfo_;
-  const ARMInfo &armInfo_;
+  const ARMInfo *armInfo_;
   std::unique_ptr<ARMIGNILLifter> armIgnilLifter_;
   internal::Logger logger_;
 };

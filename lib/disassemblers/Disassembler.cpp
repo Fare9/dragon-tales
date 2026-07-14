@@ -8,6 +8,7 @@
 #include "disassemblers/LLVMTarget.hpp"
 #include "disassemblers/RISCVTarget.hpp"
 #include "disassemblers/X86Target.hpp"
+#include "disassemblers/arm/armAnalysis.hpp"
 #include "disassemblers/x86/x86Analysis.hpp"
 #include "utils/Logger.hpp"
 
@@ -105,7 +106,13 @@ void dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
       break;
     }
     case Architecture::ARM32:
-    case Architecture::ARM64:
+    case Architecture::ARM64: {
+      arm::ARMAnalysis armAnalysis{architecture_, *this, configuration_,
+                                   *impl_->target.instrInfo,
+                                   *impl_->target.regInfo};
+      armAnalysis.analyze(bytes, baseAddress, graph);
+      break;
+    }
     case Architecture::RISCV32:
     case Architecture::RISCV64:
       std::cerr << "Not implemented yet\n";
@@ -183,21 +190,43 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
   // We keep the LLVM object just in case we are going to use it later.
   insn.impl_ = std::make_unique<Instruction::Impl>(Instruction::Impl{inst});
 
-  // Resolve direct branch target from immediate operand
+  // Resolve direct branch target from immediate operand.
+  //
+  // AArch64 encodes B/Bcc/CBZ/CBNZ/TBZ/TBNZ targets as a signed
+  // *instruction-count* offset (not bytes) from the branch instruction's own
+  // address (not address+size like x86's variable-length encoding), and the
+  // target is always the last operand: B=[tgt], Bcc=[cond,tgt],
+  // CBZ/CBNZ=[Rt,tgt], TBZ/TBNZ=[Rt,bit,tgt]. Verified against
+  // `llvm-mc -disassemble -show-inst` on raw AArch64 encodings.
   if (isJump && !hasIndirect && inst.getNumOperands() > 0) {
-    const auto &op = inst.getOperand(0);
-    if (op.isImm()) {
-      insn.addBranch(insn.address() + instSize +
-                     static_cast<std::uint64_t>(op.getImm()));
+    if (architecture_ == Architecture::ARM64) {
+      const auto &op = inst.getOperand(inst.getNumOperands() - 1);
+      if (op.isImm())
+        insn.addBranch(insn.address() +
+                       static_cast<std::uint64_t>(op.getImm()) * 4);
+    } else {
+      const auto &op = inst.getOperand(0);
+      if (op.isImm()) {
+        insn.addBranch(insn.address() + instSize +
+                       static_cast<std::uint64_t>(op.getImm()));
+      }
     }
   }
 
-  // If it is a call, we need to calculate possible callees
+  // If it is a call, we need to calculate possible callees.
+  // BL follows the same AArch64 instruction-count scaling as branches above.
   if (isCall && !hasIndirect && inst.getNumOperands() > 0) {
-    const auto &op = inst.getOperand(0);
-    if (op.isImm()) {
-      insn.addCallee(insn.address() + instSize +
-                     static_cast<std::uint64_t>(op.getImm()));
+    if (architecture_ == Architecture::ARM64) {
+      const auto &op = inst.getOperand(0);
+      if (op.isImm())
+        insn.addCallee(insn.address() +
+                       static_cast<std::uint64_t>(op.getImm()) * 4);
+    } else {
+      const auto &op = inst.getOperand(0);
+      if (op.isImm()) {
+        insn.addCallee(insn.address() + instSize +
+                       static_cast<std::uint64_t>(op.getImm()));
+      }
     }
   }
 

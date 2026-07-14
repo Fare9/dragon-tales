@@ -34,10 +34,15 @@ class ARMInfo {
   ///   stp x29, x30, [sp, #-N]!                -> 1  (frameless save)
   ///   stp x29, x30, [sp, #-N]! / mov x29, sp  -> 2  (full frame)
   ///   paciasp + above                          -> 2 or 3
+  ///   Optionally extended by a leading "sub sp, sp, #N" ahead of an
+  ///   offset-form stp (large frame), and/or a trailing "sub sp, sp, #N"
+  ///   after "mov x29, sp" (locals beyond the frame record).
   ///
   /// ARM32:
   ///   push {rX-rY, lr}                         -> 1
   ///   push {rX-rY, lr} / add r11, sp, #N       -> 2
+  ///   Frame pointer setup also accepts r7 (Thumb/APCS convention), and
+  ///   may be followed by an optional "sub sp, sp, #N" for locals.
   [[nodiscard]] std::size_t
   isCommonFunctionPrologue(std::span<const Instruction *> insns) const;
 

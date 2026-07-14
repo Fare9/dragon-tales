@@ -191,8 +191,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftTest(*mc, addr, out, tempId);
   else if (opc == opCall_ || opc == opCall64r_)
     liftCall(*mc, addr, insn.size(), out, tempId);
-  else if (opc == opRet64_ || opc == opRetL_ ||
-           opc == opRetI64_ || opc == opRetIL_)
+  else if (opc == opRet64_ || opc == opRetL_ || opc == opRetI64_ ||
+           opc == opRetIL_)
     liftRet(*mc, addr, out, tempId);
   else if (opc == opLeave64_ || opc == opLeave_)
     liftLeave(*mc, addr, out, tempId);
@@ -678,8 +678,10 @@ void dragon::x86::X86IGNILLifter::liftLeave(const llvm::MCInst &mc,
   out.append({ignil::Opcode::LOAD, loaded, {sp}, addr});
   out.append({ignil::Opcode::COPY, bp, {loaded}, addr});
   auto newSP = newTemp(tmp, ptrWidth);
-  out.append({ignil::Opcode::ADD, newSP,
-              {sp, ignil::Const{ptrBytes, ptrWidth}}, addr});
+  out.append({ignil::Opcode::ADD,
+              newSP,
+              {sp, ignil::Const{ptrBytes, ptrWidth}},
+              addr});
   out.append({ignil::Opcode::COPY, sp, {newSP}, addr});
 }
 std::optional<dragon::ignil::Reg>

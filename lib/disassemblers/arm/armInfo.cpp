@@ -136,9 +136,26 @@ std::size_t dragon::ARMInfo::arm64IsCommonPrologue(
   if (pos == insns.size())
     return pos; // landing pad alone is a valid entry point
 
+  // Optional: sub sp, sp, #N — explicit stack allocation ahead of an
+  // offset-form stp, used when the frame is too large for pre-indexed
+  // writeback. Only counted if a matching stp actually follows it, so a
+  // bare "sub sp, sp, #N" (e.g. mid-function stack adjustment) is not
+  // mistaken for a prologue.
+  std::size_t stpPos = pos;
+  if (const auto *subMC = insns[pos]->mcInst();
+      subMC && subMC->getOpcode() == opSUBXri_ &&
+      subMC->getNumOperands() >= 2 && subMC->getOperand(0).isReg() &&
+      subMC->getOperand(0).getReg() == regSP64_ &&
+      subMC->getOperand(1).isReg() &&
+      subMC->getOperand(1).getReg() == regSP64_)
+    stpPos = pos + 1;
+
+  if (stpPos >= insns.size())
+    return pos; // no room left for stp — ignore a dangling sub
+
   // stp x29, x30, [sp, #-N]! (STPXpre)
-  // or stp x29, x30, [sp, #M] (STPXi, less common in prologues)
-  const auto *stpMC = insns[pos]->mcInst();
+  // or stp x29, x30, [sp, #M] (STPXi, following an explicit sub sp)
+  const auto *stpMC = insns[stpPos]->mcInst();
   if (!stpMC)
     return pos;
 
@@ -148,7 +165,7 @@ std::size_t dragon::ARMInfo::arm64IsCommonPrologue(
       !mcHasReg(*stpMC, regSP64_))
     return pos; // no STP match — return landing-pad count (0 or 1)
 
-  pos += 1;
+  pos = stpPos + 1;
 
   // Optional: add x29, sp, #0  ("mov x29, sp" — sets up frame pointer)
   // This is ADDXri with dst=X29, src=SP, imm=0
@@ -159,6 +176,18 @@ std::size_t dragon::ARMInfo::arm64IsCommonPrologue(
         addMC->getOperand(0).getReg() == regX29_ &&
         addMC->getOperand(1).isReg() &&
         addMC->getOperand(1).getReg() == regSP64_)
+      pos += 1;
+  }
+
+  // Optional: sub sp, sp, #N — additional local allocation beyond the
+  // frame record, when the frame record itself used pre-indexed stp.
+  if (pos < insns.size()) {
+    const auto *subMC = insns[pos]->mcInst();
+    if (subMC && subMC->getOpcode() == opSUBXri_ &&
+        subMC->getNumOperands() >= 2 && subMC->getOperand(0).isReg() &&
+        subMC->getOperand(0).getReg() == regSP64_ &&
+        subMC->getOperand(1).isReg() &&
+        subMC->getOperand(1).getReg() == regSP64_)
       pos += 1;
   }
 
@@ -248,13 +277,29 @@ std::size_t dragon::ARMInfo::arm32IsCommonPrologue(
 
   std::size_t pos = 1;
 
+  // Optional: add r11, sp, #0 or add r7, sp, #0 — frame pointer setup.
+  // R11 is the AAPCS frame pointer; R7 is the conventional Thumb/APCS
+  // frame pointer (push {r7, lr} / add r7, sp, #0).
   if (pos < insns.size()) {
     const auto *addMC = insns[pos]->mcInst();
     if (addMC && addMC->getOpcode() == opADDri_ &&
         addMC->getNumOperands() >= 2 && addMC->getOperand(0).isReg() &&
-        addMC->getOperand(0).getReg() == regR11_ &&
+        (addMC->getOperand(0).getReg() == regR11_ ||
+         addMC->getOperand(0).getReg() == regR7_) &&
         addMC->getOperand(1).isReg() &&
         addMC->getOperand(1).getReg() == regSP32_) {
+      pos += 1;
+    }
+  }
+
+  // Optional: sub sp, sp, #N — explicit stack allocation for locals.
+  if (pos < insns.size()) {
+    const auto *subMC = insns[pos]->mcInst();
+    if (subMC && subMC->getOpcode() == opSUBri_ &&
+        subMC->getNumOperands() >= 2 && subMC->getOperand(0).isReg() &&
+        subMC->getOperand(0).getReg() == regSP32_ &&
+        subMC->getOperand(1).isReg() &&
+        subMC->getOperand(1).getReg() == regSP32_) {
       pos += 1;
     }
   }
