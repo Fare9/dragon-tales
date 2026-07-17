@@ -39,7 +39,7 @@ dragon::ARMInfo::ARMInfo(Architecture arch, const llvm::MCInstrInfo &instrInfo,
       opSUBXri_ = i;
     else if (name == "ADDXri")
       opADDXri_ = i;
-    else if (name == "RET_ReallyLR")
+    else if (name == "RET")
       opRET_ = i;
     else if (name == "PACIASP")
       opPACIASP_ = i;
@@ -72,26 +72,30 @@ dragon::ARMInfo::ARMInfo(Architecture arch, const llvm::MCInstrInfo &instrInfo,
       opSUBri_ = i;
     else if (name == "ADDri")
       opADDri_ = i;
-    // NOPs — both architectures
-    else if (name == "NOP" || name == "tNOP" || name.starts_with("NOP"))
-      nopOpcodes_.insert(i);
+    // nop is an alias for "hint #0" on both AArch64 and ARM32/Thumb - there
+    // is no dedicated NOP opcode in LLVM's tables.
+    else if (name == "HINT")
+      opHINT_ = i;
+    else if (name == "tHINT")
+      opTHINT_ = i;
   }
 
   for (unsigned i = 0; i < regInfo.getNumRegs(); ++i) {
     const std::string_view name = regInfo.getName(i);
-    if (name == "X29")
+    // AArch64's MCRegisterInfo uses the ABI alias names "FP"/"LR" as the
+    // canonical names for X29/X30, not "X29"/"X30".
+    if (name == "FP")
       regX29_ = i;
-    else if (name == "X30")
+    else if (name == "LR") {
       regX30_ = i;
-    else if (name == "SP") {
+      regLR_ = i;
+    } else if (name == "SP") {
       regSP64_ = i;
       regSP32_ = i;
     } else if (name == "R7")
       regR7_ = i;
     else if (name == "R11")
       regR11_ = i;
-    else if (name == "LR")
-      regLR_ = i;
     else if (name == "PC")
       regPC_ = i;
   }
@@ -357,5 +361,10 @@ bool dragon::ARMInfo::isNop(const Instruction &insn) const {
   const auto *mc = insn.mcInst();
   if (!mc)
     return false;
-  return nopOpcodes_.contains(mc->getOpcode());
+  const unsigned op = mc->getOpcode();
+  if (op != opHINT_ && op != opTHINT_)
+    return false;
+  // hint #0 is nop; other immediates are yield/wfe/wfi/sev/... - not padding.
+  return mc->getNumOperands() > 0 && mc->getOperand(0).isImm() &&
+         mc->getOperand(0).getImm() == 0;
 }

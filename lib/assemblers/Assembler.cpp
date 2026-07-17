@@ -7,9 +7,11 @@
 #include "utils/Logger.hpp"
 
 #include <llvm/MC/MCAsmBackend.h>
+#include <llvm/MC/MCAssembler.h>
 #include <llvm/MC/MCCodeEmitter.h>
 #include <llvm/MC/MCContext.h>
 #include <llvm/MC/MCObjectFileInfo.h>
+#include <llvm/MC/MCObjectStreamer.h>
 #include <llvm/MC/MCObjectWriter.h>
 #include <llvm/MC/MCParser/MCAsmParser.h>
 #include <llvm/MC/MCParser/MCTargetAsmParser.h>
@@ -201,15 +203,14 @@ dragon::Assembler::assemble(std::string_view text) const {
           std::unique_ptr<llvm::MCStreamer>(llvmTarget->createMCObjectStreamer(
                   llvm::Triple(triple), *context, std::move(backend),
                   std::move(objectWriter), std::move(emitter),
-                  *target.subtargetInfo,
-                  true, // RelaxAll
-                  false, // IncrementalLinkerCompatible
-                  false // DWARFMustBeAtTheEnd
-                  ));
+                  *target.subtargetInfo));
   if (!streamer) {
     impl_->logger.log("assemble: failed to create streamer");
     return {};
   }
+  static_cast<llvm::MCObjectStreamer *>(streamer.get())
+          ->getAssembler()
+          .setRelaxAll(true);
 
   auto srcBuffer = llvm::MemoryBuffer::getMemBuffer(
           llvm::StringRef(patchedSource.data(), patchedSource.size()),

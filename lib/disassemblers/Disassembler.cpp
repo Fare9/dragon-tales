@@ -153,7 +153,7 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
             false};
   }
 
-  std::string mnemonic = target.printer->getMnemonic(&inst).first;
+  std::string mnemonic = target.printer->getMnemonic(inst).first;
   mnemonic.erase(
           std::find_if(mnemonic.rbegin(), mnemonic.rend(),
                        [](const unsigned char c) { return !std::isspace(c); })

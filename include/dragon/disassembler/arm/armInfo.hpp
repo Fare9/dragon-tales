@@ -88,6 +88,7 @@ class ARMInfo {
   unsigned opPACIASP_{}; // paciasp
   unsigned opAUTIASP_{}; // autiasp
   unsigned opBTI_{}; // bti
+  unsigned opHINT_{}; // hint #imm (nop is hint #0) - AArch64 and ARM32 (A32)
 
   // -- ARM32 / Thumb opcodes -------------------------------------------------
   unsigned opPUSH_{}; // push {reglist} (ARM)
@@ -102,13 +103,13 @@ class ARMInfo {
   unsigned opTBXRET_{}; // tbx lr (Thumb)
   unsigned opSUBri_{}; // sub sp, sp, #N (ARM32)
   unsigned opADDri_{}; // add rX, sp, #N (ARM32 frame pointer setup)
+  unsigned opTHINT_{}; // hint #imm (Thumb)
 
   // -- Register IDs ----------------------------------------------------------
   unsigned regX29_{}, regX30_{}, regSP64_{}; // AArch64
   unsigned regR7_{}, regR11_{}, regLR_{}, regPC_{}, regSP32_{}; // ARM32
 
   std::unordered_set<unsigned> trapOpcodes_;
-  std::unordered_set<unsigned> nopOpcodes_;
 };
 
 } // namespace dragon
