@@ -283,6 +283,28 @@ dragon.x86.AH    # (1,    8, 'AH')
 
 ---
 
+## AArch64 register constants
+
+`dragon.arm` mirrors `dragon.x86` for AArch64 — every register as a 3-tuple
+`(offset, width, name)`:
+
+```python
+dragon.arm.X0   # (0,   64, 'X0')
+dragon.arm.ZF   # (785,  8, 'ZF')
+dragon.arm.W0   # (0,   32, 'W0')   -- 32-bit view of X0
+dragon.arm.FP   # (232, 64, 'FP')  -- alias for X29
+dragon.arm.LR   # (240, 64, 'LR')  -- alias for X30
+
+# Available groups
+# 64-bit GPRs: X0..X28 X29(FP) X30(LR) XZR SP PC
+# 32-bit views: W0..W28 W29 W30 WZR WSP
+# NEON/FP (same 128-bit slot, narrower views): V0..V31/Q0..Q31 (128-bit),
+#   D0..D31 (64-bit), S0..S31 (32-bit), H0..H31 (16-bit), B0..B31 (8-bit)
+# NZCV flags (8-bit): NF ZF CF VF
+```
+
+---
+
 ## Backward slicer
 
 `BackwardSlicer` propagates a register value backward through an IGNIL CFG.
@@ -298,6 +320,20 @@ with dragon.BackwardSlicer(max_blocks=5) as slicer:
     with slicer.slice_reg(graph, 0x5000, *dragon.x86.ZF) as expr:
         print(expr.to_string())
         # EQ(SUB(RAX:i64, RBX:i64), 0x0:i64)
+```
+
+The same call works unchanged for AArch64 — swap the architecture and the
+register namespace:
+
+```python
+dis   = dragon.Disassembler(dragon.Architecture.ARM64)
+code  = bytes([0x1f, 0x14, 0x00, 0x71, 0xc0, 0x03, 0x5f, 0xd6])  # cmp w0, #5 ; ret
+graph = dis.analyze(code, 0x5000)
+
+with dragon.BackwardSlicer(max_blocks=5) as slicer:
+    with slicer.slice_reg(graph, 0x5000, *dragon.arm.ZF) as expr:
+        print(expr.to_string())
+        # EQ(SUB(W0:i32, 0x5:i32), 0x0:i32)
 ```
 
 ### Walking the tree

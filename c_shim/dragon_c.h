@@ -320,7 +320,8 @@
 
   // Slice a register backwards through the CFG starting at block_addr.
   // reg_offset and reg_width identify the architectural register in the IGNIL
-  // register address space (see x86IGNILRegs.hpp for x86 constants).
+  // register address space (see x86IGNILRegs.hpp for x86 constants, or
+  // armIGNILRegs.hpp for AArch64 constants).
   // reg_name is an optional human-readable label carried into SymReg results
   // when the value cannot be resolved (NULL or "" means no name).
   // Returns an owned SliceExpr; caller must destroy with dragon_slice_expr_destroy.

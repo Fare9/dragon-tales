@@ -1,6 +1,6 @@
 # dragon-tales
 
-A binary analysis library for disassembling, assembling, and analyzing machine code across multiple architectures. Built on LLVM 18.
+A binary analysis library for disassembling, assembling, and analyzing machine code across multiple architectures. Built on LLVM 21.
 
 Features:
 - Disassembly (linear sweep and recursive traversal) and assembly across six architectures
@@ -11,7 +11,7 @@ Features:
 
 ## Requirements
 
-- LLVM 18 (must be installed on the system)
+- LLVM 21 (must be installed on the system)
 - CMake 3.20 or later
 - A C++20 compiler
 - Python 3 with cffi (optional, for the Python API)
@@ -41,10 +41,11 @@ ctest --output-on-failure
 ```
 include/        C++ public headers
   dragon/
-    IGNIL.hpp           — IGNIL value types, opcodes, Block
-    x86IGNILRegs.hpp    — x86/x86-64 register constants (offsets, widths, names)
-    SliceExpr.hpp       — expression tree produced by the backward slicer
-    BackwardSlicer.hpp  — backward slicer over IGNIL CFGs
+    lifters/ignil/IGNIL.hpp          — IGNIL value types, opcodes, Block
+    lifters/ignil/x86/x86IGNILRegs.hpp — x86/x86-64 register constants (offsets, widths, names)
+    lifters/ignil/arm/armIGNILRegs.hpp — AArch64 register constants (offsets, widths, names)
+    analysis/SliceExpr.hpp           — expression tree produced by the backward slicer
+    analysis/BackwardSlicer.hpp      — backward slicer over IGNIL CFGs
 lib/            C++ implementation
 c_shim/         C API (dragon_c.h + libdragon_c.so)
 python/         Python API (cffi, wraps the C shim)
@@ -66,7 +67,7 @@ Full examples for every API layer are in [`docs/`](docs/):
 **C++**
 
 ```cpp
-#include <dragon/Disassembler.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
 
 dragon::Configuration config;
 dragon::Disassembler dis(dragon::Architecture::X86_64, config);
@@ -93,10 +94,11 @@ for insn in graph.instructions():
 **Backward slicing (C++)**
 
 ```cpp
-#include <dragon/BackwardSlicer.hpp>
-#include <dragon/x86IGNILRegs.hpp>
+#include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
-// graph must come from dis.analyze() to have IGNIL blocks populated
+// graph must be populated by Disassembler::disassemble(bytes, base_addr, graph)
+// so IGNIL blocks exist
 dragon::BackwardSlicer slicer;
 auto expr = slicer.slice(dragon::x86::ZF, block_addr, graph);
 std::cout << dragon::slice::toString(expr) << "\n";
@@ -109,4 +111,14 @@ std::cout << dragon::slice::toString(expr) << "\n";
 with dragon.BackwardSlicer() as slicer:
     with slicer.slice_reg(graph, block_addr, *dragon.x86.ZF) as expr:
         print(expr.to_string())   # EQ(SUB(RAX:i64, RBX:i64), 0x0:i64)
+```
+
+**ARM64 works the same way** — swap `Architecture::X86_64` for `Architecture::ARM64`
+and `dragon::x86` / `dragon.x86` for `dragon::arm` / `dragon.arm`:
+
+```cpp
+#include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
+
+auto expr = slicer.slice(dragon::arm::ZF, block_addr, graph);
+// e.g. cmp w0, #5  ->  EQ(SUB(W0:i32, 0x5:i32), 0x0:i32)
 ```

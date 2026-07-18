@@ -242,13 +242,19 @@ void dragon::arm::ARMIGNILLifter::liftInstruction(const Instruction &insn,
   // by the liftAddSub and liftLogic functions, which handle all the different
   // variants of the instructions (register, immediate, and S-suffixed).
   else if (opc == opADDWrr_ || opc == opADDXrr_ || opc == opADDWri_ ||
-           opc == opADDXri_ || opc == opADDWrs_ || opc == opADDXrs_)
+           opc == opADDXri_ || opc == opADDWrs_ || opc == opADDXrs_ ||
+           opc == opADDSWrr_ || opc == opADDSXrr_ || opc == opADDSWri_ ||
+           opc == opADDSXri_ || opc == opADDSWrs_ || opc == opADDSXrs_)
     liftAddSub(*mc, addr, out, tempId);
   else if (opc == opSUBWrr_ || opc == opSUBXrr_ || opc == opSUBWri_ ||
-           opc == opSUBXri_ || opc == opSUBWrs_ || opc == opSUBXrs_)
+           opc == opSUBXri_ || opc == opSUBWrs_ || opc == opSUBXrs_ ||
+           opc == opSUBSWrr_ || opc == opSUBSXrr_ || opc == opSUBSWri_ ||
+           opc == opSUBSXri_ || opc == opSUBSWrs_ || opc == opSUBSXrs_)
     liftAddSub(*mc, addr, out, tempId);
   else if (opc == opANDWrr_ || opc == opANDXrr_ || opc == opANDWri_ ||
-           opc == opANDXri_ || opc == opANDWrs_ || opc == opANDXrs_)
+           opc == opANDXri_ || opc == opANDWrs_ || opc == opANDXrs_ ||
+           opc == opANDSWri_ || opc == opANDSXri_ || opc == opANDSWrs_ ||
+           opc == opANDSXrs_)
     liftLogic(*mc, addr, out, tempId);
   else if (opc == opORRWrr_ || opc == opORRXrr_ || opc == opORRWri_ ||
            opc == opORRXri_ || opc == opORRWrs_ || opc == opORRXrs_)
