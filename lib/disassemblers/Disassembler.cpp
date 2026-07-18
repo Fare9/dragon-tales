@@ -153,22 +153,32 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
             false};
   }
 
-  std::string mnemonic = target.printer->getMnemonic(inst).first;
-  mnemonic.erase(
-          std::find_if(mnemonic.rbegin(), mnemonic.rend(),
-                       [](const unsigned char c) { return !std::isspace(c); })
-                  .base(),
-          mnemonic.end());
-
   std::string full;
   llvm::raw_string_ostream stream(full);
   target.printer->printInst(&inst, address + offset, "", *target.subtargetInfo,
                             stream);
+
+  // printInst indents with a leading tab; the mnemonic is the first
+  // whitespace-delimited token and everything after it is the operand list.
+  //
+  // Deliberately not using MCInstPrinter::getMnemonic() here: it returns
+  // LLVM's raw/canonical opcode name (e.g. "movz", "subs", "b."), which on
+  // AArch64 routinely differs from printInst's alias-resolved text (e.g.
+  // "mov", "cmp", "b.le") - splitting `full` against a substring that may
+  // not even appear in it (or may appear as an unrelated prefix) silently
+  // produced empty or garbled operands.
+  std::string mnemonic;
   std::string operands;
-  auto mnemonicStart = full.find(mnemonic);
-  if (mnemonicStart != std::string::npos)
-    operands = full.substr(mnemonicStart + mnemonic.size());
-  operands.erase(0, operands.find_first_not_of(" \t"));
+  if (const std::size_t start = full.find_first_not_of(" \t");
+      start != std::string::npos) {
+    mnemonic = full.substr(start);
+    if (const std::size_t sep = mnemonic.find_first_of(" \t");
+        sep != std::string::npos) {
+      operands = mnemonic.substr(sep);
+      mnemonic.resize(sep);
+      operands.erase(0, operands.find_first_not_of(" \t"));
+    }
+  }
 
   std::vector rawBytes(bytes.begin() + offset,
                                      bytes.begin() + offset + instSize);
