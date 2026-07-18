@@ -5,12 +5,12 @@
 ```
 include/dragon/Architecture.hpp
 include/dragon/Configuration.hpp
-include/dragon/Disassembler.hpp
-include/dragon/Assembler.hpp
-include/dragon/Graph.hpp
-include/dragon/Instruction.hpp
-include/dragon/BasicBlock.hpp
-include/dragon/Function.hpp
+include/dragon/disassembler/Disassembler.hpp
+include/dragon/assembler/Assembler.hpp
+include/dragon/disassembler/Graph.hpp
+include/dragon/disassembler/Instruction.hpp
+include/dragon/disassembler/BasicBlock.hpp
+include/dragon/disassembler/Function.hpp
 ```
 
 Link against `libdragon`.
@@ -89,7 +89,7 @@ rv64mac.features = "+m,+a,+c";
 `Disassembler::disassemble` returns a `std::vector<Instruction>` in address order.
 
 ```cpp
-#include <dragon/Disassembler.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
 #include <iostream>
 
 // x86-64 bytes: nop; ret
@@ -144,7 +144,7 @@ auto instrs = dis.disassemble(bytes, 0x1000);
 Populate a `Graph` from the flat listing, then query blocks and functions.
 
 ```cpp
-#include <dragon/Graph.hpp>
+#include <dragon/disassembler/Graph.hpp>
 
 dragon::Configuration config;
 dragon::Graph graph(dragon::Architecture::X86_64, config);
@@ -183,7 +183,7 @@ if (fn.isValid()) {
 ## Assembler
 
 ```cpp
-#include <dragon/Assembler.hpp>
+#include <dragon/assembler/Assembler.hpp>
 #include <iostream>
 
 dragon::Configuration config;                // INTEL syntax by default
@@ -213,28 +213,31 @@ auto bytes = asm_.assemble("nop\nret\n");
 
 ## IGNIL
 
-`Disassembler::analyze` populates both the CFG and the IGNIL blocks in the
-returned `Graph`. Each basic block has a corresponding `ignil::Block` that
-holds the lifted ops for that block.
+`Disassembler::disassemble(bytes, baseAddress, graph)` — the `Graph&`-taking
+overload — populates both the CFG and the IGNIL blocks of the `Graph` passed
+in. Each basic block has a corresponding `ignil::Block` that holds the
+lifted ops for that block.
 
 ```cpp
-#include <dragon/Disassembler.hpp>
-#include <dragon/IGNIL.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
+#include <dragon/disassembler/Graph.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
 
 dragon::Configuration config;
 dragon::Disassembler dis(dragon::Architecture::X86_64, config);
+dragon::Graph graph(dragon::Architecture::X86_64, config);
 
 // nop; cmp rax, rbx; je 0x100a; ret
 std::vector<uint8_t> code = { 0x90, 0x48, 0x39, 0xD8, 0x74, 0x03, 0xC3, 0xC3 };
-auto graph = dis.analyze(code, /*base_address=*/0x1000);
+dis.disassemble(code, /*baseAddress=*/0x1000, graph);
 
 // Get the IGNIL block for a known address
-if (auto* ib = graph->getIGNILBlock(0x1000)) {
+if (auto* ib = graph.getIGNILBlock(0x1000)) {
     std::cout << dragon::ignil::toString(*ib);
     // IGNILBlock @ 0x1000
     //   t0:i64 = SUB(RAX:i64, RBX:i64)  ; @0x1001
-    //   t1:i1  = ULT(RAX:i64, RBX:i64)  ; @0x1001
-    //   COPY CF:i8 = (t1:i1)             ; @0x1001
+    //   t1:i1 = ULT(RAX:i64, RBX:i64)  ; @0x1001
+    //   CF:i8 = COPY(t1:i1)  ; @0x1001
     //   ...
 
     // Iterate individual ops
@@ -250,11 +253,11 @@ if (auto* ib = graph->getIGNILBlock(0x1000)) {
 
 ### x86 register constants
 
-`include/dragon/x86IGNILRegs.hpp` provides named `ignil::Reg` constants
-for every x86/x86-64 register in the `dragon::x86` namespace:
+`include/dragon/lifters/ignil/x86/x86IGNILRegs.hpp` provides named `ignil::Reg`
+constants for every x86/x86-64 register in the `dragon::x86` namespace:
 
 ```cpp
-#include <dragon/x86IGNILRegs.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
 namespace x86 = dragon::x86;
 
@@ -276,6 +279,37 @@ Available groups:
 - 8-bit high: `AH CH DH BH`
 - Flags (8-bit slots): `CF PF AF ZF SF OF DF`
 
+### AArch64 register constants
+
+`include/dragon/lifters/ignil/arm/armIGNILRegs.hpp` provides the same kind of
+named `ignil::Reg` constants for AArch64, in the `dragon::arm` namespace:
+
+```cpp
+#include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
+
+namespace arm = dragon::arm;
+
+// Each constant is an ignil::Reg{offset, width, name}
+ignil::Reg x0 = arm::X0;   // {0,   64, "X0"}
+ignil::Reg zf = arm::ZF;   // {785,  8, "ZF"}
+ignil::Reg w0 = arm::W0;   // {0,   32, "W0"}   -- 32-bit view of X0
+
+// X29/X30 have both their architectural name and their ABI alias
+static_assert(arm::X29.offset == arm::FP.offset); // frame pointer
+static_assert(arm::X30.offset == arm::LR.offset); // link register
+
+// Offset constants and width aliases are also available
+static_assert(arm::kOffZF == 785);
+static_assert(arm::k64    ==  64);
+```
+
+Available groups:
+- 64-bit GPRs: `X0..X28 X29(FP) X30(LR) XZR SP PC`
+- 32-bit views: `W0..W28 W29 W30 WZR WSP` (lower half of the matching X register)
+- NEON/FP (128-bit slot, progressively narrower views): `V0..V31`/`Q0..Q31` (128-bit),
+  `D0..D31` (64-bit), `S0..S31` (32-bit), `H0..H31` (16-bit), `B0..B31` (8-bit)
+- NZCV flags (8-bit slots): `NF ZF CF VF`
+
 ---
 
 ## Backward slicer
@@ -284,27 +318,45 @@ Available groups:
 a `SliceExpr` expression tree. It stops at join nodes (blocks with more than
 one predecessor) and at a configurable block depth.
 
-`graph` must come from `Disassembler::analyze()` — IGNIL blocks must exist.
+`graph` must be populated via `Disassembler::disassemble(bytes, baseAddress, graph)`
+so its IGNIL blocks exist. `blockAddr` must be the *start address of an IGNIL
+block* (as returned by `graph.getIGNILBlock()`), not an arbitrary instruction
+address inside it — passing a mid-block address returns `Undef`.
 
 ```cpp
-#include <dragon/BackwardSlicer.hpp>
-#include <dragon/SliceExpr.hpp>
-#include <dragon/x86IGNILRegs.hpp>
+#include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/analysis/SliceExpr.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
 namespace x86 = dragon::x86;
 
 dragon::BackwardSlicer slicer(/*maxBlocks=*/5);
 
-// Slice ZF backward starting from the block at 0x1001
-auto expr = slicer.slice(x86::ZF, /*blockAddr=*/0x1001, *graph);
+// Slice ZF backward starting from the block at 0x1000 (nop; cmp; je; ret)
+auto expr = slicer.slice(x86::ZF, /*blockAddr=*/0x1000, graph);
 std::cout << dragon::slice::toString(expr) << "\n";
 // EQ(SUB(RAX:i64, RBX:i64), 0x0:i64)
+```
+
+### ARM64 example
+
+The same call works unchanged for AArch64 — swap the register namespace:
+
+```cpp
+#include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
+
+namespace arm = dragon::arm;
+
+// cmp w0, #5 ; ret   (block starts at 0x1000)
+auto expr = slicer.slice(arm::ZF, /*blockAddr=*/0x1000, graph);
+std::cout << dragon::slice::toString(expr) << "\n";
+// EQ(SUB(W0:i32, 0x5:i32), 0x0:i32)
 ```
 
 ### Walking the expression tree
 
 ```cpp
-#include <dragon/SliceExpr.hpp>
+#include <dragon/analysis/SliceExpr.hpp>
 
 void print(const dragon::slice::Expr& e, int indent = 0) {
     std::string pad(indent * 2, ' ');
@@ -363,8 +415,8 @@ print(expr);
 is stored in an `llvm::Module` owned by the lifter. Call the optimization
 passes to clean up the raw output before inspecting or emitting the IR.
 
-`graph` must come from `Disassembler::disassemble(..., graph)` or
-`Disassembler::analyze()` — IGNIL blocks must be present.
+`graph` must come from `Disassembler::disassemble(bytes, baseAddress, graph)` —
+IGNIL blocks must be present.
 
 ```cpp
 #include <dragon/lifters/llvm/LLVMLifter.hpp>

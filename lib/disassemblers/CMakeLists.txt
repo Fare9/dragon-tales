@@ -5,3 +5,4 @@ target_sources(libdragon
 )
 
 add_subdirectory(x86)
+add_subdirectory(arm)

@@ -192,7 +192,7 @@ static void debugDumpMCInst(dragon::Graph &g) {
     for (unsigned i = 0; i < mc->getNumOperands(); ++i) {
       const auto &op = mc->getOperand(i);
       if (op.isReg())
-        std::cout << std::format("    op[{}] = reg {}\n", i, op.getReg());
+        std::cout << std::format("    op[{}] = reg {}\n", i, op.getReg().id());
       else if (op.isImm())
         std::cout << std::format("    op[{}] = imm {}\n", i, op.getImm());
     }

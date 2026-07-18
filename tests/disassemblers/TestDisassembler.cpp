@@ -312,6 +312,39 @@ TEST_CASE("Disassembler ARM64", "[disassembler][arm64]") {
     REQUIRE(instrs[0].isJump());
     REQUIRE(instrs[0].isConditional());
   }
+
+  // Regression test: the mnemonic/operand split used to be derived from
+  // MCInstPrinter::getMnemonic(), which returns LLVM's raw/canonical opcode
+  // name (e.g. "movz", "subs", "b.") rather than the alias printInst()
+  // actually renders (e.g. "mov", "cmp", "b.le"). Whenever the two diverged,
+  // the split against `full` either failed outright (empty operands) or
+  // matched a spurious prefix (garbled operands, e.g. "b. le\t#12").
+  SECTION("aliased instructions produce correct mnemonic and operands") {
+    // mov x0, #42
+    {
+      const std::vector<std::uint8_t> bytes = {0x40, 0x05, 0x80, 0xD2};
+      auto instrs = dis.disassemble(bytes, 0x1000);
+      REQUIRE(instrs.size() == 1);
+      REQUIRE(instrs[0].mnemonic() == "mov");
+      REQUIRE(instrs[0].operands() == "x0, #42");
+    }
+    // cmp x0, x1  (encoded as SUBS with a discarded destination)
+    {
+      const std::vector<std::uint8_t> bytes = {0x1F, 0x00, 0x01, 0xEB};
+      auto instrs = dis.disassemble(bytes, 0x1000);
+      REQUIRE(instrs.size() == 1);
+      REQUIRE(instrs[0].mnemonic() == "cmp");
+      REQUIRE(instrs[0].operands() == "x0, x1");
+    }
+    // b.le #12  (Bcc, whose raw mnemonic "b." is itself a prefix of "b.le")
+    {
+      const std::vector<std::uint8_t> bytes = {0x6D, 0x00, 0x00, 0x54};
+      auto instrs = dis.disassemble(bytes, 0x1000);
+      REQUIRE(instrs.size() == 1);
+      REQUIRE(instrs[0].mnemonic() == "b.le");
+      REQUIRE(instrs[0].operands() == "#12");
+    }
+  }
 }
 
 // -----------------------------------------------------------------------

@@ -1003,21 +1003,31 @@ for (const BasicBlock &bb : graph.blocks()) {
 
 ### Step 9 — Backward slicing
 
-`BackwardSlicer` (in `include/dragon/BackwardSlicer.hpp`) walks IGNIL ops
-backward from a given value and block, crossing block boundaries only when
-there is a unique predecessor (no join nodes). The result is a `SliceExpr`
-tree (`include/dragon/SliceExpr.hpp`).
+`BackwardSlicer` (in `include/dragon/analysis/BackwardSlicer.hpp`) walks IGNIL
+ops backward from a given value and block, crossing block boundaries only
+when there is a unique predecessor (no join nodes). The result is a
+`SliceExpr` tree (`include/dragon/analysis/SliceExpr.hpp`).
 
 ```cpp
-#include <dragon/BackwardSlicer.hpp>
-#include <dragon/SliceExpr.hpp>
-#include <dragon/x86IGNILRegs.hpp>
+#include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/analysis/SliceExpr.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
-// graph must come from Disassembler::analyze() — IGNIL blocks must be populated
+// graph must be populated by Disassembler::disassemble(bytes, base_addr, graph)
+// — block_addr must be the start address of an IGNIL block, not an arbitrary
+// instruction address inside it
 dragon::BackwardSlicer slicer(/*maxBlocks=*/5);
 auto expr = slicer.slice(dragon::x86::ZF, block_addr, graph);
 std::cout << dragon::slice::toString(expr) << "\n";
 // EQ(SUB(RAX:i64, RBX:i64), 0x0:i64)
+```
+
+The same call works unchanged on AArch64 — use
+`include/dragon/lifters/ignil/arm/armIGNILRegs.hpp` and `dragon::arm` instead:
+
+```cpp
+auto expr = slicer.slice(dragon::arm::ZF, block_addr, graph);
+// e.g. cmp w0, #5  ->  EQ(SUB(W0:i32, 0x5:i32), 0x0:i32)
 ```
 
 **SliceExpr node types**
