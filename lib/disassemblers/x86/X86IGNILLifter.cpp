@@ -146,6 +146,29 @@ dragon::x86::X86IGNILLifter::liftBlock(const BasicBlock &block,
     liftInstruction(*insn, result, tempId);
   }
 
+  // A block that ends without an explicit branch/return (execution simply
+  // falls into the next block, e.g. an if/else arm with no trailing jump)
+  // gets no JMP op from liftInstruction, since there is no branch
+  // instruction to lift one from. Without a materialized terminator here,
+  // LLVMLifter has no way to know where control flow goes next and emits a
+  // basic block with no terminator at all - invalid LLVM IR that hangs
+  // PromotePass's dominator-tree computation. Materialize the fall-through
+  // edge explicitly using the CFG successor the disassembler already
+  // computed.
+  const bool alreadyTerminated =
+          !result.empty() &&
+          (result.ops().back().opcode == ignil::Opcode::JMP ||
+           result.ops().back().opcode == ignil::Opcode::CJMP ||
+           result.ops().back().opcode == ignil::Opcode::RET);
+  if (!alreadyTerminated) {
+    if (const auto &succ = block.successors(); succ.size() == 1) {
+      result.append({ignil::Opcode::JMP,
+                     std::nullopt,
+                     {ignil::Const{*succ.begin(), 64}},
+                     block.terminatorAddress()});
+    }
+  }
+
   return result;
 }
 

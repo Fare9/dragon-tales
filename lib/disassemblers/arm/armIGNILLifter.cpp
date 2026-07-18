@@ -11,6 +11,17 @@
 
 #include <llvm/MC/MCInst.h>
 
+namespace {
+// Truncates a 64-bit computation down to `width` bits. Needed anywhere a
+// bitwise-NOT (or similar width-crossing op) is computed in a uint64_t and
+// then stored as an ignil::Const{value, width}: Const's `value` must fit in
+// `width` bits, or consumers that rebuild an APInt from it (e.g. LLVMLifter)
+// hit "Value is not an N-bit unsigned value" assertions.
+std::uint64_t maskToWidth(std::uint64_t value, dragon::ignil::Width width) {
+  return width >= 64 ? value : value & ((std::uint64_t{1} << width) - 1);
+}
+} // namespace
+
 // Authoritative IGNIL register address space for the ARM lifter.
 // Entries are defined in armregisters.def via the REG(name, offset, width)
 // macro.
@@ -217,6 +228,29 @@ dragon::arm::ARMIGNILLifter::liftBlock(const BasicBlock &block,
     liftInstruction(*insn, result, tempId);
   }
 
+  // A block that ends without an explicit branch/return (execution simply
+  // falls into the next block, e.g. an if/else arm with no trailing jump)
+  // gets no JMP op from liftInstruction, since there is no branch
+  // instruction to lift one from. Without a materialized terminator here,
+  // LLVMLifter has no way to know where control flow goes next and emits a
+  // basic block with no terminator at all - invalid LLVM IR that hangs
+  // PromotePass's dominator-tree computation. Materialize the fall-through
+  // edge explicitly using the CFG successor the disassembler already
+  // computed.
+  const bool alreadyTerminated =
+          !result.empty() &&
+          (result.ops().back().opcode == ignil::Opcode::JMP ||
+           result.ops().back().opcode == ignil::Opcode::CJMP ||
+           result.ops().back().opcode == ignil::Opcode::RET);
+  if (!alreadyTerminated) {
+    if (const auto &succ = block.successors(); succ.size() == 1) {
+      result.append({ignil::Opcode::JMP,
+                     std::nullopt,
+                     {ignil::Const{*succ.begin(), 64}},
+                     block.terminatorAddress()});
+    }
+  }
+
   return result;
 }
 
@@ -353,7 +387,7 @@ void dragon::arm::ARMIGNILLifter::liftMovk(const llvm::MCInst &mc,
 
   auto imm = static_cast<std::uint64_t>(mc.getOperand(2).getImm());
   auto shift = static_cast<std::uint64_t>(mc.getOperand(3).getImm());
-  std::uint64_t clearMask = ~(0xFFFFULL << shift);
+  std::uint64_t clearMask = maskToWidth(~(0xFFFFULL << shift), dst->width);
   std::uint64_t insertBits = imm << shift;
 
   if (isZeroReg(*dst))
@@ -384,7 +418,7 @@ void dragon::arm::ARMIGNILLifter::liftMovn(const llvm::MCInst &mc,
 
   auto imm = static_cast<std::uint64_t>(mc.getOperand(1).getImm());
   auto shift = static_cast<std::uint64_t>(mc.getOperand(2).getImm());
-  std::uint64_t value = ~(imm << shift);
+  std::uint64_t value = maskToWidth(~(imm << shift), dst->width);
 
   if (isZeroReg(*dst))
     return;

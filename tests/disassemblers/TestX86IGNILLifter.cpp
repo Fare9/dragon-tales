@@ -231,3 +231,45 @@ TEST_CASE("IGNIL lifting - indirect call through memory (call [rbx + rcx*8])", "
   std::cout << "\n=== IGNIL Lifting: indirect call through memory (call [rbx + rcx*8]) ===";
   printIgnilComparison(g);
 }
+
+// -----------------------------------------------------------------------
+// Test 6: a block that falls straight into the next block (no explicit
+// jmp/ret at its end) must still get an explicit JMP terminator.
+//
+// Regression test: liftBlock() only emitted a JMP/CJMP/RET when the last
+// machine instruction in the block was itself a branch/return. A block
+// like the one below (whose last real instruction is just `mov`, with
+// execution falling through into the next block) produced an IGNIL block
+// with no terminator at all - invalid input for LLVMLifter, which hangs
+// LLVM's mem2reg pass when it computes dominator trees over a basic block
+// with no terminator instruction. Same bug, same fix, as
+// ARM IGNIL lifting - fall-through block gets an explicit JMP.
+// -----------------------------------------------------------------------
+
+TEST_CASE("IGNIL lifting - fall-through block gets an explicit JMP", "[ignil][x86_64]") {
+  // 0x1000: cmp rax, rbx   48 39 D8
+  // 0x1003: jle 0x100c     7E 07
+  // 0x1005: mov rax, 1     48 C7 C0 01 00 00 00   (falls through, no jmp/ret!)
+  // 0x100c: ret            C3
+  const std::vector<std::uint8_t> bytes = {
+          0x48, 0x39, 0xD8,                          // cmp rax, rbx  @ 0x1000
+          0x7E, 0x07,                                  // jle 0x100c    @ 0x1003
+          0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,  // mov rax, 1    @ 0x1005
+          0xC3,                                        // ret           @ 0x100c
+  };
+
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *fallThroughBlock = g.getIGNILBlock(0x1005);
+  REQUIRE(fallThroughBlock != nullptr);
+  REQUIRE_FALSE(fallThroughBlock->empty());
+
+  const dragon::ignil::Op &terminator = fallThroughBlock->ops().back();
+  REQUIRE(terminator.opcode == dragon::ignil::Opcode::JMP);
+  REQUIRE(std::get<dragon::ignil::Const>(terminator.srcs[0]).value == 0x100c);
+
+  std::cout << "\n=== IGNIL Lifting: fall-through block gets an explicit JMP ===";
+  printIgnilComparison(g);
+}
