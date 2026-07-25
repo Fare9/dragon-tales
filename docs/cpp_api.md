@@ -141,7 +141,9 @@ auto instrs = dis.disassemble(bytes, 0x1000);
 
 ## Graph, BasicBlock and Function
 
-Populate a `Graph` from the flat listing, then query blocks and functions.
+Populate a `Graph` using the `Graph`-taking overload of `disassemble()` —
+this runs the architecture-specific analysis pass that recovers block and
+function boundaries, not just the flat instruction listing:
 
 ```cpp
 #include <dragon/disassembler/Graph.hpp>
@@ -150,14 +152,13 @@ dragon::Configuration config;
 dragon::Graph graph(dragon::Architecture::X86_64, config);
 
 dragon::Disassembler dis(dragon::Architecture::X86_64, config);
-for (auto& insn : dis.disassemble(bytes, 0x1000))
-    graph.insert(std::move(insn));
+dis.disassemble(bytes, 0x1000, graph);
 
 // Instruction lookup by address
 const dragon::Instruction* insn = graph.get(0x1000);
 if (insn) std::cout << insn->disassembly() << "\n";
 
-// Block view (requires blocks_q to be populated by the disassembler)
+// Block view
 dragon::BasicBlock bb(&graph, 0x1000);
 if (bb.isValid()) {
     std::cout << "block size: " << bb.size() << " instructions\n";
@@ -177,6 +178,13 @@ if (fn.isValid()) {
         std::cout << "  block @ 0x" << std::hex << addr << "\n";
 }
 ```
+
+> Building a `Graph` by decoding a flat listing and calling
+> `graph.addInstruction()` per instruction compiles, but does **not** run
+> block/function analysis — `bb.isValid()`/`fn.isValid()` will be `false`.
+> Always use the `Graph`-overload of `disassemble()` shown above if you need
+> `BasicBlock`/`Function`. See `docs/manual/03-disassembling-your-first-binary.md`
+> for a longer walkthrough of the two modes.
 
 ---
 
