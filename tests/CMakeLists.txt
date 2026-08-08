@@ -5,6 +5,7 @@ add_executable(dragon_tests
         disassemblers/TestX86IGNILLifter.cpp
         disassemblers/TestARMAnalysis.cpp
         disassemblers/TestARMIGNILLifter.cpp
+        disassemblers/TestTraceLifter.cpp
         assemblers/TestAssembler.cpp
         analysis/TestBackwardSlicer.cpp
         analysis/TestSwitchDetector.cpp

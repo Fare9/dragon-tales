@@ -70,6 +70,25 @@ class Disassembler {
   disassembleBlock(std::span<const std::uint8_t> bytes,
                    std::uint64_t baseAddress, std::uint64_t startAddress) const;
 
+  /// Lifts an arbitrary linear sequence of already-decoded instructions
+  /// directly to IGNIL - e.g. a captured execution trace (DBI/emulator
+  /// stepping, Unicorn, ...) that isn't claimed to form a single valid
+  /// basic block or a coherent CFG. Bypasses CFG/function/block-validity
+  /// analysis entirely: each instruction is lifted independently and the
+  /// results concatenated in sequence order, with no synthesized
+  /// fall-through terminator and no successor computation - unlike
+  /// disassemble(..., Graph&), this never touches a Graph.
+  ///
+  /// `trace` is typically the result of disassemble(bytes, baseAddress)
+  /// (the Graph-free overload above, which is itself already a pure
+  /// linear decode with no CFG involvement) or of stitching together
+  /// individually-decoded instructions from real, possibly non-contiguous
+  /// execution addresses.
+  ///
+  /// Returns an empty ignil::Block for RISC-V (no IGNIL lifter exists yet)
+  /// or an empty trace.
+  [[nodiscard]] ignil::Block liftTrace(std::span<const Instruction> trace) const;
+
   private:
   struct Impl;
 

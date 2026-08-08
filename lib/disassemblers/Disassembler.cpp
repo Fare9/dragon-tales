@@ -9,6 +9,8 @@
 #include "disassemblers/RISCVTarget.hpp"
 #include "disassemblers/X86Target.hpp"
 #include "disassemblers/arm/armAnalysis.hpp"
+#include "disassemblers/arm/armIGNILLifter.hpp"
+#include "disassemblers/x86/X86IGNILLifter.hpp"
 #include "disassemblers/x86/x86Analysis.hpp"
 #include "utils/Logger.hpp"
 
@@ -120,6 +122,34 @@ void dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
     case Architecture::Unknown:
       break;
   }
+}
+
+dragon::ignil::Block
+dragon::Disassembler::liftTrace(std::span<const Instruction> trace) const {
+  if (!isValid() || trace.empty())
+    return ignil::Block{0};
+
+  switch (architecture_) {
+    case Architecture::X86_32:
+    case Architecture::X86_64: {
+      x86::X86IGNILLifter lifter{impl_->logger, architecture_,
+                                 *impl_->target.instrInfo,
+                                 *impl_->target.regInfo};
+      return lifter.liftTrace(trace);
+    }
+    case Architecture::ARM32:
+    case Architecture::ARM64: {
+      arm::ARMIGNILLifter lifter{impl_->logger, architecture_,
+                                 *impl_->target.instrInfo,
+                                 *impl_->target.regInfo};
+      return lifter.liftTrace(trace);
+    }
+    case Architecture::RISCV32:
+    case Architecture::RISCV64:
+    case Architecture::Unknown:
+      break;
+  }
+  return ignil::Block{0};
 }
 
 dragon::Instruction

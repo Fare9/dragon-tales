@@ -10,6 +10,7 @@
 
 #include <functional>
 #include <map>
+#include <span>
 #include <unordered_map>
 
 namespace dragon {
@@ -43,6 +44,22 @@ class X86IGNILLifter {
   /// Lift a complete basic block into an ignil::Block.
   [[nodiscard]] ignil::Block liftBlock(const BasicBlock &block,
                                        const Graph &graph) const;
+
+  /// Lift an arbitrary linear sequence of instructions - e.g. a captured
+  /// execution trace, not necessarily a single valid basic block or a
+  /// coherent CFG - into one flat ignil::Block by lifting each instruction
+  /// independently via the same dispatch liftBlock uses, and concatenating
+  /// the results in sequence order.
+  ///
+  /// Unlike liftBlock, this never consults a Graph and never synthesizes a
+  /// fall-through terminator: a trace's control flow is already resolved
+  /// by construction (whatever branch each instruction took to reach the
+  /// next one in the sequence already happened), so each instruction's own
+  /// JMP/CJMP/CALL/RET op - if any - is kept exactly as decoded, targets
+  /// and all, rather than second-guessed against block/function structure
+  /// this input was never claimed to have.
+  [[nodiscard]] ignil::Block
+  liftTrace(std::span<const Instruction> trace) const;
 
   private:
   internal::Logger& logger_;

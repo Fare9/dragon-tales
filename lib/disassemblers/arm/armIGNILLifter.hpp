@@ -11,6 +11,7 @@
 
 #include <functional>
 #include <map>
+#include <span>
 #include <unordered_map>
 
 namespace dragon {
@@ -62,6 +63,13 @@ class ARMIGNILLifter {
   /// Lift a complete basic block into an ignil::Block.
   [[nodiscard]] ignil::Block liftBlock(const BasicBlock &block,
                                        const Graph &graph) const;
+
+  /// Lift an arbitrary linear sequence of instructions - e.g. a captured
+  /// execution trace, not necessarily a single valid basic block or a
+  /// coherent CFG - into one flat ignil::Block. See
+  /// X86IGNILLifter::liftTrace for the full rationale; identical here.
+  [[nodiscard]] ignil::Block
+  liftTrace(std::span<const Instruction> trace) const;
 
   private:
   internal::Logger &logger_;
