@@ -55,6 +55,29 @@ if(DRAGON_USE_Z3)
     endif()
 endif()
 
+# Optional Unicorn support for emulation-based semantic round-trip tests:
+# execute raw bytes under Unicorn to get "expected" CPU state, execute the
+# same bytes lifted -> LLVM IR -> JIT'd to get "actual" state, and diff them.
+# Unlike Z3 this degrades gracefully instead of being REQUIRED - it's only
+# used by opt-in tests (tests/semantic/), not core lifting, so a checkout
+# without libunicorn-dev should still build cleanly.
+# Pass -DDRAGON_USE_UNICORN=OFF to disable explicitly.
+option(DRAGON_USE_UNICORN "Enable Unicorn-based semantic round-trip tests" ON)
+
+if(DRAGON_USE_UNICORN)
+    # Unicorn (apt) ships no CMake config file either - use pkg-config.
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(UNICORN QUIET IMPORTED_TARGET unicorn)
+    endif()
+    if(UNICORN_FOUND)
+        message(STATUS "Found Unicorn ${UNICORN_VERSION}")
+    else()
+        message(STATUS "Unicorn not found - semantic round-trip tests disabled (install libunicorn-dev to enable)")
+        set(DRAGON_USE_UNICORN OFF)
+    endif()
+endif()
+
 # FetchContent must be included before any FetchContent_Declare calls
 include(FetchContent)
 

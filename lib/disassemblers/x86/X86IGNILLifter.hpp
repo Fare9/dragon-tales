@@ -74,6 +74,14 @@ class X86IGNILLifter {
                   ignil::Block &out, std::uint32_t &tmp) const;
   void liftSubMem(const llvm::MCInst &mc, std::uint64_t addr,
                   ignil::Block &out, std::uint32_t &tmp) const;
+  // reg += [mem] / reg -= [mem]: op[0]=dst(out), op[1]=src1(tied=dst),
+  // op[2..6]=mem(rhs). Loads rhs, then the same ADD/SUB + flags as the rr
+  // form. Found by scripts/audit_x86_lifter_coverage.py - the reg,mem
+  // direction of the same gap class as liftAddMem/liftSubMem.
+  void liftAddRegMem(const llvm::MCInst &mc, std::uint64_t addr,
+                     ignil::Block &out, std::uint32_t &tmp) const;
+  void liftSubRegMem(const llvm::MCInst &mc, std::uint64_t addr,
+                     ignil::Block &out, std::uint32_t &tmp) const;
   void liftXor(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftAnd(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -194,10 +202,12 @@ class X86IGNILLifter {
   unsigned opAdd64ri_{}, opAdd32ri_{}, opAdd64ri8_{}, opAdd32ri8_{};
   unsigned opAdd64mr_{}, opAdd32mr_{};
   unsigned opAdd64mi_{}, opAdd32mi_{}, opAdd64mi8_{}, opAdd32mi8_{};
+  unsigned opAdd64rm_{}, opAdd32rm_{};
   unsigned opSub64rr_{}, opSub32rr_{};
   unsigned opSub64ri_{}, opSub32ri_{}, opSub64ri8_{}, opSub32ri8_{};
   unsigned opSub64mr_{}, opSub32mr_{};
   unsigned opSub64mi_{}, opSub32mi_{}, opSub64mi8_{}, opSub32mi8_{};
+  unsigned opSub64rm_{}, opSub32rm_{};
   unsigned opXor64rr_{}, opXor32rr_{};
   unsigned opAnd64rr_{}, opAnd32rr_{};
   unsigned opOr64rr_{}, opOr32rr_{};

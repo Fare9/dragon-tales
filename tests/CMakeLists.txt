@@ -14,6 +14,10 @@ if(DRAGON_USE_Z3)
     target_sources(dragon_tests PRIVATE analysis/TestSliceExprZ3.cpp)
 endif()
 
+if(DRAGON_USE_UNICORN)
+    target_sources(dragon_tests PRIVATE semantic/TestX86SemanticRoundTrip.cpp)
+endif()
+
 target_link_libraries(dragon_tests
         PRIVATE
         dragon::libdragon
@@ -22,6 +26,13 @@ target_link_libraries(dragon_tests
 
 if(DRAGON_USE_Z3)
     target_link_libraries(dragon_tests PRIVATE z3::libz3)
+endif()
+
+if(DRAGON_USE_UNICORN)
+    # orcjit/native: only the semantic round-trip tests JIT-execute lifted
+    # IR, so this stays test-only rather than a libdragon dependency.
+    llvm_map_components_to_libnames(LLVM_JIT_LIBS orcjit native)
+    target_link_libraries(dragon_tests PRIVATE PkgConfig::UNICORN ${LLVM_JIT_LIBS})
 endif()
 
 target_include_directories(dragon_tests

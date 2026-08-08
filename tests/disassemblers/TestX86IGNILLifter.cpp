@@ -415,6 +415,33 @@ TEST_CASE("IGNIL lifting - cmp reg, [mem] (CMP32rm)", "[ignil][x86_64]") {
   printIgnilComparison(g);
 }
 
+TEST_CASE("IGNIL lifting - add reg, [mem] / sub reg, [mem] (ADD32rm/SUB32rm)",
+         "[ignil][x86_64]") {
+  // add eax, dword ptr [rbp-8] ; sub ecx, dword ptr [rbp-8] ; ret
+  // Found by scripts/audit_x86_lifter_coverage.py: the reg,mem direction of
+  // the same gap class fixed in liftAddMem/liftSubMem (RMW mem,reg/mem,imm).
+  const std::vector<std::uint8_t> bytes = {
+          0x03, 0x45, 0xf8, // add eax, [rbp-8]
+          0x2b, 0x4d, 0xf8, // sub ecx, [rbp-8]
+          0xc3,             // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE_FALSE(ib->empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::ADD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SUB));
+  REQUIRE_FALSE(hasOpcode(*ib, dragon::ignil::Opcode::STORE)); // dst is a register, not memory
+  REQUIRE(countUndef(*ib) == 6); // two instructions, 3 always-UNDEF flags each
+
+  std::cout << "\n=== IGNIL Lifting: add reg, [mem] / sub reg, [mem] ===";
+  printIgnilComparison(g);
+}
+
 TEST_CASE("IGNIL lifting - cmp [mem], imm8 and cmp [mem], reg", "[ignil][x86_64]") {
   // cmp dword ptr [rbp-4], 0   ; cmp dword ptr [rbp-4], ecx ; ret
   const std::vector<std::uint8_t> bytes = {

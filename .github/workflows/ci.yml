@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # The README requires LLVM 21 "installed on the system"; that's newer
+      # than what ubuntu-24.04's default archive ships, so pull it from the
+      # LLVM project's own apt repo instead of assuming distro packaging
+      # has caught up (portable across Ubuntu runner versions).
+      - name: Install LLVM 21
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 21
+          echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libz3-dev
+
+      # Optional: powers tests/semantic/ (emulation-based round-trip tests
+      # that execute lifted code and diff it against real Unicorn execution
+      # - see X86SemanticRoundTripFixture.h). CMake degrades gracefully to
+      # DRAGON_USE_UNICORN=OFF if this isn't available on a given runner, so
+      # a failed install here shouldn't fail the whole job over an optional
+      # dependency - it just means those tests get skipped, same as a local
+      # checkout without libunicorn-dev installed.
+      - name: Install Unicorn (optional)
+        continue-on-error: true
+        run: sudo apt-get install -y libunicorn-dev
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DLLVM_DIR=/usr/lib/llvm-21/cmake
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      # Informational only for now: several 8/16-bit and ADC/SBB forms are
+      # known-missing (see scripts/audit_x86_lifter_coverage.py), so this
+      # doesn't gate the build yet. Once those are filled in, drop
+      # `continue-on-error` and `--allow-missing` to make it a real gate.
+      - name: x86 lifter opcode coverage (informational)
+        continue-on-error: true
+        run: python3 scripts/audit_x86_lifter_coverage.py --bin build/bin/opcode_audit --allow-missing
