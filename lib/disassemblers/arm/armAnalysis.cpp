@@ -44,6 +44,15 @@ bool dragon::arm::ARMAnalysis::analyze(std::span<const std::uint8_t> bytes,
   std::vector<Instruction> instructions =
           disassembler_.disassemble(bytes, baseAddr);
 
+  // The caller explicitly asked us to start analysis here - trust that as a
+  // function entry independent of prologue matching, same reasoning and
+  // same fix as X86Analysis::analyze(). This is what leaves ARM64
+  // frame-pointer-omitting leaf functions unrecognized in
+  // ToDo/LifterGaps.md #3: no `stp x29,x30`/`mov x29,sp` to match, and
+  // until now no other signal claimed the entry address either.
+  if (!instructions.empty())
+    fnStarts.insert(baseAddr);
+
   // Discover block starts, Function starts, and end of functions
   discoverBlockStarts(instructions, blockStarts);
   discoverFunctionStarts(instructions, blockStarts, fnStarts);

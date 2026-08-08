@@ -110,6 +110,45 @@ TEST_CASE("X86Analysis x86_32 - prologue detected as function start",
 }
 
 // -----------------------------------------------------------------------
+// Entry address without a recognizable prologue
+// -----------------------------------------------------------------------
+
+TEST_CASE("X86Analysis x86_64 - leaf function with no push-rbp prologue is "
+         "still recognized as a function",
+         "[x86][analysis][x86_64]") {
+  // A frame-pointer-omitted leaf function - the shape isCommonFunctionPrologue
+  // has never recognized (no push rbp / mov rbp, rsp, no endbr64). Before
+  // seeding baseAddr as a function start unconditionally, disassembling this
+  // starting at its own entry produced zero functions even though every
+  // instruction lifts cleanly - the exact class of bug documented for
+  // ARM64 in ToDo/LifterGaps.md #3, just the x86 equivalent.
+  //
+  // sub rsp, 0x10                 48 83 EC 10
+  // mov dword ptr [rsp], edi      89 3C 24
+  // mov eax, dword ptr [rsp]      8B 04 24
+  // add eax, 1                    83 C0 01
+  // add rsp, 0x10                 48 83 C4 10
+  // ret                           C3
+  const std::vector<std::uint8_t> bytes = {
+          0x48, 0x83, 0xec, 0x10, // sub rsp, 0x10
+          0x89, 0x3c, 0x24,       // mov [rsp], edi
+          0x8b, 0x04, 0x24,       // mov eax, [rsp]
+          0x83, 0xc0, 0x01,       // add eax, 1
+          0x48, 0x83, 0xc4, 0x10, // add rsp, 0x10
+          0xc3,                   // ret
+  };
+  auto dis = makeAnalyzer(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  auto fns = g.functions();
+  REQUIRE(fns.size() == 1);
+  REQUIRE(fns[0].startAddress() == 0x1000);
+  REQUIRE(fns[0].isValid());
+  REQUIRE(fns[0].numInstructions() == 6);
+}
+
+// -----------------------------------------------------------------------
 // Call target → function start
 // -----------------------------------------------------------------------
 
