@@ -66,6 +66,14 @@ class X86IGNILLifter {
                std::uint32_t &tmp) const;
   void liftSub(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
+  // RMW memory-destination forms: op[0..4]=mem(lhs, also destination),
+  // op[5]=reg-or-imm(rhs). Loads the current value, computes the result,
+  // writes it back to the same address, then sets flags exactly like the
+  // register form.
+  void liftAddMem(const llvm::MCInst &mc, std::uint64_t addr,
+                  ignil::Block &out, std::uint32_t &tmp) const;
+  void liftSubMem(const llvm::MCInst &mc, std::uint64_t addr,
+                  ignil::Block &out, std::uint32_t &tmp) const;
   void liftXor(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftAnd(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -80,6 +88,14 @@ class X86IGNILLifter {
                std::uint32_t &tmp) const;
   void liftCmp(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
+  // CMP reg,mem: op[0]=reg(lhs), op[1..5]=mem(rhs). Loads rhs, discards the
+  // SUB result, keeps the flags - same as liftCmp but rhs comes from memory.
+  void liftCmpRegMem(const llvm::MCInst &mc, std::uint64_t addr,
+                     ignil::Block &out, std::uint32_t &tmp) const;
+  // CMP mem,reg / CMP mem,imm: op[0..4]=mem(lhs), op[5]=reg-or-imm(rhs).
+  // Loads lhs, discards the SUB result, keeps the flags.
+  void liftCmpMem(const llvm::MCInst &mc, std::uint64_t addr,
+                  ignil::Block &out, std::uint32_t &tmp) const;
   void liftTest(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                 std::uint32_t &tmp) const;
   void liftJcc(const llvm::MCInst &mc, std::uint64_t addr,
@@ -172,11 +188,16 @@ class X86IGNILLifter {
   unsigned opMov64ri_{}, opMov32ri_{}, opMov64ri32_{};
   unsigned opMov64rm_{}, opMov32rm_{};
   unsigned opMov64mr_{}, opMov32mr_{};
+  unsigned opMov64mi_{}, opMov32mi_{};
   unsigned opLea64r_{}, opLea32r_{};
   unsigned opAdd64rr_{}, opAdd32rr_{};
   unsigned opAdd64ri_{}, opAdd32ri_{}, opAdd64ri8_{}, opAdd32ri8_{};
+  unsigned opAdd64mr_{}, opAdd32mr_{};
+  unsigned opAdd64mi_{}, opAdd32mi_{}, opAdd64mi8_{}, opAdd32mi8_{};
   unsigned opSub64rr_{}, opSub32rr_{};
   unsigned opSub64ri_{}, opSub32ri_{}, opSub64ri8_{}, opSub32ri8_{};
+  unsigned opSub64mr_{}, opSub32mr_{};
+  unsigned opSub64mi_{}, opSub32mi_{}, opSub64mi8_{}, opSub32mi8_{};
   unsigned opXor64rr_{}, opXor32rr_{};
   unsigned opAnd64rr_{}, opAnd32rr_{};
   unsigned opOr64rr_{}, opOr32rr_{};
@@ -184,6 +205,9 @@ class X86IGNILLifter {
   unsigned opPush32r_{}, opPop32r_{};
   unsigned opCmp64rr_{}, opCmp32rr_{};
   unsigned opCmp64ri_{}, opCmp32ri_{}, opCmp64ri8_{}, opCmp32ri8_{};
+  unsigned opCmp64rm_{}, opCmp32rm_{};
+  unsigned opCmp64mr_{}, opCmp32mr_{};
+  unsigned opCmp64mi_{}, opCmp32mi_{}, opCmp64mi8_{}, opCmp32mi8_{};
   unsigned opTest64rr_{}, opTest32rr_{};
   unsigned opJmp64r_{}, opJmp32r_{}; // indirect
   unsigned opJmp64m_{}, opJmp32m_{}; // indirect memory jump
