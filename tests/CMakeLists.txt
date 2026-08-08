@@ -8,6 +8,8 @@ add_executable(dragon_tests
         assemblers/TestAssembler.cpp
         analysis/TestBackwardSlicer.cpp
         analysis/TestSwitchDetector.cpp
+        sigs/TestPatternParser.cpp
+        sigs/TestSignatureMatcher.cpp
 )
 
 if(DRAGON_USE_Z3)

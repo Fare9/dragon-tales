@@ -61,3 +61,4 @@ target_link_libraries(libdragon
 add_subdirectory(disassemblers)
 add_subdirectory(assemblers)
 add_subdirectory(analysis)
+add_subdirectory(sigs)
