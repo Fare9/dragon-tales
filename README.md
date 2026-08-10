@@ -7,7 +7,7 @@ Features:
 - CFG and function recovery
 - **IGNIL** — a lightweight intermediate language for architecture-independent analysis
 - **Backward slicer** — propagates values through IGNIL CFGs without crossing join nodes
-- **FLIRT-compatible signature matching** — identify known functions from `.pat` signature databases (C++ only so far; not yet exposed through the C shim/Python API)
+- **FLIRT-compatible signature matching** — identify known functions from `.pat` signature databases
 - **Trace lifting** — lift an arbitrary linear instruction sequence (e.g. a captured execution trace) straight to IGNIL, bypassing CFG/function/block-validity analysis entirely
 - C shim (`dragon_c.h`) and Python API (cffi) exposing the full feature set
 

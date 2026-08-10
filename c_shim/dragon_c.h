@@ -258,6 +258,30 @@
       void (*cb)(uint64_t op_addr, dragon_ignil_opcode_t opcode, size_t index, void* user),
       void* user);
 
+  // -- Disassembler: trace lifting -------------------------------------------------
+
+  // Lifts an arbitrary linear sequence of already-decoded instructions
+  // straight to IGNIL, bypassing CFG/function/block validity analysis - see
+  // Disassembler::liftTrace. `instructions` is an array of borrowed pointers
+  // (e.g. from dragon_graph_each_instruction / dragon_graph_get_instruction),
+  // consulted in the order given; they need not be contiguous or come from
+  // the same graph, as long as they were decoded for the same architecture
+  // as `d`. Returns an empty block for RISC-V (no IGNIL lifter yet) or an
+  // empty trace.
+  //
+  // Returns an OWNED ignil block that must be destroyed with
+  // dragon_ignil_block_destroy - NOT the same as blocks returned by
+  // dragon_graph_get_ignil_block, which are borrowed from the graph and must
+  // never be destroyed.
+  dragon_ignil_block_t* dragon_disasm_lift_trace(
+      const dragon_disasm_t* d,
+      const dragon_instruction_t* const* instructions,
+      size_t count);
+
+  // Destroys a block returned by dragon_disasm_lift_trace. Do NOT call this
+  // on a block returned by dragon_graph_get_ignil_block.
+  void dragon_ignil_block_destroy(dragon_ignil_block_t* b);
+
   // -- SliceExpr -----------------------------------------------------------------
 
   typedef enum {
@@ -353,6 +377,55 @@
   void dragon_llvm_lifter_run_inst_combine(dragon_llvm_lifter_t* l);
   void dragon_llvm_lifter_run_gvn(dragon_llvm_lifter_t* l);
   void dragon_llvm_lifter_run_dce(dragon_llvm_lifter_t* l);
+
+  // -- FLIRT signatures (dragon::sigs) --------------------------------------------
+
+  typedef struct dragon_sigdb dragon_sigdb_t;
+
+  dragon_sigdb_t* dragon_sigdb_create(void);
+  void            dragon_sigdb_destroy(dragon_sigdb_t* db);
+
+  // Loads every .pat file directly inside dir (not recursive). Files that
+  // fail to parse are silently skipped - compare signature_count() before
+  // and after to see how much was actually loaded.
+  void dragon_sigdb_load_directory(dragon_sigdb_t* db, const char* dir);
+
+  // Loads a single .pat file. No-op if it can't be parsed.
+  void dragon_sigdb_load_file(dragon_sigdb_t* db, const char* path);
+
+  size_t dragon_sigdb_signature_count(const dragon_sigdb_t* db);
+
+  // The CRC16 variant dragon-tales' signature format uses: reflected,
+  // polynomial 0xA001 (CRC-16/ARC), init 0xFFFF, no final XOR. Caveat: this
+  // could not be verified against a real IDA/FLAIR-generated .pat file (see
+  // SignatureMatcher's class doc) - self-consistent with this codebase's own
+  // parser/matcher, but the first thing to check if a real signature
+  // database is loaded and nothing ever matches.
+  uint16_t dragon_sigs_crc16(const uint8_t* data, size_t len);
+
+  // Tries every signature in db against bytes, which must begin at the
+  // candidate function's address. Returns 1 and fills the out params if any
+  // signature matches (the first match's primary name), 0 otherwise. Any out
+  // pointer may be NULL to ignore that field. *out_name receives an owned
+  // string - caller must free with dragon_cstr_free.
+  int dragon_sigdb_match_at(const dragon_sigdb_t* db,
+                            const uint8_t* bytes, size_t len,
+                            uint64_t address,
+                            uint64_t* out_address, char** out_name,
+                            uint32_t* out_length);
+
+  // Tries every address in entry_points against every signature in db.
+  // image/image_base describe the byte region entry_points fall within.
+  // Unlike match_at, every name a matching signature defines is reported (a
+  // module can bundle more than one function/offset under one pattern), so
+  // one entry point may produce more than one callback invocation. `name` is
+  // borrowed - valid only for the duration of the callback.
+  void dragon_sigdb_match_entries(
+      const dragon_sigdb_t* db,
+      const uint8_t* image, size_t image_len, uint64_t image_base,
+      const uint64_t* entry_points, size_t num_entry_points,
+      void (*cb)(uint64_t address, const char* name, uint32_t length, void* user),
+      void* user);
 
   #ifdef __cplusplus
   }

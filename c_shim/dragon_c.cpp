@@ -15,6 +15,9 @@
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/disassembler/Instruction.hpp>
 #include <dragon/analysis/SliceExpr.hpp>
+#include <dragon/sigs/Signature.hpp>
+#include <dragon/sigs/SignatureDB.hpp>
+#include <dragon/sigs/SignatureMatcher.hpp>
 
 #include <cassert>
 #include <memory>
@@ -488,6 +491,29 @@ void dragon_ignil_block_each_op(
 }
 
 // =============================================================================
+// Disassembler: trace lifting - produces an OWNED ignil block (unlike
+// dragon_graph_get_ignil_block's borrowed one), reusing all the accessors
+// above since it's the same underlying dragon::ignil::Block type.
+// =============================================================================
+
+dragon_ignil_block_t *dragon_disasm_lift_trace(
+    const dragon_disasm_t *d, const dragon_instruction_t *const *instructions,
+    size_t count) {
+  if (!d || (!instructions && count > 0))
+    return nullptr;
+  std::vector<dragon::Instruction> trace;
+  trace.reserve(count);
+  for (size_t i = 0; i < count; ++i)
+    trace.push_back(*as_insn(instructions[i]));
+  auto *block = new dragon::ignil::Block(d->disassembler.liftTrace(trace));
+  return reinterpret_cast<dragon_ignil_block_t *>(block);
+}
+
+void dragon_ignil_block_destroy(dragon_ignil_block_t *b) {
+  delete reinterpret_cast<dragon::ignil::Block *>(b);
+}
+
+// =============================================================================
 // SliceExpr
 // =============================================================================
 
@@ -688,4 +714,68 @@ dragon_slice_expr_t *dragon_slicer_slice_reg(const dragon_slicer_t *s,
       s->slicer.slice(reg, block_addr, *as_graph(g));
   return new dragon_slice_expr{
       std::make_shared<dragon::slice::Expr>(std::move(result))};
+}
+
+// =============================================================================
+// FLIRT signatures (dragon::sigs)
+// =============================================================================
+
+struct dragon_sigdb {
+  dragon::sigs::SignatureDB db;
+};
+
+dragon_sigdb_t *dragon_sigdb_create() { return new dragon_sigdb{}; }
+
+void dragon_sigdb_destroy(dragon_sigdb_t *db) { delete db; }
+
+void dragon_sigdb_load_directory(dragon_sigdb_t *db, const char *dir) {
+  if (db && dir)
+    db->db.loadDirectory(dir);
+}
+
+void dragon_sigdb_load_file(dragon_sigdb_t *db, const char *path) {
+  if (db && path)
+    db->db.loadFile(path);
+}
+
+size_t dragon_sigdb_signature_count(const dragon_sigdb_t *db) {
+  return db ? db->db.signatureCount() : 0;
+}
+
+uint16_t dragon_sigs_crc16(const uint8_t *data, size_t len) {
+  return dragon::sigs::SignatureMatcher::computeCRC16({data, len});
+}
+
+int dragon_sigdb_match_at(const dragon_sigdb_t *db, const uint8_t *bytes,
+                          size_t len, uint64_t address,
+                          uint64_t *out_address, char **out_name,
+                          uint32_t *out_length) {
+  if (!db || !bytes)
+    return 0;
+  auto match = dragon::sigs::SignatureMatcher::matchAt(db->db, {bytes, len},
+                                                        address);
+  if (!match)
+    return 0;
+  if (out_address)
+    *out_address = match->address;
+  if (out_name)
+    *out_name = dup_string(match->name);
+  if (out_length)
+    *out_length = match->length;
+  return 1;
+}
+
+void dragon_sigdb_match_entries(
+    const dragon_sigdb_t *db, const uint8_t *image, size_t image_len,
+    uint64_t image_base, const uint64_t *entry_points,
+    size_t num_entry_points,
+    void (*cb)(uint64_t, const char *, uint32_t, void *), void *user) {
+  if (!db || !image || !cb || (!entry_points && num_entry_points > 0))
+    return;
+  std::vector<std::uint64_t> entries(entry_points,
+                                     entry_points + num_entry_points);
+  auto matches = dragon::sigs::SignatureMatcher::matchEntries(
+      db->db, {image, image_len}, image_base, entries);
+  for (const auto &m: matches)
+    cb(m.address, m.name.c_str(), m.length, user);
 }
