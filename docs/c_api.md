@@ -255,6 +255,49 @@ dragon_graph_destroy(graph);
 | `dragon_ignil_block_each_op(b, cb, user)` | — | Callback receives addr, opcode, index |
 | `dragon_ignil_opcode_name(opc)` | `const char*` (static) | E.g. `"ADD"`, `"COPY"` |
 
+### Trace lifting
+
+`dragon_disasm_lift_trace` lifts an arbitrary linear sequence of
+already-decoded instructions straight to IGNIL — e.g. a captured execution
+trace (Unicorn/QBDI/Frida/Intel PT) that isn't claimed to form a single
+valid basic block or a coherent CFG. It bypasses `dragon_disasm_analyze`'s
+CFG/function/block-validity checks entirely: each instruction is lifted
+independently and the results concatenated in order, with no synthesized
+fall-through terminator.
+
+Unlike `dragon_graph_get_ignil_block`'s borrowed result, the returned block
+is **owned by the caller** and must be destroyed with
+`dragon_ignil_block_destroy` — never call that function on a block that came
+from `dragon_graph_get_ignil_block` (borrowed, owned by the graph; doing so
+double-frees it).
+
+```c
+dragon_graph_t* graph = dragon_disasm_disassemble(dis, code, sizeof(code), 0x1000);
+
+// Collect borrowed instruction pointers to feed as a trace — here just the
+// whole linear decode, but they could come from anywhere (e.g. addresses
+// visited by a real emulator run), in any order, even non-contiguous.
+const dragon_instruction_t* trace[/* count */];
+size_t n = 0;
+void collect(const dragon_instruction_t* i, void* user) {
+    trace[n++] = i;
+}
+dragon_graph_each_instruction(graph, collect, NULL);
+
+dragon_ignil_block_t* block = dragon_disasm_lift_trace(dis, trace, n);
+char* s = dragon_ignil_block_to_string(block);
+printf("%s", s);
+dragon_cstr_free(s);
+
+dragon_ignil_block_destroy(block);   // owned — NOT dragon_graph_get_ignil_block's block
+dragon_graph_destroy(graph);
+```
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_disasm_lift_trace(d, instructions, count)` | **owned** `dragon_ignil_block_t*` | Empty block for RISC-V or an empty trace |
+| `dragon_ignil_block_destroy(b)` | — | Only for blocks from `dragon_disasm_lift_trace` |
+
 ---
 
 ## Backward slicer
@@ -402,3 +445,56 @@ dragon_graph_destroy(graph);
 | `dragon_llvm_lifter_run_inst_combine(l)` | — | Folds sub-register patterns |
 | `dragon_llvm_lifter_run_gvn(l)` | — | Eliminates redundant loads |
 | `dragon_llvm_lifter_run_dce(l)` | — | Removes dead flag computations |
+
+---
+
+## FLIRT signatures
+
+`dragon_sigdb_t` wraps a `SignatureDB` — a loaded collection of FLIRT-style
+`.pat` signatures. Destroy it with `dragon_sigdb_destroy` when no longer
+needed.
+
+Text `.pat` format only (the proprietary binary `.sig` format is not
+supported). The CRC16 variant used (`dragon_sigs_crc16`) is a standard one
+(reflected, poly `0xA001`, init `0xFFFF`, no final XOR — CRC-16/ARC) but was
+never verified against a real IDA/FLAIR-generated `.pat` file — if you load
+a real signature database and nothing ever matches, check this first.
+
+```c
+dragon_sigdb_t* db = dragon_sigdb_create();
+dragon_sigdb_load_directory(db, "./signatures");   // every .pat file in the dir
+printf("loaded %zu signatures\n", dragon_sigdb_signature_count(db));
+
+// Single candidate: try every signature against bytes starting at `address`.
+uint64_t match_addr; char* match_name; uint32_t match_len;
+if (dragon_sigdb_match_at(db, code, sizeof(code), 0x1000,
+                          &match_addr, &match_name, &match_len)) {
+    printf("matched: %s (len %u)\n", match_name, match_len);
+    dragon_cstr_free(match_name);
+}
+
+// Many candidates at once: every entry point against every signature.
+// A module can bundle more than one function/offset under one pattern, so
+// one entry point may produce more than one callback invocation.
+void on_match(uint64_t addr, const char* name, uint32_t len, void* user) {
+    printf("0x%llx: %s (len %u)\n", (unsigned long long)addr, name, len);
+}
+uint64_t entry_points[] = { 0x1000, 0x1040 };
+dragon_sigdb_match_entries(db, image, image_len, image_base,
+                           entry_points, 2, on_match, NULL);
+
+dragon_sigdb_destroy(db);
+```
+
+**API summary**
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_sigdb_create()` | `dragon_sigdb_t*` | |
+| `dragon_sigdb_destroy(db)` | — | |
+| `dragon_sigdb_load_directory(db, dir)` | — | Every `.pat` file directly inside `dir`, not recursive; unparseable files are silently skipped |
+| `dragon_sigdb_load_file(db, path)` | — | No-op if the file can't be parsed |
+| `dragon_sigdb_signature_count(db)` | `size_t` | |
+| `dragon_sigs_crc16(data, len)` | `uint16_t` | The raw CRC16 primitive, exposed standalone for verifying it against real `.pat` data |
+| `dragon_sigdb_match_at(db, bytes, len, address, &out_address, &out_name, &out_length)` | `int` (0/1) | `out_name` is heap-allocated — free with `dragon_cstr_free`; any out-pointer may be NULL |
+| `dragon_sigdb_match_entries(db, image, image_len, image_base, entry_points, n, cb, user)` | — | Callback receives `(address, name, length, user)`; `name` is borrowed, valid only during the callback |

@@ -151,6 +151,29 @@ dis = dragon.Disassembler(dragon.Architecture.X86_64, cfg)
 graph = dis.disassemble(code, 0x1000)
 ```
 
+### Trace lifting
+
+`Disassembler.lift_trace()` lifts an arbitrary linear sequence of
+already-decoded instructions straight to IGNIL — e.g. a captured execution
+trace (Unicorn/QBDI/Frida/Intel PT) that isn't claimed to form a single
+valid basic block or a coherent CFG. It bypasses `disassemble()`'s
+CFG/function/block-validity analysis entirely: each instruction is lifted
+independently and the results concatenated in order, with no synthesized
+fall-through terminator.
+
+```python
+graph = dis.disassemble(code, 0x1000)
+insns = graph.instructions()   # or hand-pick/reorder — need not be contiguous
+
+with dis.lift_trace(insns) as block:
+    print(block.to_string())
+```
+
+The returned `IGNILBlock` is **owned** — unlike `Graph.get_ignil_block()`'s
+borrowed one — and gets destroyed on `__del__`/context-manager exit. It's
+still the same `IGNILBlock` class either way; only the `owned` flag differs
+internally.
+
 ---
 
 ## Graph: blocks and functions
@@ -455,6 +478,49 @@ lifter.optimize()
 | `run_inst_combine()` | — | |
 | `run_gvn()` | — | |
 | `run_dce()` | — | |
+
+---
+
+## FLIRT signatures
+
+`SignatureDB` loads FLIRT-style `.pat` signature databases and matches them
+against disassembled bytes. Text `.pat` format only (the proprietary binary
+`.sig` format is not supported).
+
+`dragon.sigs_crc16(data)` exposes the raw CRC16 primitive used to verify
+matches (reflected, poly `0xA001`, init `0xFFFF`, no final XOR — CRC-16/ARC)
+standalone — useful for checking it against a real `.pat` file, since it was
+only ever verified self-consistently against this codebase's own parser.
+
+```python
+db = dragon.SignatureDB()
+db.load_directory('./signatures')   # every .pat file in the dir, non-recursive
+print(db.signature_count)
+
+# Single candidate: try every signature against code starting at 0x1000.
+match = db.match_at(code, 0x1000)
+if match:
+    address, name, length = match
+    print(f'{name} at 0x{address:x}, length {length}')
+
+# Many candidates at once: every entry point against every signature.
+# A module can bundle more than one function/offset under one pattern, so
+# one entry point may produce more than one match in the result list.
+for address, name, length in db.match_entries(image, image_base, [0x1000, 0x1040]):
+    print(f'0x{address:x}: {name} (len {length})')
+```
+
+### Method reference
+
+| Method | Returns | Notes |
+|---|---|---|
+| `SignatureDB()` | | |
+| `load_directory(path)` | — | Every `.pat` file directly inside `path`, not recursive; unparseable files are silently skipped |
+| `load_file(path)` | — | No-op if the file can't be parsed |
+| `signature_count` | `int` | |
+| `match_at(data, address)` | `(address, name, length)` or `None` | `data` must begin at the candidate function's address |
+| `match_entries(image, image_base, entry_points)` | `list[(address, name, length)]` | |
+| `dragon.sigs_crc16(data)` | `int` | Module-level function, not a `SignatureDB` method |
 | `optimize()` | — | Runs all four passes in the recommended order |
 
 ---
