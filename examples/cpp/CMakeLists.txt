@@ -45,3 +45,40 @@ if(DRAGON_USE_Z3)
             ${LLVM_INCLUDE_DIRS}
     )
 endif()
+
+if(DRAGON_USE_UNICORN)
+    # Prints every stage of tests/toy-vm/'s devirtualization pipeline (trace,
+    # obfuscated IGNIL, raw and optimized LLVM IR) - see that directory for
+    # why this needs Unicorn + orcjit/native, same as the semantic round-trip
+    # tests.
+    add_executable(toy_vm_devirtualization toy_vm_devirtualization.cpp)
+
+    target_link_libraries(toy_vm_devirtualization PRIVATE dragon::libdragon)
+
+    target_include_directories(toy_vm_devirtualization PRIVATE
+            ${CMAKE_SOURCE_DIR}/include
+            ${LLVM_INCLUDE_DIRS}
+    )
+
+    llvm_map_components_to_libnames(TOY_VM_JIT_LIBS orcjit native)
+    target_link_libraries(toy_vm_devirtualization PRIVATE
+            PkgConfig::UNICORN ${TOY_VM_JIT_LIBS}
+    )
+
+    # Segments one captured trace into one episode per VM handler and lifts
+    # each independently - see tests/toy-vm/ToyVMHarness.hpp for why this is
+    # a meaningfully different (and more honest) technique than
+    # toy_vm_devirtualization.cpp's whole-trace flattening.
+    add_executable(toy_vm_handler_recovery toy_vm_handler_recovery.cpp)
+
+    target_link_libraries(toy_vm_handler_recovery PRIVATE dragon::libdragon)
+
+    target_include_directories(toy_vm_handler_recovery PRIVATE
+            ${CMAKE_SOURCE_DIR}/include
+            ${LLVM_INCLUDE_DIRS}
+    )
+
+    target_link_libraries(toy_vm_handler_recovery PRIVATE
+            PkgConfig::UNICORN ${TOY_VM_JIT_LIBS}
+    )
+endif()

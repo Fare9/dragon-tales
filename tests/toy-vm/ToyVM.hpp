@@ -8,6 +8,16 @@
 // trace through the interpreter -> Disassembler::liftTrace() -> LLVM IR ->
 // real LLVM optimization passes -> does the obfuscation actually collapse.
 //
+// This file is just the VM's *definition* (ISA, assembly source, sample
+// program, memory layout). The pipeline plumbing (assemble/run/trace/lift/
+// JIT, plus per-handler trace segmentation) lives in ToyVMHarness.hpp -
+// read that file's header comment for why "flatten one whole-program
+// trace" (TestToyVM.cpp / toy_vm_devirtualization.cpp) and "segment the
+// trace into one episode per handler" (TestToyVMHandlerRecovery.cpp /
+// toy_vm_handler_recovery.cpp) are two meaningfully different techniques,
+// and how both differ from the guided symbolic execution the
+// back.engineering posts describe.
+//
 // Every arithmetic/bitwise handler below computes its result via a classic
 // mixed-boolean-arithmetic (MBA) identity instead of the native x86
 // instruction - the same style of noise the two 2026 back.engineering posts
