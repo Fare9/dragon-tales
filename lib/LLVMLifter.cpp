@@ -47,13 +47,11 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
   }
   return true;
 }
-dragon::llvmlifter::LLVMLifter::RegFile
-dragon::llvmlifter::LLVMLifter::buildRegFile(llvm::Function *llfn,
-                                             const Function *fn,
-                                             const Graph &graph) const {
-  RegFile regFile{};
-  std::map<std::pair<uint32_t, ignil::Width>, std::string_view> regNames;
-  // Lambda used later to check if a value contains a register.
+void dragon::llvmlifter::LLVMLifter::collectRegsFromOps(
+        const std::vector<ignil::Op> &ops, RegFile &regFile,
+        std::map<std::pair<std::uint32_t, ignil::Width>, std::string_view>
+                &regNames) {
+  // Lambda used to check if a value contains a register.
   // in that case, we will keep it for the alloca instruction
   auto collect = [&](const ignil::Value &v) {
     if (std::holds_alternative<ignil::Reg>(v)) {
@@ -64,22 +62,18 @@ dragon::llvmlifter::LLVMLifter::buildRegFile(llvm::Function *llfn,
     }
   };
 
-  // go through every block of the function
-  for (const auto &[addr, block]: fn->blocks()) {
-    // retrieve the lifted version
-    const auto *ignilBlock = graph.getIGNILBlock(addr);
-    if (!ignilBlock)
-      continue;
-    // Get through each one of the instructions
-    // we try to collect the registers.
-    for (const auto &op: ignilBlock->ops()) {
-      if (op.dst.has_value())
-        collect(op.dst.value());
-      for (const auto &src: op.srcs)
-        collect(src);
-    }
+  for (const auto &op: ops) {
+    if (op.dst.has_value())
+      collect(op.dst.value());
+    for (const auto &src: op.srcs)
+      collect(src);
   }
+}
 
+void dragon::llvmlifter::LLVMLifter::allocateRegFile(
+        llvm::Function *llfn, RegFile &regFile,
+        const std::map<std::pair<std::uint32_t, ignil::Width>,
+                       std::string_view> &regNames) const {
   llvm::IRBuilder<> builder(&llfn->getEntryBlock(),
                             llfn->getEntryBlock().begin());
   for (auto &[offset, widthMap]: regFile) {
@@ -94,8 +88,74 @@ dragon::llvmlifter::LLVMLifter::buildRegFile(llvm::Function *llfn,
                                   name);
     }
   }
+}
 
+dragon::llvmlifter::LLVMLifter::RegFile
+dragon::llvmlifter::LLVMLifter::buildRegFile(llvm::Function *llfn,
+                                             const Function *fn,
+                                             const Graph &graph) const {
+  RegFile regFile{};
+  std::map<std::pair<uint32_t, ignil::Width>, std::string_view> regNames;
+
+  // go through every block of the function
+  for (const auto &[addr, block]: fn->blocks()) {
+    // retrieve the lifted version
+    const auto *ignilBlock = graph.getIGNILBlock(addr);
+    if (!ignilBlock)
+      continue;
+    collectRegsFromOps(ignilBlock->ops(), regFile, regNames);
+  }
+
+  allocateRegFile(llfn, regFile, regNames);
   return regFile;
+}
+
+bool dragon::llvmlifter::LLVMLifter::liftBlock(const ignil::Block &block,
+                                               std::string_view name) {
+  if (block.empty())
+    return false;
+
+  std::string fnName = name.empty() ? "trace" : std::string(name);
+  auto *ptrTy = llvm::PointerType::getUnqual(*ctx_);
+  auto *voidTy = llvm::Type::getVoidTy(*ctx_);
+  auto *FnType = llvm::FunctionType::get(voidTy, {ptrTy, ptrTy}, false);
+  auto *llfn = llvm::Function::Create(
+          FnType, llvm::GlobalValue::ExternalLinkage, fnName, *module_);
+  llfn->getArg(0)->setName("mem");
+  llfn->getArg(1)->setName("regs");
+  auto *memPtr  = llfn->getArg(0);
+  auto *regsPtr = llfn->getArg(1);
+
+  auto *entry = llvm::BasicBlock::Create(*ctx_, "entry", llfn);
+
+  RegFile regFile{};
+  std::map<std::pair<std::uint32_t, ignil::Width>, std::string_view> regNames;
+  collectRegsFromOps(block.ops(), regFile, regNames);
+  allocateRegFile(llfn, regFile, regNames);
+
+  initializeRegistersFromParam(llfn, regFile, regsPtr);
+
+  TempMap temps{};
+  llvm::IRBuilder<> builder(entry);
+  const std::map<std::uint64_t, llvm::BasicBlock *> noTargets;
+  bool sawRet = false;
+
+  for (const auto &op: block.ops()) {
+    // A linear, already-resolved trace has nothing left to branch on - the
+    // op sequence itself already *is* the path that was taken.
+    if (op.opcode == ignil::Opcode::JMP || op.opcode == ignil::Opcode::CJMP)
+      continue;
+    liftOp(op, regFile, temps, memPtr, regsPtr, builder, noTargets);
+    if (op.opcode == ignil::Opcode::RET) {
+      sawRet = true;
+      break; // liftOp's RET case already terminated the block
+    }
+  }
+
+  if (!sawRet)
+    emitReturn(regFile, regsPtr, builder);
+
+  return true;
 }
 std::optional<std::map<std::uint64_t, llvm::BasicBlock *>>
 dragon::llvmlifter::LLVMLifter::buildBlockMap(llvm::Function *llfn,
@@ -155,6 +215,20 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
   auto dstTy = [&] {
     return llvm::IntegerType::get(*ctx_, ignil::widthOf(*op.dst));
   };
+  // SHL/SHR/SAR's shift-count operand (srcs[1]) is narrower than the
+  // shifted value on real ISAs (x86 shift-by-immediate/CL is always an
+  // 8-bit count regardless of operand width) - IGNIL preserves that
+  // narrower width, but LLVM's shift instructions require both operands to
+  // share exactly one type. Normalize with zext/trunc before building the
+  // instruction, or LLVM happily builds a type-mismatched shl/lshr/ashr
+  // that only fails much later, when something tries to parse the printed
+  // IR back in (verifier catches it too, but nothing here calls verify()).
+  auto shiftAmt = [&](llvm::Value *lhs) {
+    auto *rhs = r1();
+    if (rhs->getType() != lhs->getType())
+      rhs = builder.CreateZExtOrTrunc(rhs, lhs->getType());
+    return rhs;
+  };
 
   switch (op.opcode) {
     // --- Data movement ---
@@ -212,15 +286,21 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
     case ignil::Opcode::NOT:
       emit(builder.CreateNot(r0()));
       break;
-    case ignil::Opcode::SHL:
-      emit(builder.CreateShl(r0(), r1()));
+    case ignil::Opcode::SHL: {
+      auto *lhs = r0();
+      emit(builder.CreateShl(lhs, shiftAmt(lhs)));
       break;
-    case ignil::Opcode::SHR:
-      emit(builder.CreateLShr(r0(), r1()));
+    }
+    case ignil::Opcode::SHR: {
+      auto *lhs = r0();
+      emit(builder.CreateLShr(lhs, shiftAmt(lhs)));
       break;
-    case ignil::Opcode::SAR:
-      emit(builder.CreateAShr(r0(), r1()));
+    }
+    case ignil::Opcode::SAR: {
+      auto *lhs = r0();
+      emit(builder.CreateAShr(lhs, shiftAmt(lhs)));
       break;
+    }
 
     // --- Width conversions ---
     case ignil::Opcode::ZEXT:
@@ -319,17 +399,7 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
     }
 
     case ignil::Opcode::RET:
-      // Write back the widest register at each offset so callers can observe
-      // the final register state even after aggressive optimisation passes.
-      for (auto &[offset, widthMap] : regs) {
-        auto &[width, slot] = *widthMap.rbegin(); // widest at this offset
-        auto *ty  = llvm::IntegerType::get(*ctx_, width);
-        auto *val = builder.CreateLoad(ty, slot);
-        auto *ptr = builder.CreateGEP(builder.getInt8Ty(), regsPtr,
-                                      builder.getInt32(offset));
-        builder.CreateStore(val, ptr);
-      }
-      builder.CreateRetVoid();
+      emitReturn(regs, regsPtr, builder);
       break;
 
     case ignil::Opcode::UNDEF:
@@ -339,15 +409,47 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
   }
 }
 
+void dragon::llvmlifter::LLVMLifter::emitReturn(RegFile &regs,
+                                                llvm::Value *regsPtr,
+                                                llvm::IRBuilder<> &builder) {
+  // Write back the widest register at each offset so callers can observe
+  // the final register state even after aggressive optimisation passes.
+  for (auto &[offset, widthMap]: regs) {
+    auto &[width, slot] = *widthMap.rbegin(); // widest at this offset
+    auto *ty  = llvm::IntegerType::get(*ctx_, width);
+    auto *val = builder.CreateLoad(ty, slot);
+    auto *ptr = builder.CreateGEP(builder.getInt8Ty(), regsPtr,
+                                  builder.getInt32(offset));
+    builder.CreateStore(val, ptr);
+  }
+  builder.CreateRetVoid();
+}
+
 llvm::Value *
 dragon::llvmlifter::LLVMLifter::resolve(const ignil::Value &v, RegFile &regs,
                                         const TempMap &temps,
                                         llvm::IRBuilder<> &builder) const {
 
   // Check if it is a constant, in that case, generate
-  // a constant llvm value width specific width and value
+  // a constant llvm value width specific width and value.
+  //
+  // Defensively mask to `c->width` bits first: some X86IGNILLifter operand
+  // decoding paths sign-extend an immediate to a full 64-bit pattern (e.g.
+  // `cmp eax, 0xFFFFFFFF` produces Const{width=32,
+  // value=0xFFFFFFFFFFFFFFFF}) without masking it back down to the
+  // declared width. llvm::APInt's constructor asserts (in an
+  // assertions-enabled build only - NDEBUG builds silently truncate) that
+  // the value fits in `BitWidth` unsigned bits, so an unmasked over-wide
+  // value here crashes any assertions-enabled build. Masking here is a
+  // narrow, defensive fix at this one choke point (every ignil::Const
+  // passes through here) - it does not fix the upstream sign-extension
+  // bug itself, which is still real and worth root-causing (see
+  // ToDo/Roadmap.md).
   if (const auto *c = std::get_if<ignil::Const>(&v)) {
-    return llvm::ConstantInt::get(*ctx_, llvm::APInt(c->width, c->value));
+    std::uint64_t masked = c->width >= 64
+                                   ? c->value
+                                   : c->value & ((std::uint64_t{1} << c->width) - 1);
+    return llvm::ConstantInt::get(*ctx_, llvm::APInt(c->width, masked));
   }
 
   // Check if it is an existing register, in that case
@@ -372,6 +474,20 @@ void dragon::llvmlifter::LLVMLifter::mergeIntoParent(
       continue;
 
     auto *bigTy = llvm::IntegerType::get(*ctx_, bigWidth);
+
+    // x86-64: writing a 32-bit register implicitly zero-extends into the
+    // full 64-bit register (e.g. `mov ecx, 1` clears bits 32-63 of RCX) -
+    // unlike 8/16-bit sub-register writes (AL, AX, ...), which leave the
+    // rest of the register untouched. Every other width transition here
+    // preserves the untouched high bits; this one specific transition must
+    // not, or a register zeroed via its 32-bit name (a very common x86-64
+    // idiom, e.g. `xor ecx, ecx`) would keep stale high bits when read back
+    // through its 64-bit name.
+    if (arch_ == Architecture::X86_64 && width == 32 && bigWidth == 64) {
+      builder.CreateStore(builder.CreateZExt(value, bigTy), slot);
+      continue;
+    }
+
     auto *mask = llvm::ConstantInt::get(
             bigTy, ~llvm::APInt::getLowBitsSet(bigWidth, width));
     auto *parent = builder.CreateLoad(bigTy, slot);

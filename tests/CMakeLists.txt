@@ -18,7 +18,10 @@ if(DRAGON_USE_Z3)
 endif()
 
 if(DRAGON_USE_UNICORN)
-    target_sources(dragon_tests PRIVATE semantic/TestX86SemanticRoundTrip.cpp)
+    target_sources(dragon_tests PRIVATE
+        semantic/TestX86SemanticRoundTrip.cpp
+        toy-vm/TestToyVM.cpp
+    )
 endif()
 
 target_link_libraries(dragon_tests
