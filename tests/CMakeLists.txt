@@ -9,6 +9,7 @@ add_executable(dragon_tests
         assemblers/TestAssembler.cpp
         analysis/TestBackwardSlicer.cpp
         analysis/TestSwitchDetector.cpp
+        analysis/TestIGNILSimplify.cpp
         sigs/TestPatternParser.cpp
         sigs/TestSignatureMatcher.cpp
 )

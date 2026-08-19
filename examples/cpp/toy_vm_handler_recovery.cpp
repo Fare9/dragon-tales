@@ -39,6 +39,8 @@
 
 #include "../../tests/toy-vm/ToyVMHarness.hpp"
 
+#include <dragon/lifters/ignil/IGNILSimplify.hpp>
+
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Instructions.h>
 
@@ -253,20 +255,31 @@ int main() {
   // Lift each handler's segment to IGNIL up front so the segmentation
   // table below can show both the x86 instruction count and the IGNIL op
   // count it expanded to (one x86 instruction is often several IGNIL ops -
-  // e.g. an ADD needs its own flag computation).
+  // e.g. an ADD needs its own flag computation), then run the new IGNIL-
+  // level peephole simplifier (ignil::simplifyBlock -
+  // include/dragon/lifters/ignil/IGNILSimplify.hpp) before handing blocks
+  // to LLVMLifter, so the size win shows up at the IGNIL layer itself and
+  // not just after LLVM's own optimizer runs.
   dragon::Configuration cfg;
   dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
   std::map<std::string, dragon::ignil::Block> blocks;
-  for (const auto &[name, insns]: segments)
-    blocks.emplace(name, dis.liftTrace(insns));
+  std::map<std::string, std::size_t> rawOpCounts;
+  for (const auto &[name, insns]: segments) {
+    dragon::ignil::Block raw = dis.liftTrace(insns);
+    rawOpCounts.emplace(name, raw.size());
+    blocks.emplace(name, dragon::ignil::simplifyBlock(raw));
+  }
 
   printHeader("Segmentation");
   for (const auto &name: handlerNames()) {
     auto segIt = segments.find(name);
+    auto rawIt = rawOpCounts.find(name);
     auto blockIt = blocks.find(name);
     std::cout << std::format(
-            "  {:8s} -> {:2d} x86 instructions -> {:3d} IGNIL ops\n", name,
-            segIt == segments.end() ? 0 : segIt->second.size(),
+            "  {:8s} -> {:2d} x86 instructions -> {:3d} IGNIL ops (raw) -> "
+            "{:3d} IGNIL ops (simplified)\n",
+            name, segIt == segments.end() ? 0 : segIt->second.size(),
+            rawIt == rawOpCounts.end() ? 0 : rawIt->second,
             blockIt == blocks.end() ? 0 : blockIt->second.size());
   }
 

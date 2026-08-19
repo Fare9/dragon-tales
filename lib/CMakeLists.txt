@@ -5,6 +5,7 @@ add_library(libdragon SHARED
         Function.cpp
         Graph.cpp
         IGNIL.cpp
+        IGNILSimplify.cpp
         LLVMLifter.cpp
 )
 
