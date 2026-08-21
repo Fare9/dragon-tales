@@ -464,3 +464,146 @@ TEST_CASE("IGNIL lifting - cmp [mem], imm8 and cmp [mem], reg", "[ignil][x86_64]
   std::cout << "\n=== IGNIL Lifting: cmp [mem], imm8 / cmp [mem], reg ===";
   printIgnilComparison(g);
 }
+
+// -----------------------------------------------------------------------
+// MOVSX64rr32, SAR32ri/SAR64ri, IMUL64rri32/rri8/32rri/rri8, LEA64_32r -
+// found while lifting a real compiled signed-division-by-constant sequence
+// (GCC's standard multiply-high lowering for `x / C`), not
+// obfuscation-specific - this is ordinary output for any program dividing
+// by a non-power-of-two constant. See ToDo/Roadmap.md for the full
+// writeup. Byte sequences below were generated with `gcc -c` from real
+// Intel-syntax assembly and verified with `objdump -d`, not hand-derived.
+// -----------------------------------------------------------------------
+
+TEST_CASE("IGNIL lifting - movsxd rax, edi (MOVSX64rr32)", "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0x48, 0x63, 0xc7, // movsxd rax, edi
+          0xc3,             // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE_FALSE(ib->empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SEXT));
+  REQUIRE(countUndef(*ib) == 0); // MOVSX never affects flags
+
+  std::cout << "\n=== IGNIL Lifting: movsxd rax, edi ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - sar eax, 0 leaves flags untouched (SAR32ri)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xc1, 0xf8, 0x00, // sar eax, 0
+          0xc3,             // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  // Real x86: shift by 0 is a pure copy, no SAR op, no flags at all - not
+  // even UNDEF, since nothing was touched.
+  REQUIRE_FALSE(hasOpcode(*ib, dragon::ignil::Opcode::SAR));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::COPY));
+  REQUIRE(countUndef(*ib) == 0);
+
+  std::cout << "\n=== IGNIL Lifting: sar eax, 0 ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - sar eax, 1 defines OF (SAR32ri)", "[ignil][x86_64]") {
+  // Same C1 /7 ib encoding as `sar eax, 0` above with the immediate byte
+  // changed to 1 - the assembler prefers the shorter D1 (SAR32r1) encoding
+  // for a literal `sar eax, 1`, which is a different, unrelated opcode this
+  // change doesn't touch; this form is still a valid, decodable SAR32ri.
+  const std::vector<std::uint8_t> bytes = {
+          0xc1, 0xf8, 0x01, // sar eax, 1  (SAR32ri encoding, not SAR32r1)
+          0xc3,             // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SAR));
+  REQUIRE(countUndef(*ib) == 3); // only PF/AF/DF - CF/ZF/SF/OF all computed
+
+  std::cout << "\n=== IGNIL Lifting: sar eax, 1 ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - sar edi, 0x1f / sar rax, 0x26 (SAR32ri/SAR64ri, "
+          "count > 1)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xc1, 0xff, 0x1f,       // sar edi, 0x1f
+          0x48, 0xc1, 0xf8, 0x26, // sar rax, 0x26
+          0xc3,                   // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SAR));
+  // OF is architecturally undefined for count != 1 - two SARs, four
+  // UNDEF flags (PF/AF/OF/DF) each.
+  REQUIRE(countUndef(*ib) == 8);
+
+  std::cout << "\n=== IGNIL Lifting: sar edi, 0x1f / sar rax, 0x26 ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - 3-operand imul with immediate (IMUL64rri32/"
+          "rri8/32rri/32rri8)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0x48, 0x69, 0xc0, 0x41, 0xdd, 0xb3, 0x20, // imul rax, rax, 0x20b3dd41
+          0x48, 0x6b, 0xc3, 0x05,                   // imul rax, rbx, 5
+          0x69, 0xc3, 0x40, 0x42, 0x0f, 0x00,       // imul eax, ebx, 1000000
+          0x6b, 0xc3, 0x05,                         // imul eax, ebx, 5
+          0xc3,                                     // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::MUL));
+  // All flags UNDEF for every IMUL form - SF/ZF/AF/PF are architecturally
+  // undefined for IMUL, CF/OF would need a double-width product IGNIL
+  // doesn't model. 4 IMULs * 7 flags each.
+  REQUIRE(countUndef(*ib) == 28);
+
+  std::cout << "\n=== IGNIL Lifting: 3-operand imul with immediate ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - lea eax, [rdx+rcx*1] truncates a 64-bit address "
+          "into a 32-bit dst (LEA64_32r)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0x8d, 0x04, 0x0a, // lea eax, [rdx+rcx*1]
+          0xc3,             // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::TRUNC));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::ADD)); // base+index address calc
+  REQUIRE(countUndef(*ib) == 0); // LEA never affects flags
+
+  std::cout << "\n=== IGNIL Lifting: lea eax, [rdx+rcx*1] ===";
+  printIgnilComparison(g);
+}

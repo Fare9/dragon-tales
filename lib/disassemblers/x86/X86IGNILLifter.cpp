@@ -153,6 +153,14 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"RETIL", &X86IGNILLifter::opRetIL_},
           {"LEAVE64", &X86IGNILLifter::opLeave64_},
           {"LEAVE", &X86IGNILLifter::opLeave_},
+          {"MOVSX64rr32", &X86IGNILLifter::opMovsx64rr32_},
+          {"SAR32ri", &X86IGNILLifter::opSar32ri_},
+          {"SAR64ri", &X86IGNILLifter::opSar64ri_},
+          {"IMUL64rri32", &X86IGNILLifter::opImul64rri32_},
+          {"IMUL64rri8", &X86IGNILLifter::opImul64rri8_},
+          {"IMUL32rri", &X86IGNILLifter::opImul32rri_},
+          {"IMUL32rri8", &X86IGNILLifter::opImul32rri8_},
+          {"LEA64_32r", &X86IGNILLifter::opLea64_32r_},
   };
 
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
@@ -279,6 +287,15 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftJmpMem(*mc, addr, insn.size(), out, tempId);
   else if (opc == opCall64m_ || opc == opCall32m_)
     liftCallMem(*mc, addr, insn.size(), out, tempId);
+  else if (opc == opMovsx64rr32_)
+    liftMovsx(*mc, addr, out, tempId);
+  else if (opc == opSar32ri_ || opc == opSar64ri_)
+    liftSarImm(*mc, addr, out, tempId);
+  else if (opc == opImul64rri32_ || opc == opImul64rri8_ ||
+           opc == opImul32rri_ || opc == opImul32rri8_)
+    liftImulImm(*mc, addr, out, tempId);
+  else if (opc == opLea64_32r_)
+    liftLeaTrunc32(*mc, addr, out, tempId);
   else {
     const auto &desc = instrInfo_->get(opc);
     if (desc.isConditionalBranch()) {
@@ -1013,6 +1030,149 @@ void dragon::x86::X86IGNILLifter::liftLeave(const llvm::MCInst &mc,
               addr});
   out.append({ignil::Opcode::COPY, sp, {newSP}, addr});
 }
+
+void dragon::x86::X86IGNILLifter::liftMovsx(const llvm::MCInst &mc,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  // op[0]=dst(wider), op[1]=src(narrower). MOVSX never affects flags.
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftMovsx in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(1).getReg());
+  if (!src) {
+    logger_.log("Error liftMovsx in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  out.append({ignil::Opcode::SEXT, *dst, {*src}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftSarImm(const llvm::MCInst &mc,
+                                             std::uint64_t addr,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp) const {
+  // op[0]=dst(out), op[1]=src(tied=dst), op[2]=imm shift count.
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftSarImm in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(1).getReg());
+  if (!src) {
+    logger_.log("Error liftSarImm in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  const auto imm = static_cast<std::uint64_t>(mc.getOperand(2).getImm());
+
+  // Real x86: shift by 0 leaves every flag - and the value - exactly as it
+  // was, not even recomputed.
+  if (imm == 0) {
+    out.append({ignil::Opcode::COPY, *dst, {*src}, addr});
+    return;
+  }
+
+  // Save the original value before dst gets overwritten below (dst and src
+  // are the same tied register) - the CF FlagSetter below runs later, after
+  // that overwrite, so it must read this saved Temp, not the Reg directly
+  // (same reasoning liftAdd's `lhs` save applies to OF).
+  auto lhs = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::COPY, lhs, {*src}, addr});
+
+  auto result = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::SAR,
+              result,
+              {ignil::Value{lhs}, ignil::Const{imm, dst->width}},
+              addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+
+  auto cfLastBitOut = [this, lhs, imm,
+                       addr](ignil::Block &out, std::uint32_t &tmp) {
+    const ignil::Width w = lhs.width;
+    auto shifted = newTemp(tmp, w);
+    out.append({ignil::Opcode::SHR,
+                shifted,
+                {ignil::Value{lhs}, ignil::Const{imm - 1, w}},
+                addr});
+    auto masked = newTemp(tmp, w);
+    out.append(
+            {ignil::Opcode::AND, masked, {shifted, ignil::Const{1, w}}, addr});
+    auto bit = newTemp(tmp, 1);
+    out.append(
+            {ignil::Opcode::NEQ, bit, {masked, ignil::Const{0, w}}, addr});
+    out.append({ignil::Opcode::COPY, regCF_, {bit}, addr});
+  };
+
+  // OF is only architecturally defined for a 1-bit shift, where an
+  // arithmetic right shift can never overflow (the sign bit is replicated,
+  // never changed) - always 0. Left UNDEF (omitted from the map) for any
+  // other count, matching this lifter's "UNDEF for genuinely
+  // spec-undefined" convention elsewhere rather than guessing.
+  std::map<X86Flag, FlagSetter> flags{
+          {X86Flag::CF, cfLastBitOut},
+          {X86Flag::ZF, zfEqZero(result, addr)},
+          {X86Flag::SF, sfSignBit(result, addr)},
+  };
+  if (imm == 1)
+    flags.emplace(X86Flag::OF, [this, addr](ignil::Block &out, std::uint32_t &) {
+      out.append({ignil::Opcode::COPY, regOF_, {ignil::Const{0, 1}}, addr});
+    });
+  emitArithFlags(addr, out, tmp, flags);
+}
+
+void dragon::x86::X86IGNILLifter::liftImulImm(const llvm::MCInst &mc,
+                                              std::uint64_t addr,
+                                              ignil::Block &out,
+                                              std::uint32_t &tmp) const {
+  // op[0]=dst, op[1]=src, op[2]=imm (already sign-extended to dst's width
+  // by LLVM's MCInst decode - same convention liftAdd already relies on).
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftImulImm in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(1).getReg());
+  if (!src) {
+    logger_.log("Error liftImulImm in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  const auto imm = static_cast<std::uint64_t>(mc.getOperand(2).getImm());
+
+  auto result = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::MUL,
+              result,
+              {*src, ignil::Const{imm, dst->width}},
+              addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+
+  // All flags UNDEF: SF/ZF/AF/PF are architecturally undefined for IMUL,
+  // and CF/OF would need a full double-width product to detect overflow
+  // correctly, which IGNIL's fixed-width model doesn't support - honestly
+  // UNDEF rather than a guessed, likely-wrong formula.
+  emitArithFlags(addr, out, tmp, {});
+}
+
+void dragon::x86::X86IGNILLifter::liftLeaTrunc32(const llvm::MCInst &mc,
+                                                 std::uint64_t addr,
+                                                 ignil::Block &out,
+                                                 std::uint32_t &tmp) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftLeaTrunc32 in addr {:#x} no dst", addr);
+    return;
+  }
+  // Address registers are always 64-bit for this form (that's the whole
+  // point of LEA64_32r vs plain LEA32r), regardless of the 32-bit dst.
+  auto addrTemp = emitAddress(mc, 1, 64, addr, out, tmp);
+  auto truncated = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::TRUNC, truncated, {addrTemp}, addr});
+  out.append({ignil::Opcode::COPY, *dst, {truncated}, addr});
+}
+
 std::optional<dragon::ignil::Reg>
 dragon::x86::X86IGNILLifter::toReg(unsigned llvmReg) const {
   auto it = regMap_.find(llvmReg);

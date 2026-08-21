@@ -142,6 +142,41 @@ class X86IGNILLifter {
                std::uint32_t &tmp) const;
   void liftLeave(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                  std::uint32_t &tmp) const;
+  // Sign-extending move (e.g. `movsxd rax, edi`): op[0]=dst(wider),
+  // op[1]=src(narrower). No flags affected. Found while lifting a real
+  // compiled signed-division-by-constant sequence (GCC's standard
+  // multiply-high lowering for `x / C`), not obfuscation-specific - this
+  // shows up in any program that divides by a non-power-of-two constant.
+  void liftMovsx(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                 std::uint32_t &tmp) const;
+  // SAR by immediate: op[0]=dst(out), op[1]=src(tied=dst), op[2]=imm shift
+  // count. Real x86: shift by 0 leaves every flag (and the value) untouched
+  // - not even recomputed. CF = the last bit shifted out; SF/ZF as usual;
+  // OF is only architecturally defined for a 1-bit shift (always 0 for
+  // SAR specifically - an arithmetic right shift by exactly one bit can
+  // never overflow), left UNDEF otherwise, matching this lifter's existing
+  // "UNDEF for genuinely spec-undefined" convention rather than guessing.
+  void liftSarImm(const llvm::MCInst &mc, std::uint64_t addr,
+                  ignil::Block &out, std::uint32_t &tmp) const;
+  // 3-operand signed multiply with immediate (e.g. `imul rax, rax, imm32`):
+  // op[0]=dst, op[1]=src, op[2]=imm (already sign-extended to dst's width
+  // by LLVM's own MCInst decode, same convention liftAdd already relies on
+  // for ADD64ri32). All flags UNDEF: SF/ZF/AF/PF are architecturally
+  // undefined for IMUL per the ISA spec, and CF/OF would need a full
+  // double-width product to detect overflow correctly, which IGNIL's
+  // fixed-width model doesn't support - left honestly UNDEF rather than a
+  // guessed, likely-wrong formula.
+  void liftImulImm(const llvm::MCInst &mc, std::uint64_t addr,
+                   ignil::Block &out, std::uint32_t &tmp) const;
+  // LEA computing a 64-bit address expression but writing only the 32-bit
+  // low half of the destination (e.g. `lea eax, [rdx+rcx*1]` - address
+  // registers are 64-bit, destination is 32-bit). Unlike liftLea, this
+  // needs an explicit TRUNC: LLVMLifter's Reg-destination COPY only
+  // widens (CreateZExt) when the source is narrower than the slot, and
+  // would build invalid IR (or assert) if asked to narrow a 64-bit value
+  // into a 32-bit slot directly.
+  void liftLeaTrunc32(const llvm::MCInst &mc, std::uint64_t addr,
+                      ignil::Block &out, std::uint32_t &tmp) const;
 
   // Helpers
   // Translate an LLVM register integer to an ignil::Reg.
@@ -245,6 +280,10 @@ class X86IGNILLifter {
   unsigned opRet64_{}, opRetL_{};
   unsigned opRetI64_{}, opRetIL_{}; // ret N  (callee-cleanup variant)
   unsigned opLeave64_{}, opLeave_{}; // leave (decomposed to mov rsp,rbp / pop rbp)
+  unsigned opMovsx64rr32_{};
+  unsigned opSar32ri_{}, opSar64ri_{};
+  unsigned opImul64rri32_{}, opImul64rri8_{}, opImul32rri_{}, opImul32rri8_{};
+  unsigned opLea64_32r_{};
 
   // LLVM register integer -> ignil::Reg mapping
   // Built once in constructor by scanning MCRegisterInfo +
