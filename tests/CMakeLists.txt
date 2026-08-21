@@ -12,10 +12,11 @@ add_executable(dragon_tests
         analysis/TestIGNILSimplify.cpp
         sigs/TestPatternParser.cpp
         sigs/TestSignatureMatcher.cpp
+        obfush/TestObfush.cpp
 )
 
 if(DRAGON_USE_Z3)
-    target_sources(dragon_tests PRIVATE analysis/TestSliceExprZ3.cpp)
+    target_sources(dragon_tests PRIVATE analysis/TestSliceExprZ3.cpp obfush/TestObfushZ3.cpp)
 endif()
 
 if(DRAGON_USE_UNICORN)
