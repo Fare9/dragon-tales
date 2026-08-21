@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -292,6 +293,107 @@ std::optional<Op> tryIdentity(Opcode op, const Value &lhs, const Value &rhs,
   return std::nullopt;
 }
 
+bool sameValue(const Value &a, const Value &b) {
+  if (a.index() != b.index())
+    return false;
+  return std::visit(
+          [&](const auto &av) {
+            using T = std::decay_t<decltype(av)>;
+            const auto &bv = std::get<T>(b);
+            if constexpr (std::is_same_v<T, Const>)
+              return av.width == bv.width &&
+                     maskTo(av.value, av.width) == maskTo(bv.value, bv.width);
+            else if constexpr (std::is_same_v<T, Reg>)
+              return av.offset == bv.offset && av.width == bv.width;
+            else // Temp
+              return av.id == bv.id && av.width == bv.width;
+          },
+          a);
+}
+
+// ---------------------------------------------------------------------------
+// Half-adder identity: `dst = ADD(XOR(p,q), 2*AND(p,q))` -> `dst = ADD(p,q)`.
+// The "2*" step is matched as either `SHL(and, 1)` or `ADD(and, and)` (the
+// same value added to itself) - real lifted code from x86 tends to use the
+// latter (`add eax, eax` for a x2 rather than `shl eax, 1`), and both are
+// semantically identical doubling.
+//
+// This is a well-known, general algebraic identity (the textbook "sum =
+// XOR, carry = AND, doubled-carry + sum = full sum" decomposition), not a
+// VM-specific pattern - it shows up in ordinary bit-trick code too, not just
+// MBA-obfuscated VM handlers. Verified empirically (opt-21 -O3 on a minimal
+// repro) that LLVM's InstCombine does NOT fold this on its own, unlike the
+// closely related `(a|b)-(a^b) -> a&b` and `a+(-b) -> a-b`, which it does.
+// `defOf` is the current (already-substituted) single definition of each
+// Temp seen so far in this forward pass - safe to trust because Temps are
+// single-assignment within a block.
+// ---------------------------------------------------------------------------
+
+std::optional<Op> tryHalfAdderIdentity(
+        const Op &op, const std::unordered_map<std::uint32_t, Op> &defOf) {
+  if (op.opcode != Opcode::ADD || op.srcs.size() != 2)
+    return std::nullopt;
+
+  auto getDef = [&](const Value &v) -> const Op * {
+    const auto *t = std::get_if<Temp>(&v);
+    if (!t)
+      return nullptr;
+    auto it = defOf.find(t->id);
+    return it == defOf.end() ? nullptr : &it->second;
+  };
+
+  auto matchXor = [&](const Value &v, Value &p, Value &q) {
+    const Op *d = getDef(v);
+    if (!d || d->opcode != Opcode::XOR || d->srcs.size() != 2)
+      return false;
+    p = d->srcs[0];
+    q = d->srcs[1];
+    return true;
+  };
+
+  auto matchDoubledAnd = [&](const Value &v, Value &p, Value &q) {
+    const Op *d = getDef(v);
+    if (!d)
+      return false;
+    const Op *andDef = nullptr;
+    if (d->opcode == Opcode::SHL && d->srcs.size() == 2) {
+      const auto *shAmt = std::get_if<Const>(&d->srcs[1]);
+      if (!shAmt || maskTo(shAmt->value, shAmt->width) != 1)
+        return false;
+      andDef = getDef(d->srcs[0]);
+    } else if (d->opcode == Opcode::ADD && d->srcs.size() == 2 &&
+               sameValue(d->srcs[0], d->srcs[1])) {
+      andDef = getDef(d->srcs[0]);
+    } else {
+      return false;
+    }
+    if (!andDef || andDef->opcode != Opcode::AND || andDef->srcs.size() != 2)
+      return false;
+    p = andDef->srcs[0];
+    q = andDef->srcs[1];
+    return true;
+  };
+
+  for (bool swapped: {false, true}) {
+    const Value &xorSide = swapped ? op.srcs[1] : op.srcs[0];
+    const Value &doubledSide = swapped ? op.srcs[0] : op.srcs[1];
+    Value xp, xq, ap, aq;
+    if (!matchXor(xorSide, xp, xq) || !matchDoubledAnd(doubledSide, ap, aq))
+      continue;
+    bool sameOrder = sameValue(xp, ap) && sameValue(xq, aq);
+    bool swappedOrder = sameValue(xp, aq) && sameValue(xq, ap);
+    if (!sameOrder && !swappedOrder)
+      continue;
+    Op rewritten;
+    rewritten.opcode = Opcode::ADD;
+    rewritten.dst = op.dst;
+    rewritten.srcs = {xp, xq};
+    rewritten.address = op.address;
+    return rewritten;
+  }
+  return std::nullopt;
+}
+
 bool hasSideEffect(Opcode op) {
   switch (op) {
     case Opcode::STORE:
@@ -321,9 +423,12 @@ Block passForward(const Block &in, SimplifyStats &stats) {
   // are the only IGNIL value guaranteed single-assignment within a block
   // (same invariant BackwardSlicer::sliceValue relies on for Temps vs Reg).
   std::unordered_map<std::uint32_t, Value> copyOf;
-  // Records `t = NEG(x)` / `t = NOT(x)` so a later NEG(t)/NOT(t) collapses to
-  // COPY(x). Same Temp-only reasoning as copyOf.
-  std::unordered_map<std::uint32_t, std::pair<Opcode, Value>> unaryDefOf;
+  // Records the current (already-substituted/rewritten) defining Op of every
+  // Temp seen so far - e.g. `t = NEG(x)` so a later NEG(t)/NOT(t) collapses
+  // to COPY(x), or `t = XOR(p,q)` so a later ADD(t, ...) can be checked
+  // against the half-adder identity below. Same Temp-only reasoning as
+  // copyOf - only Temps are guaranteed single-assignment in a block.
+  std::unordered_map<std::uint32_t, Op> defOf;
 
   auto substitute = [&](const Value &v) -> Value {
     if (const auto *t = std::get_if<Temp>(&v)) {
@@ -372,11 +477,12 @@ Block passForward(const Block &in, SimplifyStats &stats) {
     if (!handled && newOp.srcs.size() == 1 &&
         (newOp.opcode == Opcode::NEG || newOp.opcode == Opcode::NOT)) {
       if (const auto *t = std::get_if<Temp>(&newOp.srcs[0])) {
-        auto it = unaryDefOf.find(t->id);
-        if (it != unaryDefOf.end() && it->second.first == newOp.opcode &&
-            newOp.dst && widthOf(it->second.second) == widthOf(*newOp.dst)) {
+        auto it = defOf.find(t->id);
+        if (it != defOf.end() && it->second.opcode == newOp.opcode &&
+            it->second.srcs.size() == 1 && newOp.dst &&
+            widthOf(it->second.srcs[0]) == widthOf(*newOp.dst)) {
           newOp.opcode = Opcode::COPY;
-          newOp.srcs = {it->second.second};
+          newOp.srcs = {it->second.srcs[0]};
           handled = true;
           ++stats.identitiesApplied;
         }
@@ -392,20 +498,25 @@ Block passForward(const Block &in, SimplifyStats &stats) {
       ++stats.identitiesApplied;
     }
 
+    if (!handled) {
+      if (auto rw = tryHalfAdderIdentity(newOp, defOf)) {
+        newOp = std::move(*rw);
+        handled = true;
+        ++stats.identitiesApplied;
+      }
+    }
+
     if (newOp.dst) {
       if (const auto *dt = std::get_if<Temp>(&*newOp.dst)) {
         copyOf.erase(dt->id);
-        unaryDefOf.erase(dt->id);
-        if (newOp.opcode == Opcode::COPY && newOp.srcs.size() == 1) {
+        defOf.erase(dt->id);
+        if (newOp.opcode == Opcode::COPY && newOp.srcs.size() == 1)
           copyOf.emplace(dt->id, newOp.srcs[0]);
-        } else if ((newOp.opcode == Opcode::NEG || newOp.opcode == Opcode::NOT) &&
-                   newOp.srcs.size() == 1) {
-          // Recorded regardless of the operand's kind (Reg or Temp) - it's
-          // dt->id (a Temp, guaranteed single-assignment) that makes this
-          // record safe to trust later, not the operand. The *lookup* side
-          // below is what restricts collapsing to Temp operands only.
-          unaryDefOf.emplace(dt->id, std::pair{newOp.opcode, newOp.srcs[0]});
-        }
+        // Recorded for every opcode, regardless of operand kind (Reg or
+        // Temp) - it's dt->id (a Temp, guaranteed single-assignment) that
+        // makes this record safe to trust later. Lookups above restrict
+        // which shapes/operand-kinds they actually collapse on.
+        defOf.emplace(dt->id, newOp);
       }
     }
 
