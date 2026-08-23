@@ -207,6 +207,88 @@ TEST_CASE("X86Analysis x86_64 - conditional branch creates multiple blocks",
 }
 
 // -----------------------------------------------------------------------
+// Overlapping instruction decodes (anti-disassembly trick) - found
+// analyzing a real obfusheader.h-obfuscated binary (examples/obfusheader/,
+// ToDo/Roadmap.md's "Not started" section originally, now fixed). A
+// conditional jump's target can land in the middle of the bytes the
+// fall-through path already decoded as a different instruction - two
+// legitimately different, valid decodes sharing overlapping bytes. Real
+// hardware only ever executes one of them per run; a static analysis has
+// to keep both views without letting one corrupt the other.
+// -----------------------------------------------------------------------
+
+TEST_CASE("X86Analysis x86_64 - branch target overlapping the fall-through's "
+          "own bytes decodes independently on both paths",
+          "[x86][analysis][x86_64][overlap]") {
+  // 0x1000: 31 c0        xor eax, eax        ; ZF=1
+  // 0x1002: 74 02        je 0x1006           ; always taken in practice
+  // 0x1004: b8 90 c3 34 12  mov eax, 0x1234c390  (5 bytes: 0x1004-0x1008)
+  // 0x1009: c3           ret
+  //
+  // 0x1006 (the je's target) is byte index 2 of that mov instruction (the
+  // low byte of its imm32, value 0xc3) - decoded fresh from there instead
+  // of inherited from the fall-through's own decode, it's a different,
+  // equally valid instruction:
+  // 0x1006: c3           ret
+  //
+  // Verified by hand with objdump from both offsets before writing this
+  // (see ToDo/Roadmap.md) - not a hand-guessed encoding. Also verified via
+  // a scratch driver that both blocks below are exactly 1 instruction each
+  // (not 2/0) - a bare `ret` is itself recognized as a common function
+  // epilogue, and the address right after *any* `ret` (0x1006's as much as
+  // 0x1009's) is a real, independent block/function-start heuristic in
+  // its own right, unrelated to the overlap trick this test targets. That
+  // heuristic is why the fall-through's mov ends up alone in its own
+  // block rather than merged with the trailing ret - correct, expected
+  // behavior, not part of what's being tested here.
+  const std::vector<std::uint8_t> bytes = {
+          0x31, 0xc0,             // xor eax, eax   (0x1000)
+          0x74, 0x02,             // je 0x1006      (0x1002)
+          0xb8, 0x90, 0xc3, 0x34, 0x12, // mov eax, 0x1234c390 (0x1004)
+          0xc3,                   // ret            (0x1009)
+  };
+
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  cfg.syntax = dragon::Syntax::INTEL;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  auto blocks = g.blocks();
+  REQUIRE(hasBlock(blocks, 0x1000)); // entry (xor; je)
+  REQUIRE(hasBlock(blocks, 0x1004)); // fall-through (mov)
+  REQUIRE(hasBlock(blocks, 0x1006)); // branch target (ret) - the overlap
+  REQUIRE(hasBlock(blocks, 0x1009)); // fall-through's own trailing ret
+
+  auto blockAt = [&](std::uint64_t addr) -> const dragon::BasicBlock & {
+    auto it = std::find_if(blocks.begin(), blocks.end(),
+                           [addr](const dragon::BasicBlock &b) {
+                             return b.startAddress() == addr;
+                           });
+    REQUIRE(it != blocks.end());
+    return *it;
+  };
+
+  // The fall-through path genuinely is the 5-byte mov - unaffected by the
+  // other, overlapping path also existing in the same graph.
+  const auto &fallThrough = blockAt(0x1004);
+  auto fallInsns = fallThrough.instructions();
+  REQUIRE(fallInsns.size() == 1);
+  REQUIRE(fallInsns[0]->address() == 0x1004);
+
+  // The branch target must be its OWN independent decode (just `ret`),
+  // not silently reuse whatever instruction happens to be nearest in the
+  // shared listing (0x1009's ret, wrongly picked up as this block's own
+  // instruction because it sorts right after 0x1004-0x1008 in the shared
+  // listing, was the actual bug this test pins down).
+  const auto &target = blockAt(0x1006);
+  auto targetInsns = target.instructions();
+  REQUIRE(targetInsns.size() == 1);
+  REQUIRE(targetInsns[0]->address() == 0x1006);
+}
+
+// -----------------------------------------------------------------------
 // Full if/else function
 // -----------------------------------------------------------------------
 

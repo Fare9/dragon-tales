@@ -7,20 +7,27 @@ dragon::BasicBlock::BasicBlock(const Graph *graph, std::uint64_t startAddress) :
   if (!graph_ || !graph_->isValidBlock(startAddress_))
     return;
 
-  std::uint64_t expectedNext = 0;
-  bool hasPrev = false;
+  // Walk by exact address (graph_->get), never by std::map iteration order
+  // from lower_bound(). Deliberately obfuscated code can decode two
+  // genuinely different instructions starting at different offsets into
+  // the same overlapping bytes (anti-disassembly trick - see
+  // ToDo/Roadmap.md) - both legitimately exist in the graph's shared
+  // listing, so "whatever the sorted iterator finds next" is not
+  // necessarily part of *this* block's own decode path, and can silently
+  // splice in an unrelated instruction (or trip a false "gap") from a
+  // different, overlapping path entirely. Chasing addr -> addr+size
+  // explicitly only ever follows the chain this specific block's own
+  // instructions actually define.
+  std::uint64_t cur = startAddress_;
   const Instruction *prevInsn = nullptr;
 
-  for (auto it = graph_->listing().lower_bound(startAddress_);
-       it != graph_->listing().end(); ++it) {
-    const Instruction &insn = it->second;
-
-    // Gap between instructions - block is non-contiguous
-    if (hasPrev && insn.address() != expectedNext)
-      return;
+  while (true) {
+    const Instruction *insn = graph_->get(cur);
+    if (!insn)
+      return; // no instruction at the address this path actually needs
 
     // Next block starts here (not the entry) - previous insn is the terminator
-    if (insn.address() != startAddress_ && insn.isBlockStart()) {
+    if (cur != startAddress_ && insn->isBlockStart()) {
       if (!prevInsn)
         return;
       terminatorAddress_ = prevInsn->address();
@@ -28,19 +35,15 @@ dragon::BasicBlock::BasicBlock(const Graph *graph, std::uint64_t startAddress) :
       return;
     }
 
-    expectedNext = insn.address() + insn.size();
-    hasPrev = true;
-
-    if (insn.isJump() || insn.isTrap() || insn.isReturn()) {
-      terminatorAddress_ = insn.address();
+    if (insn->isJump() || insn->isTrap() || insn->isReturn()) {
+      terminatorAddress_ = insn->address();
       valid_ = true;
       return;
     }
 
-    prevInsn = &insn;
+    prevInsn = insn;
+    cur = insn->address() + insn->size();
   }
-  // Fell off the end of the listing without finding a terminator - stays
-  // invalid
 }
 
 std::vector<const dragon::Instruction *>
@@ -49,11 +52,19 @@ dragon::BasicBlock::instructions() const {
   if (!valid_)
     return result;
 
-  for (auto it = graph_->listing().lower_bound(startAddress_);
-       it != graph_->listing().end(); ++it) {
-    result.push_back(&it->second);
-    if (it->first == terminatorAddress_)
+  // Same exact-address chase as the constructor - sorted iteration from
+  // lower_bound(startAddress_) could splice in an unrelated instruction
+  // from a different, overlapping decode path whose address happens to
+  // fall between startAddress_ and terminatorAddress_ numerically.
+  std::uint64_t cur = startAddress_;
+  while (true) {
+    const Instruction *insn = graph_->get(cur);
+    if (!insn)
+      break; // shouldn't happen when valid_ is true - defensive only
+    result.push_back(insn);
+    if (cur == terminatorAddress_)
       break;
+    cur = insn->address() + insn->size();
   }
   return result;
 }
