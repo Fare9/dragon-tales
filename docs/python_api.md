@@ -282,6 +282,25 @@ if ib:
 `IGNILBlock` is a borrowed view — it is valid as long as the owning graph
 is alive; no `__exit__` / destroy needed.
 
+### Peephole simplification
+
+`simplify()` runs the peephole simplifier to a fixed point: constant
+folding/propagation, algebraic identity/annihilator elimination, no-op
+width-conversion elimination, and dead-Temp elimination. It is block-local
+only — it never crosses into predecessor/successor blocks, and never
+removes a `Reg`-defining op even if apparently unused within the block (a
+`Reg` may be live-out).
+
+```python
+simplified, stats = ib.simplify()   # max_iterations=0 selects the default (8)
+print(stats)
+# <SimplifyStats constants_folded=2 identities_applied=1 ops_removed=3 iterations=2>
+print(simplified.to_string())
+```
+
+`simplified` is a new, independently owned `IGNILBlock` — `ib` is left
+untouched and both must be cleaned up independently (context manager or GC).
+
 ---
 
 ## x86 register constants
@@ -424,6 +443,67 @@ print(z3_str)   # (bvadd rax #x0000000000000004)
 The returned string is the Z3 bitvector expression in SMT-LIB2 format —
 identical to what you would get from lowering with `SliceExprZ3` in C++.
 
+### Value enumeration and unique-value solving
+
+Also requires `-DDRAGON_USE_Z3=ON`; both raise `RuntimeError` otherwise.
+Each call constructs its own Z3 context internally — there is no way to pass
+extra Z3 assertions across the C boundary, unlike the C++ API's optional
+`constraints` parameter; use the C++ API directly
+(`dragon::slice::enumeratedValues` / `solveUnique`) if you need that.
+
+```python
+values = expr.enumerate_values()          # max_values=0 -> default cap (256), sorted=True
+print(values)                             # e.g. [1, 2, 3, 5, 8]
+
+unique = expr.solve_unique()
+print(unique)                             # a single int, or None if not uniquely determined
+```
+
+| Method | Returns | Notes |
+|---|---|---|
+| `enumerate_values(max_values=0, sorted=True)` | `list[int]` | `max_values=0` selects the library default (256) |
+| `solve_unique()` | `int` or `None` | `None` when zero or more than one model exists |
+
+---
+
+## SwitchDetector
+
+Recognizes a jump-table indirect-branch pattern from a backward-slice
+result (typically the target of an indirect jump, sliced with
+`BackwardSlicer` above) and reads the concrete targets out of the table's
+raw bytes.
+
+```python
+with dragon.BackwardSlicer() as slicer:
+    with slicer.slice_reg(graph, block_addr, *dragon.x86.RAX) as jump_target:
+        sw = dragon.detect_possible_switch(jump_target, block_addr, graph)
+        if sw is not None:
+            print(sw)   # <SwitchCandidate table_base=0x... entry_size=8 num_cases=4>
+
+            # `rodata`/`rodata_base` describe a window of the binary's image
+            # (e.g. the whole .rodata section) that contains the table.
+            targets = dragon.read_table_targets(sw, rodata, rodata_base)
+            for i, t in enumerate(targets):
+                print(f"case {i} -> 0x{t:x}")
+```
+
+`SwitchCandidate` is a plain data object (`table_base`, `entry_size`,
+`num_cases`, `index_reg_offset`, `index_reg_width` — the last two use the
+same register-address-space convention as `BackwardSlicer.slice_reg()`),
+returned by `detect_possible_switch()` and also constructible directly if
+you already know the table's shape from other analysis.
+
+| Function | Returns | Notes |
+|---|---|---|
+| `detect_possible_switch(jump_target, block_addr, graph)` | `SwitchCandidate` or `None` | A returned candidate with `num_cases == 0` means the pattern matched but the bounds guard wasn't found |
+| `read_table_targets(candidate, data, base_addr)` | `list[int]` | Empty if `num_cases == 0` or the table falls outside `data` |
+
+Not every indirect jump is a jump table — GCC and Clang often lower a
+`switch` to a plain compare chain instead (no jump table at all) when the
+case count is small or the cases aren't dense, in which case
+`detect_possible_switch` correctly returns `None` and there's nothing
+further to recover here.
+
 ---
 
 ## LLVMLifter
@@ -533,4 +613,6 @@ for address, name, length in db.match_entries(image, image_base, [0x1000, 0x1040
 | `dragon.Syntax` | `INTEL`, `ATT` |
 | `dragon.Strategy` | `LINEAR_SWEEP`, `RECURSIVE_TRAVERSAL` |
 | `dragon.SliceExprType` | `CONST`, `SYM_REG`, `BINOP`, `UNARYOP`, `LOAD`, `UNDEF` |
-| `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF` (35 values) |
+| `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF`, `FADD`, `FSUB`, `FMUL`, `FDIV`, `SITOFP`, `FPTOSI` (42 values) |
+| `dragon.SwitchCandidate` | `table_base`, `entry_size`, `num_cases`, `index_reg_offset`, `index_reg_width` (plain data, not an enum) |
+| `dragon.SimplifyStats` | `constants_folded`, `identities_applied`, `ops_removed`, `iterations`, `changed` (plain data, not an enum) |

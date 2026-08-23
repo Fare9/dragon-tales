@@ -6,10 +6,14 @@ Features:
 - Disassembly (linear sweep and recursive traversal) and assembly across six architectures
 - CFG and function recovery
 - **IGNIL** — a lightweight intermediate language for architecture-independent analysis
+- **IGNIL peephole simplifier** — block-local constant folding, algebraic identities, dead-Temp elimination
 - **Backward slicer** — propagates values through IGNIL CFGs without crossing join nodes
+- **LLVMLifter** — lifts a recovered `Function`, or a single flattened IGNIL block (no CFG needed), to LLVM IR, with an optimization pipeline (mem2reg/instcombine/GVN/DCE) on top
+- **Z3 integration** — lower a sliced expression to a Z3 bitvector formula, enumerate the concrete values it can take, or solve for a unique one
+- **SwitchDetector** — recognize a jump-table indirect-branch pattern from a sliced jump target and read its concrete case targets
 - **FLIRT-compatible signature matching** — identify known functions from `.pat` signature databases
 - **Trace lifting** — lift an arbitrary linear instruction sequence (e.g. a captured execution trace) straight to IGNIL, bypassing CFG/function/block-validity analysis entirely
-- C shim (`dragon_c.h`) and Python API (cffi) exposing the full feature set
+- C shim (`dragon_c.h`) and Python API (cffi) covering most of the feature set above (a few C++-only corners — pattern-matching DSL templates, architecture-specific instruction classification helpers, and similar — are documented as such in `docs/cpp_api.md`)
 
 ## Requirements
 
@@ -44,10 +48,16 @@ ctest --output-on-failure
 include/        C++ public headers
   dragon/
     lifters/ignil/IGNIL.hpp          — IGNIL value types, opcodes, Block
+    lifters/ignil/IGNILSimplify.hpp  — peephole simplifier (constant folding, identities, dead-Temp elimination)
     lifters/ignil/x86/x86IGNILRegs.hpp — x86/x86-64 register constants (offsets, widths, names)
     lifters/ignil/arm/armIGNILRegs.hpp — AArch64 register constants (offsets, widths, names)
+    lifters/llvm/LLVMLifter.hpp      — lifts a Function or a single IGNIL block to LLVM IR
     analysis/SliceExpr.hpp           — expression tree produced by the backward slicer
+    analysis/SliceExprMatch.hpp      — template-based structural pattern matcher over SliceExpr trees
+    analysis/SliceExprZ3.hpp         — lowers a SliceExpr to a Z3 bitvector expression
+    analysis/ValueEnumerator.hpp     — enumerate or uniquely solve a SliceExpr's possible values via Z3
     analysis/BackwardSlicer.hpp      — backward slicer over IGNIL CFGs
+    analysis/SwitchDetector.hpp      — recognizes jump-table dispatch patterns and reads their targets
     sigs/SignatureDB.hpp             — loaded collection of FLIRT .pat signatures
     sigs/SignatureMatcher.hpp        — matches signatures against raw bytes
 lib/            C++ implementation

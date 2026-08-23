@@ -187,6 +187,11 @@
   // "free with dragon_cstr_free".  Do NOT use on static strings.
   void dragon_cstr_free(char* s);
 
+  // Free a uint64_t array returned by any dragon function whose
+  // documentation says "free with dragon_u64_array_free" (e.g.
+  // dragon_read_table_targets, dragon_slice_expr_enumerate_values).
+  void dragon_u64_array_free(uint64_t* arr);
+
   // -- IGNIL opcodes -------------------------------------------------------------
 
   // Mirror of ignil::Opcode.  Numerical values are guaranteed to match.
@@ -291,6 +296,27 @@
   // on a block returned by dragon_graph_get_ignil_block.
   void dragon_ignil_block_destroy(dragon_ignil_block_t* b);
 
+  // -- IGNIL peephole simplifier ---------------------------------------------------
+
+  // Peephole-simplifies `b`: forward constant folding/propagation, algebraic
+  // identity/annihilator elimination, no-op width-conversion elimination, and
+  // dead-Temp elimination, run to a fixed point (bounded by max_iterations -
+  // 0 selects the library default of 8). Block-local only: does not cross
+  // into predecessor/successor blocks, and never removes a Reg-defining op
+  // even if apparently unused within the block (a Reg may be live-out).
+  //
+  // Every out_* pointer may be NULL if that count isn't wanted. When non-NULL
+  // they report: constants folded, algebraic identities applied, dead ops
+  // removed, and fixed-point iterations actually run (see
+  // ignil::SimplifyStats).
+  //
+  // Returns an OWNED block - destroy with dragon_ignil_block_destroy, same as
+  // a block from dragon_disasm_lift_trace, never dragon_graph_get_ignil_block.
+  dragon_ignil_block_t* dragon_ignil_simplify_block(
+      const dragon_ignil_block_t* b, int max_iterations,
+      size_t* out_constants_folded, size_t* out_identities_applied,
+      size_t* out_ops_removed, size_t* out_iterations);
+
   // -- SliceExpr -----------------------------------------------------------------
 
   typedef enum {
@@ -316,6 +342,27 @@
   // Caller must free with dragon_cstr_free.
 #ifdef DRAGON_WITH_Z3
   char* dragon_slice_expr_to_z3_string(const dragon_slice_expr_t* e);
+
+  // Enumerate concrete 64-bit values `e` can take (see
+  // slice::enumeratedValues). Constructs and owns its own Z3 context
+  // internally - there is no way to pass extra Z3 assertions across this
+  // boundary, unlike the C++ API's optional `constraints` parameter; use the
+  // C++ API directly if you need that.
+  //   max_values: 0 selects the library default (256).
+  //   sorted:     non-zero sorts results ascending (library default: sorted).
+  //   out_count:  number of values written to the returned array (may be 0).
+  // Returns an OWNED array - free with dragon_u64_array_free. Never NULL
+  // (returns a zero-length allocation when there are no solutions), except
+  // on a null `e`.
+  uint64_t* dragon_slice_expr_enumerate_values(const dragon_slice_expr_t* e,
+                                               size_t max_values, int sorted,
+                                               size_t* out_count);
+
+  // Solve for a single concrete value (see slice::solveUnique). Returns 1
+  // and writes *out_value if exactly one model exists, 0 otherwise
+  // (unsatisfiable, more than one model, or a null `e`/`out_value`).
+  int dragon_slice_expr_solve_unique(const dragon_slice_expr_t* e,
+                                     uint64_t* out_value);
 #endif
 
   // DRAGON_SLICE_CONST
@@ -365,6 +412,42 @@
       uint32_t    reg_offset,
       uint8_t     reg_width,
       const char* reg_name);
+
+  // -- SwitchDetector --------------------------------------------------------------
+
+  // Everything extracted from a detected jump-table pattern - mirrors
+  // slice::SwitchCandidate. index_reg_offset/width identify the index
+  // register in the IGNIL register address space (see x86IGNILRegs.hpp /
+  // armIGNILRegs.hpp), the same convention dragon_slicer_slice_reg uses.
+  typedef struct {
+      uint64_t table_base;    // base address of the jump table in the image
+      uint32_t entry_size;    // bytes per entry: 4 or 8
+      uint32_t num_cases;     // 0 means the bounds check was not found
+      uint32_t index_reg_offset;
+      uint8_t  index_reg_width;
+  } dragon_switch_candidate_t;
+
+  // Inspect a backward-slice result (typically from dragon_slicer_slice_reg
+  // on an indirect jump's target) and determine whether it is a jump-table
+  // indirect branch - see slice::detectPossibleSwitch for the exact
+  // recognition rules. Returns 1 and populates *out on a match (out->
+  // num_cases == 0 means the pattern matched but the bounds guard wasn't
+  // found), 0 otherwise (including a null jump_target/g/out).
+  int dragon_detect_possible_switch(const dragon_slice_expr_t* jump_target,
+                                    uint64_t block_addr,
+                                    const dragon_graph_t* g,
+                                    dragon_switch_candidate_t* out);
+
+  // Read sw->num_cases pointer-sized little-endian entries from the jump
+  // table described by `sw` out of `bytes` (a buffer starting at
+  // `base_addr` in the binary's address space) - see
+  // slice::readTableTargets. *out_count is 0 (and an empty allocation is
+  // still returned, never NULL) when num_cases == 0 or the table extends
+  // outside `bytes`. Returns an OWNED array - free with
+  // dragon_u64_array_free.
+  uint64_t* dragon_read_table_targets(const dragon_switch_candidate_t* sw,
+                                      const uint8_t* bytes, size_t bytes_len,
+                                      uint64_t base_addr, size_t* out_count);
 
   // -- LLVMLifter ---------------------------------------------------------------
 

@@ -628,8 +628,55 @@ class IGNILBlock:
         lib.dragon_ignil_block_each_op(self._ptr, cb, ffi.NULL)
         return result
 
+    def simplify(self, max_iterations=0):
+        """Peephole-simplify this block to a fixed point: constant
+        folding/propagation, algebraic identity/annihilator elimination,
+        no-op width-conversion elimination, and dead-Temp elimination.
+        Block-local only — never crosses into predecessor/successor blocks,
+        and never removes a Reg-defining op (a Reg may be live-out).
+
+        Parameters
+        ----------
+        max_iterations : int
+            Upper bound on fixed-point passes. 0 selects the library
+            default (8).
+
+        Returns
+        -------
+        (IGNILBlock, SimplifyStats)
+            The simplified block is a new, independently owned IGNILBlock —
+            this block is left untouched.
+        """
+        out_cf = ffi.new('size_t *')
+        out_ia = ffi.new('size_t *')
+        out_or = ffi.new('size_t *')
+        out_it = ffi.new('size_t *')
+        ptr = lib.dragon_ignil_simplify_block(
+            self._ptr, max_iterations, out_cf, out_ia, out_or, out_it)
+        stats = SimplifyStats(out_cf[0], out_ia[0], out_or[0], out_it[0])
+        return IGNILBlock(ptr, owned=True), stats
+
     def __repr__(self):
         return f'<IGNILBlock 0x{self.address:x} ops={self.size}>'
+
+
+class SimplifyStats:
+    """Counts from one IGNILBlock.simplify() call. Mirrors ignil::SimplifyStats."""
+
+    def __init__(self, constants_folded, identities_applied, ops_removed, iterations):
+        self.constants_folded = constants_folded
+        self.identities_applied = identities_applied
+        self.ops_removed = ops_removed
+        self.iterations = iterations
+
+    @property
+    def changed(self):
+        return bool(self.constants_folded or self.identities_applied or self.ops_removed)
+
+    def __repr__(self):
+        return (f'<SimplifyStats constants_folded={self.constants_folded} '
+                f'identities_applied={self.identities_applied} '
+                f'ops_removed={self.ops_removed} iterations={self.iterations}>')
 
 
 # -- SliceExpr -----------------------------------------------------------------
@@ -688,6 +735,46 @@ class SliceExpr:
             return ffi.string(raw).decode()
         finally:
             lib.dragon_cstr_free(raw)
+
+    def enumerate_values(self, max_values=0, sorted=True):
+        """Enumerate concrete 64-bit values this expression can take, via Z3.
+
+        Parameters
+        ----------
+        max_values : int
+            Upper bound on results returned. 0 selects the library default (256).
+        sorted : bool
+            Sort results ascending (library default: True).
+
+        Note: constructs its own Z3 context internally — there is no way to
+        pass extra Z3 assertions across this boundary, unlike the C++ API's
+        optional `constraints` parameter; use the C++ API directly if you
+        need that.
+
+        Raises RuntimeError if the library was built without Z3 support."""
+        out_count = ffi.new('size_t *')
+        try:
+            ptr = lib.dragon_slice_expr_enumerate_values(
+                self._ptr, max_values, 1 if sorted else 0, out_count)
+        except AttributeError:
+            raise RuntimeError('dragon was built without Z3 support (-DDRAGON_USE_Z3=ON required)')
+        try:
+            return [ptr[i] for i in range(out_count[0])]
+        finally:
+            lib.dragon_u64_array_free(ptr)
+
+    def solve_unique(self):
+        """Solve for a single concrete value this expression must take, via Z3.
+        Returns None if zero or more than one model exists (unsatisfiable or
+        underconstrained), the value itself if exactly one does.
+
+        Raises RuntimeError if the library was built without Z3 support."""
+        out_value = ffi.new('uint64_t *')
+        try:
+            found = lib.dragon_slice_expr_solve_unique(self._ptr, out_value)
+        except AttributeError:
+            raise RuntimeError('dragon was built without Z3 support (-DDRAGON_USE_Z3=ON required)')
+        return out_value[0] if found else None
 
     # -- CONST
 
@@ -817,6 +904,93 @@ class BackwardSlicer:
 
     def __repr__(self):
         return '<BackwardSlicer>'
+
+
+# -- SwitchDetector --------------------------------------------------------------
+
+class SwitchCandidate:
+    """Everything extracted from a recognized jump-table dispatch pattern.
+    Mirrors dragon_switch_candidate_t — construct via detect_possible_switch(),
+    not directly.
+
+    index_reg_offset/index_reg_width identify the index register in the
+    IGNIL register address space (see x86/arm register descriptors below),
+    the same convention BackwardSlicer.slice_reg() uses.
+    """
+
+    def __init__(self, table_base, entry_size, num_cases,
+                 index_reg_offset, index_reg_width):
+        self.table_base = table_base
+        self.entry_size = entry_size
+        self.num_cases = num_cases
+        self.index_reg_offset = index_reg_offset
+        self.index_reg_width = index_reg_width
+
+    def __repr__(self):
+        return (f'<SwitchCandidate table_base=0x{self.table_base:x} '
+                f'entry_size={self.entry_size} num_cases={self.num_cases}>')
+
+
+def detect_possible_switch(jump_target, block_addr, graph):
+    """Inspect a backward-slice result (typically from
+    BackwardSlicer.slice_reg() on an indirect jump's target) and determine
+    whether it is a jump-table indirect branch.
+
+    Parameters
+    ----------
+    jump_target : SliceExpr
+    block_addr  : int
+        Address of the block containing the indirect jump.
+    graph       : Graph
+
+    Returns
+    -------
+    SwitchCandidate or None
+        None if the pattern didn't match. A returned candidate with
+        num_cases == 0 means the pattern matched but the bounds guard
+        wasn't found.
+    """
+    out = ffi.new('dragon_switch_candidate_t *')
+    matched = lib.dragon_detect_possible_switch(
+        jump_target._ptr, block_addr, graph._ptr, out)
+    if not matched:
+        return None
+    return SwitchCandidate(out.table_base, out.entry_size, out.num_cases,
+                            out.index_reg_offset, out.index_reg_width)
+
+
+def read_table_targets(candidate, data, base_addr):
+    """Read candidate.num_cases pointer-sized little-endian entries from the
+    jump table *candidate* describes.
+
+    Parameters
+    ----------
+    candidate : SwitchCandidate
+    data      : bytes-like
+        Buffer starting at *base_addr* in the binary's address space (not
+        necessarily starting at candidate.table_base — the table is
+        located within this window using its own address).
+    base_addr : int
+        Address the first byte of *data* corresponds to.
+
+    Returns
+    -------
+    list[int]
+        Empty if num_cases == 0 or the table extends outside *data*.
+    """
+    buf = ffi.from_buffer(data)
+    out_count = ffi.new('size_t *')
+    sw = ffi.new('dragon_switch_candidate_t *')
+    sw.table_base = candidate.table_base
+    sw.entry_size = candidate.entry_size
+    sw.num_cases = candidate.num_cases
+    sw.index_reg_offset = candidate.index_reg_offset
+    sw.index_reg_width = candidate.index_reg_width
+    ptr = lib.dragon_read_table_targets(sw, buf, len(data), base_addr, out_count)
+    try:
+        return [ptr[i] for i in range(out_count[0])]
+    finally:
+        lib.dragon_u64_array_free(ptr)
 
 
 # -- LLVMLifter ----------------------------------------------------------------

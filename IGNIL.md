@@ -5,6 +5,16 @@ architecture-specific analyses. It sits between raw disassembly and
 heavyweight IRs like LLVM IR. The design follows conventions established
 by VEX IR (angr/Valgrind), P-CODE (Ghidra), and BAP's BIL.
 
+> **This is a historical build log, not a current reference.** It was
+> written incrementally, step by step, as IGNIL and its surrounding
+> analyses were first built, and reads that way (including include paths
+> like `dragon/IGNIL.hpp` that no longer match the real tree, e.g.
+> `dragon/lifters/ignil/IGNIL.hpp`). It's kept for the design rationale
+> behind decisions that aren't obvious from the code alone. For the
+> current, accurate API surface, use [`docs/cpp_api.md`](docs/cpp_api.md)
+> (and `docs/c_api.md`/`docs/python_api.md` for the other two layers)
+> instead.
+
 ---
 
 ## Design decisions already made
