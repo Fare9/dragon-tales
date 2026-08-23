@@ -96,6 +96,7 @@ add_subdirectory(lib)
 add_subdirectory(c_shim)
 add_subdirectory(examples/cpp)
 add_subdirectory(examples/obfush)
+add_subdirectory(examples/obfusheader)
 add_subdirectory(tool)
 
 if (DRAGON_BUILD_TESTS)

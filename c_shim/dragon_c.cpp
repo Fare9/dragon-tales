@@ -433,9 +433,10 @@ static char *dup_string(const std::string &s) {
 // =============================================================================
 
 // Verify the enum values match ignil::Opcode at compile time.
-static_assert(static_cast<int>(dragon::ignil::Opcode::COPY)  == DRAGON_IGNIL_COPY);
-static_assert(static_cast<int>(dragon::ignil::Opcode::LOAD)  == DRAGON_IGNIL_LOAD);
-static_assert(static_cast<int>(dragon::ignil::Opcode::UNDEF) == DRAGON_IGNIL_UNDEF);
+static_assert(static_cast<int>(dragon::ignil::Opcode::COPY)   == DRAGON_IGNIL_COPY);
+static_assert(static_cast<int>(dragon::ignil::Opcode::LOAD)   == DRAGON_IGNIL_LOAD);
+static_assert(static_cast<int>(dragon::ignil::Opcode::UNDEF)  == DRAGON_IGNIL_UNDEF);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FPTOSI) == DRAGON_IGNIL_FPTOSI);
 
 const char *dragon_ignil_opcode_name(dragon_ignil_opcode_t op) {
   return dragon::ignil::opcodeName(

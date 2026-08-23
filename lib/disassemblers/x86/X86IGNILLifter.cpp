@@ -114,10 +114,22 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"SUB32rm", &X86IGNILLifter::opSub32rm_},
           {"XOR64rr", &X86IGNILLifter::opXor64rr_},
           {"XOR32rr", &X86IGNILLifter::opXor32rr_},
+          {"XOR64ri32", &X86IGNILLifter::opXor64ri_},
+          {"XOR64ri8", &X86IGNILLifter::opXor64ri8_},
+          {"XOR32ri", &X86IGNILLifter::opXor32ri_},
+          {"XOR32ri8", &X86IGNILLifter::opXor32ri8_},
           {"AND64rr", &X86IGNILLifter::opAnd64rr_},
           {"AND32rr", &X86IGNILLifter::opAnd32rr_},
+          {"AND64ri32", &X86IGNILLifter::opAnd64ri_},
+          {"AND64ri8", &X86IGNILLifter::opAnd64ri8_},
+          {"AND32ri", &X86IGNILLifter::opAnd32ri_},
+          {"AND32ri8", &X86IGNILLifter::opAnd32ri8_},
           {"OR64rr", &X86IGNILLifter::opOr64rr_},
           {"OR32rr", &X86IGNILLifter::opOr32rr_},
+          {"OR64ri32", &X86IGNILLifter::opOr64ri_},
+          {"OR64ri8", &X86IGNILLifter::opOr64ri8_},
+          {"OR32ri", &X86IGNILLifter::opOr32ri_},
+          {"OR32ri8", &X86IGNILLifter::opOr32ri8_},
           {"PUSH64r", &X86IGNILLifter::opPush64r_},
           {"PUSH32r", &X86IGNILLifter::opPush32r_},
           {"POP64r", &X86IGNILLifter::opPop64r_},
@@ -138,6 +150,8 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"CMP32mi8", &X86IGNILLifter::opCmp32mi8_},
           {"TEST64rr", &X86IGNILLifter::opTest64rr_},
           {"TEST32rr", &X86IGNILLifter::opTest32rr_},
+          {"TEST64ri32", &X86IGNILLifter::opTest64ri_},
+          {"TEST32ri", &X86IGNILLifter::opTest32ri_},
           {"JMP64r", &X86IGNILLifter::opJmp64r_},
           {"JMP_1", &X86IGNILLifter::opJmp_},
           {"JMP", &X86IGNILLifter::opJmp_},
@@ -154,13 +168,48 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"LEAVE64", &X86IGNILLifter::opLeave64_},
           {"LEAVE", &X86IGNILLifter::opLeave_},
           {"MOVSX64rr32", &X86IGNILLifter::opMovsx64rr32_},
+          {"MOVSX32rr8", &X86IGNILLifter::opMovsx32rr8_},
           {"SAR32ri", &X86IGNILLifter::opSar32ri_},
           {"SAR64ri", &X86IGNILLifter::opSar64ri_},
           {"IMUL64rri32", &X86IGNILLifter::opImul64rri32_},
           {"IMUL64rri8", &X86IGNILLifter::opImul64rri8_},
           {"IMUL32rri", &X86IGNILLifter::opImul32rri_},
           {"IMUL32rri8", &X86IGNILLifter::opImul32rri8_},
+          {"IMUL32rr", &X86IGNILLifter::opImul32rr_},
+          {"IMUL64rr", &X86IGNILLifter::opImul64rr_},
           {"LEA64_32r", &X86IGNILLifter::opLea64_32r_},
+          {"INC32r", &X86IGNILLifter::opInc32r_},
+          {"INC64r", &X86IGNILLifter::opInc64r_},
+          {"DEC32r", &X86IGNILLifter::opDec32r_},
+          {"DEC64r", &X86IGNILLifter::opDec64r_},
+          {"NEG32r", &X86IGNILLifter::opNeg32r_},
+          {"NEG64r", &X86IGNILLifter::opNeg64r_},
+          {"MOVZX32rr8", &X86IGNILLifter::opMovzx32rr8_},
+          {"MOVZX32rr16", &X86IGNILLifter::opMovzx32rr16_},
+          {"MOVZX64rr8", &X86IGNILLifter::opMovzx64rr8_},
+          {"MOVZX64rr16", &X86IGNILLifter::opMovzx64rr16_},
+          {"SHL32ri", &X86IGNILLifter::opShl32ri_},
+          {"SHL64ri", &X86IGNILLifter::opShl64ri_},
+          {"SHR32ri", &X86IGNILLifter::opShr32ri_},
+          {"SHR64ri", &X86IGNILLifter::opShr64ri_},
+          {"SAR32r1", &X86IGNILLifter::opSar32r1_},
+          {"SAR64r1", &X86IGNILLifter::opSar64r1_},
+          {"SHL32r1", &X86IGNILLifter::opShl32r1_},
+          {"SHL64r1", &X86IGNILLifter::opShl64r1_},
+          {"SHR32r1", &X86IGNILLifter::opShr32r1_},
+          {"SHR64r1", &X86IGNILLifter::opShr64r1_},
+          {"PXORrr", &X86IGNILLifter::opPxorRR_},
+          {"CVTSI2SDrr_Int", &X86IGNILLifter::opCvtsi2sd32_},
+          {"CVTSI642SDrr_Int", &X86IGNILLifter::opCvtsi2sd64_},
+          {"CVTTSD2SIrr_Int", &X86IGNILLifter::opCvttsd2si32_},
+          {"CVTTSD2SI64rr_Int", &X86IGNILLifter::opCvttsd2si64_},
+          {"ADDSDrr_Int", &X86IGNILLifter::opAddsd_},
+          {"SUBSDrr_Int", &X86IGNILLifter::opSubsd_},
+          {"MULSDrr_Int", &X86IGNILLifter::opMulsd_},
+          {"MULSDrm_Int", &X86IGNILLifter::opMulsdMem_},
+          {"MOVSDrr", &X86IGNILLifter::opMovsdRR_},
+          {"MOVSDrm", &X86IGNILLifter::opMovsdLoad_},
+          {"MOVSDmr", &X86IGNILLifter::opMovsdStore_},
   };
 
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
@@ -254,11 +303,14 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftSubMem(*mc, addr, out, tempId);
   else if (opc == opSub64rm_ || opc == opSub32rm_)
     liftSubRegMem(*mc, addr, out, tempId);
-  else if (opc == opXor64rr_ || opc == opXor32rr_)
+  else if (opc == opXor64rr_ || opc == opXor32rr_ || opc == opXor64ri_ ||
+           opc == opXor32ri_ || opc == opXor64ri8_ || opc == opXor32ri8_)
     liftXor(*mc, addr, out, tempId);
-  else if (opc == opAnd64rr_ || opc == opAnd32rr_)
+  else if (opc == opAnd64rr_ || opc == opAnd32rr_ || opc == opAnd64ri_ ||
+           opc == opAnd32ri_ || opc == opAnd64ri8_ || opc == opAnd32ri8_)
     liftAnd(*mc, addr, out, tempId);
-  else if (opc == opOr64rr_ || opc == opOr32rr_)
+  else if (opc == opOr64rr_ || opc == opOr32rr_ || opc == opOr64ri_ ||
+           opc == opOr32ri_ || opc == opOr64ri8_ || opc == opOr32ri8_)
     liftOr(*mc, addr, out, tempId);
   else if (opc == opPush64r_ || opc == opPush32r_)
     liftPush(*mc, addr, out, tempId);
@@ -274,7 +326,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opCmp64mr_ || opc == opCmp32mr_ || opc == opCmp64mi_ ||
            opc == opCmp32mi_ || opc == opCmp64mi8_ || opc == opCmp32mi8_)
     liftCmpMem(*mc, addr, out, tempId);
-  else if (opc == opTest64rr_ || opc == opTest32rr_)
+  else if (opc == opTest64rr_ || opc == opTest32rr_ || opc == opTest64ri_ ||
+           opc == opTest32ri_)
     liftTest(*mc, addr, out, tempId);
   else if (opc == opCall_ || opc == opCall64r_)
     liftCall(*mc, addr, insn.size(), out, tempId);
@@ -287,15 +340,56 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftJmpMem(*mc, addr, insn.size(), out, tempId);
   else if (opc == opCall64m_ || opc == opCall32m_)
     liftCallMem(*mc, addr, insn.size(), out, tempId);
-  else if (opc == opMovsx64rr32_)
+  else if (opc == opMovsx64rr32_ || opc == opMovsx32rr8_)
     liftMovsx(*mc, addr, out, tempId);
   else if (opc == opSar32ri_ || opc == opSar64ri_)
     liftSarImm(*mc, addr, out, tempId);
   else if (opc == opImul64rri32_ || opc == opImul64rri8_ ||
            opc == opImul32rri_ || opc == opImul32rri8_)
     liftImulImm(*mc, addr, out, tempId);
+  else if (opc == opImul32rr_ || opc == opImul64rr_)
+    liftImulRR(*mc, addr, out, tempId);
   else if (opc == opLea64_32r_)
     liftLeaTrunc32(*mc, addr, out, tempId);
+  else if (opc == opInc32r_ || opc == opInc64r_)
+    liftInc(*mc, addr, out, tempId);
+  else if (opc == opDec32r_ || opc == opDec64r_)
+    liftDec(*mc, addr, out, tempId);
+  else if (opc == opNeg32r_ || opc == opNeg64r_)
+    liftNeg(*mc, addr, out, tempId);
+  else if (opc == opMovzx32rr8_ || opc == opMovzx32rr16_ ||
+           opc == opMovzx64rr8_ || opc == opMovzx64rr16_)
+    liftMovzx(*mc, addr, out, tempId);
+  else if (opc == opShl32ri_ || opc == opShl64ri_)
+    liftShlImm(*mc, addr, out, tempId);
+  else if (opc == opShr32ri_ || opc == opShr64ri_)
+    liftShrImm(*mc, addr, out, tempId);
+  else if (opc == opSar32r1_ || opc == opSar64r1_)
+    liftSarR1(*mc, addr, out, tempId);
+  else if (opc == opShl32r1_ || opc == opShl64r1_)
+    liftShlR1(*mc, addr, out, tempId);
+  else if (opc == opShr32r1_ || opc == opShr64r1_)
+    liftShrR1(*mc, addr, out, tempId);
+  else if (opc == opPxorRR_)
+    liftXor(*mc, addr, out, tempId);
+  else if (opc == opCvtsi2sd32_ || opc == opCvtsi2sd64_)
+    liftCvtsi2sd(*mc, addr, out, tempId);
+  else if (opc == opCvttsd2si32_ || opc == opCvttsd2si64_)
+    liftCvttsd2si(*mc, addr, out, tempId);
+  else if (opc == opAddsd_)
+    liftAddsd(*mc, addr, out, tempId);
+  else if (opc == opSubsd_)
+    liftSubsd(*mc, addr, out, tempId);
+  else if (opc == opMulsd_)
+    liftMulsd(*mc, addr, out, tempId);
+  else if (opc == opMulsdMem_)
+    liftMulsdMem(*mc, addr, out, tempId);
+  else if (opc == opMovsdRR_)
+    liftMovsdRR(*mc, addr, out, tempId);
+  else if (opc == opMovsdLoad_)
+    liftMovLoad(*mc, addr, out, tempId);
+  else if (opc == opMovsdStore_)
+    liftMovStore(*mc, addr, out, tempId);
   else {
     const auto &desc = instrInfo_->get(opc);
     if (desc.isConditionalBranch()) {
@@ -622,20 +716,28 @@ void dragon::x86::X86IGNILLifter::liftSub(const llvm::MCInst &mc,
 void dragon::x86::X86IGNILLifter::liftXor(const llvm::MCInst &mc,
                                           std::uint64_t addr, ignil::Block &out,
                                           std::uint32_t &tmp) const {
+  // op[0]=dst(out), op[1]=src1(tied=dst), op[2]=src2(reg or imm)
   auto dst = toReg(mc.getOperand(0).getReg());
-  auto src = toReg(mc.getOperand(2).getReg());
-
   if (!dst) {
     logger_.log("Error liftXor in addr {:#x} no dst", addr);
     return;
   }
-  if (!src) {
-    logger_.log("Error liftXor in addr {:#x} no src", addr);
-    emitUndef(*dst, addr, out);
-    return;
+
+  ignil::Value src;
+  const auto &srcOp = mc.getOperand(2);
+  if (srcOp.isImm()) {
+    src = ignil::Const{static_cast<std::uint64_t>(srcOp.getImm()), dst->width};
+  } else {
+    auto srcReg = toReg(srcOp.getReg());
+    if (!srcReg) {
+      logger_.log("Error liftXor in addr {:#x} no src", addr);
+      emitUndef(*dst, addr, out);
+      return;
+    }
+    src = *srcReg;
   }
   auto result = newTemp(tmp, dst->width);
-  out.append({ignil::Opcode::XOR, result, {*dst, *src}, addr});
+  out.append({ignil::Opcode::XOR, result, {*dst, src}, addr});
   out.append({ignil::Opcode::COPY, *dst, {result}, addr});
   emitArithFlags(addr, out, tmp,
                  {
@@ -650,20 +752,28 @@ void dragon::x86::X86IGNILLifter::liftXor(const llvm::MCInst &mc,
 void dragon::x86::X86IGNILLifter::liftAnd(const llvm::MCInst &mc,
                                           std::uint64_t addr, ignil::Block &out,
                                           std::uint32_t &tmp) const {
+  // op[0]=dst(out), op[1]=src1(tied=dst), op[2]=src2(reg or imm)
   auto dst = toReg(mc.getOperand(0).getReg());
-  auto src = toReg(mc.getOperand(2).getReg());
-
   if (!dst) {
     logger_.log("Error liftAnd in addr {:#x} no dst", addr);
     return;
   }
-  if (!src) {
-    logger_.log("Error liftAnd in addr {:#x} no src", addr);
-    emitUndef(*dst, addr, out);
-    return;
+
+  ignil::Value src;
+  const auto &srcOp = mc.getOperand(2);
+  if (srcOp.isImm()) {
+    src = ignil::Const{static_cast<std::uint64_t>(srcOp.getImm()), dst->width};
+  } else {
+    auto srcReg = toReg(srcOp.getReg());
+    if (!srcReg) {
+      logger_.log("Error liftAnd in addr {:#x} no src", addr);
+      emitUndef(*dst, addr, out);
+      return;
+    }
+    src = *srcReg;
   }
   auto result = newTemp(tmp, dst->width);
-  out.append({ignil::Opcode::AND, result, {*dst, *src}, addr});
+  out.append({ignil::Opcode::AND, result, {*dst, src}, addr});
   out.append({ignil::Opcode::COPY, *dst, {result}, addr});
   emitArithFlags(addr, out, tmp,
                  {
@@ -676,20 +786,28 @@ void dragon::x86::X86IGNILLifter::liftAnd(const llvm::MCInst &mc,
 void dragon::x86::X86IGNILLifter::liftOr(const llvm::MCInst &mc,
                                          std::uint64_t addr, ignil::Block &out,
                                          std::uint32_t &tmp) const {
+  // op[0]=dst(out), op[1]=src1(tied=dst), op[2]=src2(reg or imm)
   auto dst = toReg(mc.getOperand(0).getReg());
-  auto src = toReg(mc.getOperand(2).getReg());
-
   if (!dst) {
     logger_.log("Error liftOr in addr {:#x} no dst", addr);
     return;
   }
-  if (!src) {
-    logger_.log("Error liftOr in addr {:#x} no src", addr);
-    emitUndef(*dst, addr, out);
-    return;
+
+  ignil::Value src;
+  const auto &srcOp = mc.getOperand(2);
+  if (srcOp.isImm()) {
+    src = ignil::Const{static_cast<std::uint64_t>(srcOp.getImm()), dst->width};
+  } else {
+    auto srcReg = toReg(srcOp.getReg());
+    if (!srcReg) {
+      logger_.log("Error liftOr in addr {:#x} no src", addr);
+      emitUndef(*dst, addr, out);
+      return;
+    }
+    src = *srcReg;
   }
   auto result = newTemp(tmp, dst->width);
-  out.append({ignil::Opcode::OR, result, {*dst, *src}, addr});
+  out.append({ignil::Opcode::OR, result, {*dst, src}, addr});
   out.append({ignil::Opcode::COPY, *dst, {result}, addr});
   emitArithFlags(addr, out, tmp,
                  {
@@ -876,16 +994,29 @@ void dragon::x86::X86IGNILLifter::liftTest(const llvm::MCInst &mc,
                                            std::uint64_t addr,
                                            ignil::Block &out,
                                            std::uint32_t &tmp) const {
+  // op[0]=lhs(reg), op[1]=rhs(reg or imm)
   auto lhs = toReg(mc.getOperand(0).getReg());
-  auto rhs = toReg(mc.getOperand(1).getReg());
-  if (!lhs || !rhs) {
-    logger_.log("Error liftTest in addr {:#x} no lhs or rhs", addr);
+  if (!lhs) {
+    logger_.log("Error liftTest in addr {:#x} no lhs", addr);
     return;
+  }
+
+  ignil::Value rhs;
+  const auto &rhsOp = mc.getOperand(1);
+  if (rhsOp.isImm()) {
+    rhs = ignil::Const{static_cast<std::uint64_t>(rhsOp.getImm()), lhs->width};
+  } else {
+    auto rhsReg = toReg(rhsOp.getReg());
+    if (!rhsReg) {
+      logger_.log("Error liftTest in addr {:#x} no rhs", addr);
+      return;
+    }
+    rhs = *rhsReg;
   }
 
   // TEST is AND that discards the result but keeps flags; CF and OF always 0.
   auto result = newTemp(tmp, lhs->width);
-  out.append({ignil::Opcode::AND, result, {*lhs, *rhs}, addr});
+  out.append({ignil::Opcode::AND, result, {*lhs, rhs}, addr});
   emitArithFlags(addr, out, tmp,
                  {
                          {X86Flag::CF, cfAlwaysZero(addr)},
@@ -1156,6 +1287,34 @@ void dragon::x86::X86IGNILLifter::liftImulImm(const llvm::MCInst &mc,
   emitArithFlags(addr, out, tmp, {});
 }
 
+void dragon::x86::X86IGNILLifter::liftImulRR(const llvm::MCInst &mc,
+                                             std::uint64_t addr,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp) const {
+  // op[0]=dst(out), op[1]=src1(tied=dst), op[2]=src2(reg) - unlike
+  // liftImulImm, both operands are registers here, so op[1] really is the
+  // same register as op[0] (the tied 2-address form), and the actual second
+  // factor is op[2].
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftImulRR in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(2).getReg());
+  if (!src) {
+    logger_.log("Error liftImulRR in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+
+  auto result = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::MUL, result, {*dst, *src}, addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+
+  // Same all-UNDEF rationale as liftImulImm.
+  emitArithFlags(addr, out, tmp, {});
+}
+
 void dragon::x86::X86IGNILLifter::liftLeaTrunc32(const llvm::MCInst &mc,
                                                  std::uint64_t addr,
                                                  ignil::Block &out,
@@ -1171,6 +1330,472 @@ void dragon::x86::X86IGNILLifter::liftLeaTrunc32(const llvm::MCInst &mc,
   auto truncated = newTemp(tmp, dst->width);
   out.append({ignil::Opcode::TRUNC, truncated, {addrTemp}, addr});
   out.append({ignil::Opcode::COPY, *dst, {truncated}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftInc(const llvm::MCInst &mc,
+                                          std::uint64_t addr,
+                                          ignil::Block &out,
+                                          std::uint32_t &tmp) const {
+  // op[0]=dst(out), op[1]=src(tied=dst).
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftInc in addr {:#x} no dst", addr);
+    return;
+  }
+
+  // Save the original value before dst gets overwritten (same reasoning
+  // as liftAdd's `lhs` and liftSarImm's fix earlier).
+  auto lhs = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::COPY, lhs, {*dst}, addr});
+
+  auto result = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::ADD,
+              result,
+              {ignil::Value{lhs}, ignil::Const{1, dst->width}},
+              addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+
+  // CF is deliberately NOT touched at all - no Op for it, not even UNDEF.
+  // That is the entire point of INC over ADD-by-1: it must not disturb a
+  // carry chain a previous instruction set up. PF/AF stay UNDEF, matching
+  // this lifter's existing convention elsewhere.
+  emitUndef(regPF_, addr, out);
+  emitUndef(regAF_, addr, out);
+  zfEqZero(result, addr)(out, tmp);
+  sfSignBit(result, addr)(out, tmp);
+  // OF: set iff the original value was the maximum positive value for its
+  // width (non-negative before, negative after - a positive overflow).
+  {
+    auto lhsNeg = newTemp(tmp, 1);
+    out.append(
+            {ignil::Opcode::SLT, lhsNeg, {ignil::Value{lhs}, ignil::Const{0, dst->width}}, addr});
+    auto lhsNonNeg = newTemp(tmp, 1);
+    out.append({ignil::Opcode::NOT, lhsNonNeg, {ignil::Value{lhsNeg}}, addr});
+    auto resNeg = newTemp(tmp, 1);
+    out.append({ignil::Opcode::SLT, resNeg, {result, ignil::Const{0, dst->width}}, addr});
+    auto of = newTemp(tmp, 1);
+    out.append({ignil::Opcode::AND, of, {ignil::Value{lhsNonNeg}, ignil::Value{resNeg}}, addr});
+    out.append({ignil::Opcode::COPY, regOF_, {ignil::Value{of}}, addr});
+  }
+  emitUndef(regDF_, addr, out);
+}
+
+void dragon::x86::X86IGNILLifter::liftDec(const llvm::MCInst &mc,
+                                          std::uint64_t addr,
+                                          ignil::Block &out,
+                                          std::uint32_t &tmp) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftDec in addr {:#x} no dst", addr);
+    return;
+  }
+
+  auto lhs = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::COPY, lhs, {*dst}, addr});
+
+  auto result = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::SUB,
+              result,
+              {ignil::Value{lhs}, ignil::Const{1, dst->width}},
+              addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+
+  // Same CF-untouched reasoning as liftInc.
+  emitUndef(regPF_, addr, out);
+  emitUndef(regAF_, addr, out);
+  zfEqZero(result, addr)(out, tmp);
+  sfSignBit(result, addr)(out, tmp);
+  // OF: set iff the original value was the minimum negative value for its
+  // width (negative before, non-negative after - a negative overflow).
+  {
+    auto lhsNeg = newTemp(tmp, 1);
+    out.append(
+            {ignil::Opcode::SLT, lhsNeg, {ignil::Value{lhs}, ignil::Const{0, dst->width}}, addr});
+    auto resNeg = newTemp(tmp, 1);
+    out.append({ignil::Opcode::SLT, resNeg, {result, ignil::Const{0, dst->width}}, addr});
+    auto resNonNeg = newTemp(tmp, 1);
+    out.append({ignil::Opcode::NOT, resNonNeg, {ignil::Value{resNeg}}, addr});
+    auto of = newTemp(tmp, 1);
+    out.append({ignil::Opcode::AND, of, {ignil::Value{lhsNeg}, ignil::Value{resNonNeg}}, addr});
+    out.append({ignil::Opcode::COPY, regOF_, {ignil::Value{of}}, addr});
+  }
+  emitUndef(regDF_, addr, out);
+}
+
+void dragon::x86::X86IGNILLifter::liftNeg(const llvm::MCInst &mc,
+                                          std::uint64_t addr,
+                                          ignil::Block &out,
+                                          std::uint32_t &tmp) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftNeg in addr {:#x} no dst", addr);
+    return;
+  }
+
+  auto lhs = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::COPY, lhs, {*dst}, addr});
+
+  auto result = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::NEG, result, {ignil::Value{lhs}}, addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+
+  std::map<X86Flag, FlagSetter> flags{
+          // CF = (src != 0): negating zero doesn't borrow, anything else
+          // does.
+          {X86Flag::CF,
+           [this, lhs, addr](ignil::Block &out, std::uint32_t &tmp) {
+             auto cf = newTemp(tmp, 1);
+             out.append({ignil::Opcode::NEQ,
+                         cf,
+                         {ignil::Value{lhs}, ignil::Const{0, lhs.width}},
+                         addr});
+             out.append({ignil::Opcode::COPY, regCF_, {ignil::Value{cf}}, addr});
+           }},
+          {X86Flag::ZF, zfEqZero(result, addr)},
+          {X86Flag::SF, sfSignBit(result, addr)},
+          // OF = (src was the minimum negative value for its width) - the
+          // one value whose negation can't be represented.
+          {X86Flag::OF,
+           [this, lhs, addr](ignil::Block &out, std::uint32_t &tmp) {
+             const std::uint64_t minNeg =
+                     lhs.width >= 64 ? (std::uint64_t{1} << 63)
+                                     : (std::uint64_t{1} << (lhs.width - 1));
+             auto of = newTemp(tmp, 1);
+             out.append({ignil::Opcode::EQ,
+                         of,
+                         {ignil::Value{lhs}, ignil::Const{minNeg, lhs.width}},
+                         addr});
+             out.append({ignil::Opcode::COPY, regOF_, {ignil::Value{of}}, addr});
+           }},
+  };
+  emitArithFlags(addr, out, tmp, flags);
+}
+
+void dragon::x86::X86IGNILLifter::liftMovzx(const llvm::MCInst &mc,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  // op[0]=dst(wider), op[1]=src(narrower). MOVZX never affects flags.
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftMovzx in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(1).getReg());
+  if (!src) {
+    logger_.log("Error liftMovzx in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  out.append({ignil::Opcode::ZEXT, *dst, {*src}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftShlImm(const llvm::MCInst &mc,
+                                             std::uint64_t addr,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp) const {
+  // op[0]=dst(out), op[1]=src(tied=dst), op[2]=imm shift count.
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftShlImm in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(1).getReg());
+  if (!src) {
+    logger_.log("Error liftShlImm in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  const auto imm = static_cast<std::uint64_t>(mc.getOperand(2).getImm());
+
+  if (imm == 0) {
+    out.append({ignil::Opcode::COPY, *dst, {*src}, addr});
+    return;
+  }
+
+  auto lhs = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::COPY, lhs, {*src}, addr});
+
+  auto result = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::SHL,
+              result,
+              {ignil::Value{lhs}, ignil::Const{imm, dst->width}},
+              addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+
+  // CF = the last bit shifted out the top (bit width-imm of the original
+  // value) - the opposite end from SAR/SHR.
+  auto cfLastBitOut = [this, lhs, imm,
+                       addr](ignil::Block &out, std::uint32_t &tmp) {
+    const ignil::Width w = lhs.width;
+    auto shifted = newTemp(tmp, w);
+    out.append({ignil::Opcode::SHR,
+                shifted,
+                {ignil::Value{lhs}, ignil::Const{w - imm, w}},
+                addr});
+    auto masked = newTemp(tmp, w);
+    out.append(
+            {ignil::Opcode::AND, masked, {shifted, ignil::Const{1, w}}, addr});
+    auto bit = newTemp(tmp, 1);
+    out.append(
+            {ignil::Opcode::NEQ, bit, {masked, ignil::Const{0, w}}, addr});
+    out.append({ignil::Opcode::COPY, regCF_, {bit}, addr});
+  };
+
+  std::map<X86Flag, FlagSetter> flags{
+          {X86Flag::CF, cfLastBitOut},
+          {X86Flag::ZF, zfEqZero(result, addr)},
+          {X86Flag::SF, sfSignBit(result, addr)},
+  };
+  // OF only architecturally defined for a 1-bit shift: whether the sign
+  // bit changed (SHL, unlike SAR/SHR, can overflow in either direction).
+  if (imm == 1)
+    flags.emplace(X86Flag::OF, [this, lhs, result,
+                                addr](ignil::Block &out, std::uint32_t &tmp) {
+      auto lhsNeg = newTemp(tmp, 1);
+      out.append({ignil::Opcode::SLT,
+                  lhsNeg,
+                  {ignil::Value{lhs}, ignil::Const{0, lhs.width}},
+                  addr});
+      auto resNeg = newTemp(tmp, 1);
+      out.append({ignil::Opcode::SLT,
+                  resNeg,
+                  {result, ignil::Const{0, ignil::widthOf(result)}},
+                  addr});
+      auto of = newTemp(tmp, 1);
+      out.append({ignil::Opcode::NEQ, of, {lhsNeg, resNeg}, addr});
+      out.append({ignil::Opcode::COPY, regOF_, {of}, addr});
+    });
+  emitArithFlags(addr, out, tmp, flags);
+}
+
+void dragon::x86::X86IGNILLifter::liftShrImm(const llvm::MCInst &mc,
+                                             std::uint64_t addr,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftShrImm in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(1).getReg());
+  if (!src) {
+    logger_.log("Error liftShrImm in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  const auto imm = static_cast<std::uint64_t>(mc.getOperand(2).getImm());
+
+  if (imm == 0) {
+    out.append({ignil::Opcode::COPY, *dst, {*src}, addr});
+    return;
+  }
+
+  auto lhs = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::COPY, lhs, {*src}, addr});
+
+  auto result = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::SHR,
+              result,
+              {ignil::Value{lhs}, ignil::Const{imm, dst->width}},
+              addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+
+  // CF = bit imm-1 of the original value - same formula shape as SAR.
+  auto cfLastBitOut = [this, lhs, imm,
+                       addr](ignil::Block &out, std::uint32_t &tmp) {
+    const ignil::Width w = lhs.width;
+    auto shifted = newTemp(tmp, w);
+    out.append({ignil::Opcode::SHR,
+                shifted,
+                {ignil::Value{lhs}, ignil::Const{imm - 1, w}},
+                addr});
+    auto masked = newTemp(tmp, w);
+    out.append(
+            {ignil::Opcode::AND, masked, {shifted, ignil::Const{1, w}}, addr});
+    auto bit = newTemp(tmp, 1);
+    out.append(
+            {ignil::Opcode::NEQ, bit, {masked, ignil::Const{0, w}}, addr});
+    out.append({ignil::Opcode::COPY, regCF_, {bit}, addr});
+  };
+
+  std::map<X86Flag, FlagSetter> flags{
+          {X86Flag::CF, cfLastBitOut},
+          {X86Flag::ZF, zfEqZero(result, addr)},
+          {X86Flag::SF, sfSignBit(result, addr)},
+  };
+  // OF only architecturally defined for a 1-bit shift: a logical shift
+  // right always clears the new sign bit, so "did the sign appear to
+  // change" reduces to whatever the original sign bit was.
+  if (imm == 1)
+    flags.emplace(X86Flag::OF, [this, lhs,
+                                addr](ignil::Block &out, std::uint32_t &tmp) {
+      auto of = newTemp(tmp, 1);
+      out.append({ignil::Opcode::SLT,
+                  of,
+                  {ignil::Value{lhs}, ignil::Const{0, lhs.width}},
+                  addr});
+      out.append({ignil::Opcode::COPY, regOF_, {of}, addr});
+    });
+  emitArithFlags(addr, out, tmp, flags);
+}
+
+void dragon::x86::X86IGNILLifter::liftSarR1(const llvm::MCInst &mc,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  // op[0]=dst(out), op[1]=src(tied=dst) - no imm operand at all, the shift
+  // count of 1 is implicit in the opcode. Synthesize that operand and
+  // delegate to liftSarImm so the flag formulas live in exactly one place.
+  llvm::MCInst synthetic = mc;
+  synthetic.addOperand(llvm::MCOperand::createImm(1));
+  liftSarImm(synthetic, addr, out, tmp);
+}
+
+void dragon::x86::X86IGNILLifter::liftShlR1(const llvm::MCInst &mc,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  llvm::MCInst synthetic = mc;
+  synthetic.addOperand(llvm::MCOperand::createImm(1));
+  liftShlImm(synthetic, addr, out, tmp);
+}
+
+void dragon::x86::X86IGNILLifter::liftShrR1(const llvm::MCInst &mc,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  llvm::MCInst synthetic = mc;
+  synthetic.addOperand(llvm::MCOperand::createImm(1));
+  liftShrImm(synthetic, addr, out, tmp);
+}
+
+void dragon::x86::X86IGNILLifter::liftCvtsi2sd(const llvm::MCInst &mc,
+                                               std::uint64_t addr,
+                                               ignil::Block &out,
+                                               std::uint32_t &tmp) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftCvtsi2sd in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(2).getReg());
+  if (!src) {
+    logger_.log("Error liftCvtsi2sd in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  out.append({ignil::Opcode::SITOFP, *dst, {*src}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftCvttsd2si(const llvm::MCInst &mc,
+                                                std::uint64_t addr,
+                                                ignil::Block &out,
+                                                std::uint32_t &tmp) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftCvttsd2si in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(1).getReg());
+  if (!src) {
+    logger_.log("Error liftCvttsd2si in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  out.append({ignil::Opcode::FPTOSI, *dst, {*src}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftAddsd(const llvm::MCInst &mc,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftAddsd in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(2).getReg());
+  if (!src) {
+    logger_.log("Error liftAddsd in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  out.append({ignil::Opcode::FADD, *dst, {*dst, *src}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftSubsd(const llvm::MCInst &mc,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftSubsd in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(2).getReg());
+  if (!src) {
+    logger_.log("Error liftSubsd in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  out.append({ignil::Opcode::FSUB, *dst, {*dst, *src}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftMulsd(const llvm::MCInst &mc,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftMulsd in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(2).getReg());
+  if (!src) {
+    logger_.log("Error liftMulsd in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  out.append({ignil::Opcode::FMUL, *dst, {*dst, *src}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftMulsdMem(const llvm::MCInst &mc,
+                                               std::uint64_t addr,
+                                               ignil::Block &out,
+                                               std::uint32_t &tmp) const {
+  // op[0]=dst(out), op[1]=tied(=dst, ignored), op[2..6]=mem(rhs) - mirrors
+  // liftAddRegMem's shape.
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftMulsdMem in addr {:#x} no dst", addr);
+    return;
+  }
+
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+  auto addrTemp = emitAddress(mc, 2, ptrWidth, addr, out, tmp);
+  auto rhs = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::LOAD, rhs, {addrTemp}, addr});
+  out.append({ignil::Opcode::FMUL, *dst, {*dst, rhs}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftMovsdRR(const llvm::MCInst &mc,
+                                              std::uint64_t addr,
+                                              ignil::Block &out,
+                                              std::uint32_t &tmp) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftMovsdRR in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(2).getReg());
+  if (!src) {
+    logger_.log("Error liftMovsdRR in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  out.append({ignil::Opcode::COPY, *dst, {*src}, addr});
 }
 
 std::optional<dragon::ignil::Reg>

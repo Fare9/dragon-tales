@@ -554,6 +554,10 @@ class IGNILOpcode:
     SLT   = 27; SLE   = 28; SGT   = 29; SGE   = 30
     JMP   = 31; CJMP  = 32; CALL  = 33; RET   = 34
     UNDEF = 35
+    # Appended after UNDEF, not interleaved with ADD/SUB/MUL above where
+    # they'd read more naturally - matches dragon_c.h's dragon_ignil_opcode_t.
+    FADD = 36; FSUB = 37; FMUL = 38; FDIV = 39
+    SITOFP = 40; FPTOSI = 41
 
     @staticmethod
     def name(opcode_int):

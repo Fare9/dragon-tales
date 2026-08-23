@@ -227,6 +227,15 @@
       DRAGON_IGNIL_CALL  = 33,
       DRAGON_IGNIL_RET   = 34,
       DRAGON_IGNIL_UNDEF = 35,
+      // Appended after UNDEF, not interleaved with ADD/SUB/MUL above where
+      // they'd read more naturally - see ignil::Opcode's own doc comment
+      // for why new opcodes always go at the end of this mirror.
+      DRAGON_IGNIL_FADD   = 36,
+      DRAGON_IGNIL_FSUB   = 37,
+      DRAGON_IGNIL_FMUL   = 38,
+      DRAGON_IGNIL_FDIV   = 39,
+      DRAGON_IGNIL_SITOFP = 40,
+      DRAGON_IGNIL_FPTOSI = 41,
   } dragon_ignil_opcode_t;
 
   // Returns a static string for the opcode mnemonic (e.g. "ADD", "COPY").

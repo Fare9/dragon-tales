@@ -191,3 +191,44 @@ TEST_CASE("Semantic round-trip - add reg, [mem]", "[semantic][x86_64]") {
   REQUIRE(getReg64(actual.regs, x86off::RAX) == 50);
   requireStatesMatch(expected, actual, initialRegs);
 }
+
+// -----------------------------------------------------------------------
+// Test: INC/DEC must not disturb CF - the whole reason they exist
+// separately from ADD/SUB by 1. This is the one genuinely novel flag
+// semantic in that lifter-gap batch (every other op either computes a
+// flag or marks it UNDEF; this is the first "leave it completely alone"
+// case), so it gets a real execution check rather than just an IGNIL-shape
+// one - `requireStatesMatch` compares CF unmasked.
+// -----------------------------------------------------------------------
+
+TEST_CASE("Semantic round-trip - inc/dec leave CF exactly as a prior cmp "
+          "left it",
+          "[semantic][x86_64]") {
+  // push rbp ; mov rbp, rsp ; mov eax, 1 ; mov ebx, 2 ; cmp eax, ebx
+  //   (unsigned 1 < 2 -> CF=1) ; mov ecx, 5 ; inc ecx ; mov edx, 5 ;
+  //   dec edx ; pop rbp ; ret
+  const std::vector<std::uint8_t> code = {
+          0x55,                         // push rbp
+          0x48, 0x89, 0xe5,             // mov rbp, rsp
+          0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1
+          0xbb, 0x02, 0x00, 0x00, 0x00, // mov ebx, 2
+          0x39, 0xd8,                   // cmp eax, ebx
+          0xb9, 0x05, 0x00, 0x00, 0x00, // mov ecx, 5
+          0xff, 0xc1,                   // inc ecx
+          0xba, 0x05, 0x00, 0x00, 0x00, // mov edx, 5
+          0xff, 0xca,                   // dec edx
+          0x5d,                         // pop rbp
+          0xc3,                         // ret
+  };
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem);
+  auto actual = runLifted(code, initialRegs, initialMem);
+
+  REQUIRE(expected.regs[x86off::CF] == 1); // sanity: the cmp really set it
+  REQUIRE(actual.regs[x86off::CF] == 1); // ...and inc/dec kept it
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 6);
+  REQUIRE(getReg64(actual.regs, x86off::RDX) == 4);
+  requireStatesMatch(expected, actual, initialRegs);
+}

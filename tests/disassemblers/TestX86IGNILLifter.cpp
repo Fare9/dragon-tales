@@ -3,6 +3,10 @@
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
+#include <dragon/lifters/llvm/LLVMLifter.hpp>
+
+#include <llvm/IR/Verifier.h>
+#include <llvm/Support/raw_ostream.h>
 
 #include <algorithm>
 #include <iostream>
@@ -605,5 +609,438 @@ TEST_CASE("IGNIL lifting - lea eax, [rdx+rcx*1] truncates a 64-bit address "
   REQUIRE(countUndef(*ib) == 0); // LEA never affects flags
 
   std::cout << "\n=== IGNIL Lifting: lea eax, [rdx+rcx*1] ===";
+  printIgnilComparison(g);
+}
+
+// -----------------------------------------------------------------------
+// INC/DEC/NEG/MOVZX/SHL-imm/SHR-imm (INC32r/64r, DEC32r/64r, NEG32r/64r,
+// MOVZX32rr8/rr16, MOVZX64rr8/rr16, SHL32ri/64ri, SHR32ri/64ri) - the
+// remaining gaps from tests/toy-vm/ToyVM.hpp's header comment (SAR was
+// fixed earlier this session; these are its siblings). All extremely
+// common in real -O0/-O1 output (loop counters, byte-to-word widening),
+// so every occurrence previously degraded silently to UNDEF. Byte
+// sequences verified with real `gcc -c`/`objdump`.
+// -----------------------------------------------------------------------
+
+TEST_CASE("IGNIL lifting - inc eax / inc rax never touch CF (INC32r/64r)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xff, 0xc0,       // inc eax
+          0x48, 0xff, 0xc0, // inc rax
+          0xc3,             // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::ADD));
+  // CF gets no Op at all - not even UNDEF - for either INC. Confirm no op
+  // anywhere writes CF: only every other flag getting UNDEF would count.
+  bool anyWritesCF = false;
+  for (const auto &op: ib->ops()) {
+    if (op.dst && std::holds_alternative<dragon::ignil::Reg>(*op.dst)) {
+      const auto &r = std::get<dragon::ignil::Reg>(*op.dst);
+      if (r.name == "CF")
+        anyWritesCF = true;
+    }
+  }
+  REQUIRE_FALSE(anyWritesCF);
+  REQUIRE(countUndef(*ib) == 6); // PF+AF+DF per INC, x2 INCs = 6
+
+  std::cout << "\n=== IGNIL Lifting: inc eax / inc rax ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - dec ecx / dec rcx never touch CF (DEC32r/64r)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xff, 0xc9,       // dec ecx
+          0x48, 0xff, 0xc9, // dec rcx
+          0xc3,             // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SUB));
+  REQUIRE(countUndef(*ib) == 6); // PF+AF+DF per DEC, x2 DECs = 6
+
+  std::cout << "\n=== IGNIL Lifting: dec ecx / dec rcx ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - neg eax / neg rax (NEG32r/64r)", "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xf7, 0xd8,       // neg eax
+          0x48, 0xf7, 0xd8, // neg rax
+          0xc3,             // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::NEG));
+  // Unlike INC/DEC, NEG's CF *is* well-defined - only PF/AF/DF stay UNDEF.
+  REQUIRE(countUndef(*ib) == 6); // 3 per NEG, x2 NEGs
+
+  std::cout << "\n=== IGNIL Lifting: neg eax / neg rax ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - movzx (MOVZX32rr8/rr16, MOVZX64rr8/rr16)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0x0f, 0xb6, 0xc3,       // movzx eax, bl
+          0x0f, 0xb7, 0xc3,       // movzx eax, bx
+          0x48, 0x0f, 0xb6, 0xc3, // movzx rax, bl
+          0x48, 0x0f, 0xb7, 0xc3, // movzx rax, bx
+          0xc3,                   // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::ZEXT));
+  REQUIRE(countUndef(*ib) == 0); // MOVZX never affects flags
+
+  std::cout << "\n=== IGNIL Lifting: movzx (4 width pairs) ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - shl by immediate, count 0/1/N (SHL32ri/64ri)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xc1, 0xe0, 0x00,       // shl eax, 0
+          0xc1, 0xe0, 0x01,       // shl eax, 1  (SHL32ri encoding, not SHL32r1)
+          0xc1, 0xe0, 0x05,       // shl eax, 5
+          0x48, 0xc1, 0xe0, 0x05, // shl rax, 5
+          0xc3,                   // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SHL));
+  // shl by 0: pure copy, no flags at all (0 UNDEF).
+  // shl by 1: OF defined -> only PF/AF/DF UNDEF (3).
+  // shl by 5 (x2, 32 and 64-bit): OF undefined for count!=1 -> PF/AF/OF/DF
+  // UNDEF (4 each).
+  REQUIRE(countUndef(*ib) == (0 + 3 + 4 + 4));
+
+  std::cout << "\n=== IGNIL Lifting: shl by immediate ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - shr by immediate, count 0/1/N (SHR32ri/64ri)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xc1, 0xe8, 0x00,       // shr eax, 0
+          0xc1, 0xe8, 0x01,       // shr eax, 1  (SHR32ri encoding, not SHR32r1)
+          0xc1, 0xe8, 0x05,       // shr eax, 5
+          0x48, 0xc1, 0xe8, 0x05, // shr rax, 5
+          0xc3,                   // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SHR));
+  REQUIRE(countUndef(*ib) == (0 + 3 + 4 + 4));
+
+  std::cout << "\n=== IGNIL Lifting: shr by immediate ===";
+  printIgnilComparison(g);
+}
+
+// -----------------------------------------------------------------------
+// AND/OR/XOR/TEST-immediate, MOVSX32rr8, IMUL32rr, SAR/SHL/SHR-by-1 - found
+// by decoding a real obfusheader.h-obfuscated binary end to end
+// (examples/obfusheader/). liftAnd/liftOr/liftXor/liftTest were generalized
+// to accept an immediate operand (mirroring liftAdd/liftSub's existing
+// isImm()/isReg() branch) rather than adding parallel *Imm functions, since
+// the ri/ri8 forms share the exact same operand shape as the rr forms
+// (verified below) - only the immediate-vs-register src differs. Byte
+// sequences were generated with `as --64` from real Intel-syntax assembly
+// and verified with `objdump -d`, using ECX/RCX as the destination to force
+// the general ModRM-encoded ri/ri8 opcodes rather than the accumulator
+// short-encoding forms (AND32i32 etc. - a distinct, still-unhandled opcode
+// family, see ToDo/Roadmap.md).
+// -----------------------------------------------------------------------
+
+TEST_CASE("IGNIL lifting - and/or/xor by immediate, ri32 and ri8 "
+          "(AND32ri/64ri32/32ri8/64ri8, OR32ri/32ri8/64ri8, "
+          "XOR32ri/32ri8/64ri8)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0x81, 0xe1, 0xa0, 0x86, 0x01, 0x00, // and ecx, 0x186a0  (AND32ri)
+          0x48, 0x81, 0xe1, 0xa0, 0x86, 0x01,
+          0x00,                         // and rcx, 0x186a0  (AND64ri32)
+          0x81, 0xc9, 0xa0, 0x86, 0x01, 0x00, // or ecx, 0x186a0   (OR32ri)
+          0x81, 0xf1, 0xa0, 0x86, 0x01, 0x00, // xor ecx, 0x186a0  (XOR32ri)
+          0x83, 0xe1, 0x05,                   // and ecx, 5  (AND32ri8)
+          0x48, 0x83, 0xe1, 0x05,             // and rcx, 5  (AND64ri8)
+          0x83, 0xc9, 0x05,                   // or ecx, 5   (OR32ri8)
+          0x48, 0x83, 0xc9, 0x05,             // or rcx, 5   (OR64ri8)
+          0x83, 0xf1, 0x05,                   // xor ecx, 5  (XOR32ri8)
+          0x48, 0x83, 0xf1, 0x05,             // xor rcx, 5  (XOR64ri8)
+          0xc3,                                // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::AND));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::OR));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::XOR));
+  // 10 logical ops, each leaves only PF/AF/DF UNDEF (CF/ZF/SF/OF computed).
+  REQUIRE(countUndef(*ib) == 30);
+
+  std::cout << "\n=== IGNIL Lifting: and/or/xor by immediate ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - test ecx, imm32 discards the result (TEST32ri)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xf7, 0xc1, 0xa0, 0x86, 0x01, 0x00, // test ecx, 0x186a0
+          0xc3,                                // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::AND)); // TEST lowers to AND
+  REQUIRE(countUndef(*ib) == 3); // PF/AF/DF, same as the register form
+
+  // Unlike AND32ri, TEST must never write the AND result back into ECX.
+  const bool writesEcx = std::any_of(
+          ib->ops().begin(), ib->ops().end(),
+          [](const dragon::ignil::Op &op) {
+            if (!op.dst ||
+                !std::holds_alternative<dragon::ignil::Reg>(*op.dst))
+              return false;
+            return std::get<dragon::ignil::Reg>(*op.dst).name == "ECX";
+          });
+  REQUIRE_FALSE(writesEcx);
+
+  std::cout << "\n=== IGNIL Lifting: test ecx, imm32 ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - movsx eax, bl (MOVSX32rr8)", "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0x0f, 0xbe, 0xc3, // movsx eax, bl
+          0xc3,             // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SEXT));
+  REQUIRE(countUndef(*ib) == 0); // MOVSX never affects flags
+
+  std::cout << "\n=== IGNIL Lifting: movsx eax, bl ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - 2-operand imul eax, ebx (IMUL32rr)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0x0f, 0xaf, 0xc3, // imul eax, ebx
+          0xc3,             // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::MUL));
+  REQUIRE(countUndef(*ib) == 7); // all 7 flags UNDEF, same as IMUL-immediate
+
+  std::cout << "\n=== IGNIL Lifting: imul eax, ebx ===";
+  printIgnilComparison(g);
+}
+
+// -----------------------------------------------------------------------
+// SSE2 scalar-double support (PXOR, CVTSI2SD, CVTTSD2SI, ADDSD/SUBSD/MULSD,
+// MOVSD rr/rm/mr) - found decoding the real obfusheader.h-obfuscated
+// binary (examples/obfusheader/, CFLOW_BRANCHING's int_proxy() opaque
+// predicates use real SSE2 double arithmetic, not x87). Only the low 64
+// bits of each XMM register are modeled (x86registers.def) - real
+// hardware's upper-64-bits-preserved merge semantics for these
+// instructions reduce to a no-op under that model, so several of these
+// dispatch straight into existing integer-op lifters (PXORrr -> liftXor,
+// MOVSDrm/mr -> liftMovLoad/liftMovStore) rather than needing new
+// functions. None of these touch EFLAGS (only UCOMISD/COMISD do, and
+// neither appears in the real target). Byte sequences generated with
+// `as --64` from real Intel-syntax assembly and verified with `objdump -d`.
+// -----------------------------------------------------------------------
+
+TEST_CASE("IGNIL lifting - pxor/cvtsi2sd/cvttsd2si/addsd/subsd/mulsd "
+          "register forms (PXORrr, CVTSI2SDrr_Int/CVTSI642SDrr_Int, "
+          "CVTTSD2SIrr_Int/CVTTSD2SI64rr_Int, ADDSDrr_Int/SUBSDrr_Int/"
+          "MULSDrr_Int)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0x66, 0x0f, 0xef, 0xc0,       // pxor xmm0, xmm0
+          0x66, 0x0f, 0xef, 0xd1,       // pxor xmm2, xmm1
+          0xf2, 0x0f, 0x2a, 0xc6,       // cvtsi2sd xmm0, esi
+          0xf2, 0x48, 0x0f, 0x2a, 0xc8, // cvtsi2sd xmm1, rax
+          0xf2, 0x0f, 0x2c, 0xc0,       // cvttsd2si eax, xmm0
+          0xf2, 0x48, 0x0f, 0x2c, 0xc1, // cvttsd2si rax, xmm1
+          0xf2, 0x0f, 0x58, 0xc1,       // addsd xmm0, xmm1
+          0xf2, 0x0f, 0x5c, 0xd0,       // subsd xmm2, xmm0
+          0xf2, 0x0f, 0x59, 0xca,       // mulsd xmm1, xmm2
+          0xc3,                         // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::XOR)); // PXOR reuses liftXor
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SITOFP));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::FPTOSI));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::FADD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::FSUB));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::FMUL));
+  // Only the two PXORs touch flags at all (3 UNDEF each, same as any other
+  // liftXor dispatch - PF/AF/DF). SSE2 arithmetic/conversions never do.
+  REQUIRE(countUndef(*ib) == 6);
+
+  std::cout << "\n=== IGNIL Lifting: SSE2 register forms ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("IGNIL lifting - movsd rr/rm/mr and mulsd with a memory operand "
+          "(MOVSDrr/rm/mr, MULSDrm_Int)",
+          "[ignil][x86_64]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xf2, 0x0f, 0x10, 0xdc,                   // movsd xmm3, xmm4
+          0xf2, 0x0f, 0x10, 0x44, 0x24, 0xf8,       // movsd xmm0, [rsp-8]
+          0xf2, 0x0f, 0x11, 0x4c, 0x24, 0xf8,       // movsd [rsp-8], xmm1
+          0xf2, 0x0f, 0x59, 0x05, 0x00, 0x01, 0x00,
+          0x00,                                      // mulsd xmm0, [rip+0x100]
+          0xc3,                                      // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::COPY)); // movsd xmm3, xmm4
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::FMUL));
+  REQUIRE(countUndef(*ib) == 0); // none of these touch flags
+
+  std::cout << "\n=== IGNIL Lifting: movsd rr/rm/mr + mulsd [mem] ===";
+  printIgnilComparison(g);
+}
+
+TEST_CASE("LLVM IR - SITOFP/FADD/FPTOSI lower to valid, correctly-typed "
+          "double IR",
+          "[llvmlifter][x86_64]") {
+  // cvtsi2sd xmm0, esi ; addsd xmm0, xmm1 ; cvttsd2si eax, xmm0 ; ret
+  // Exercises the actual point of the whole IGNIL float design: Const/Reg/
+  // Temp stay raw 64-bit slots end to end, and only LLVMLifter's asDouble()/
+  // emit() bitcast at the boundary - this is the one place that boundary
+  // can silently produce type-mismatched (and therefore invalid) IR if the
+  // bitcast logic is wrong, which a pure IGNIL-shape test (checking opcodes
+  // appear, not that the generated IR actually type-checks) can't catch.
+  const std::vector<std::uint8_t> bytes = {
+          0xf2, 0x0f, 0x2a, 0xc6, // cvtsi2sd xmm0, esi
+          0xf2, 0x0f, 0x58, 0xc1, // addsd xmm0, xmm1
+          0xf2, 0x0f, 0x2c, 0xc0, // cvttsd2si eax, xmm0
+          0xc3,                   // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto insns = dis.disassemble(bytes, 0x1000);
+  auto block = dis.liftTrace(insns);
+
+  dragon::llvmlifter::LLVMLifter lifter(dragon::Architecture::X86_64,
+                                        "sitofp_fadd_fptosi");
+  REQUIRE(lifter.liftBlock(block, "fn"));
+
+  llvm::Function *fn = lifter.module().getFunction("fn");
+  REQUIRE(fn != nullptr);
+
+  std::string verifyErrors;
+  llvm::raw_string_ostream os(verifyErrors);
+  bool broken = llvm::verifyFunction(*fn, &os);
+  INFO(verifyErrors);
+  REQUIRE_FALSE(broken);
+
+  const std::string ir = lifter.ir();
+  REQUIRE(ir.find("sitofp") != std::string::npos);
+  REQUIRE(ir.find("fadd double") != std::string::npos);
+  REQUIRE(ir.find("fptosi double") != std::string::npos);
+
+  // Also verify post-optimization: mem2reg/instcombine should thread the
+  // sitofp result straight into the fadd with no leftover bitcast
+  // round-trip noise between them (confirmed once by hand via a scratch
+  // driver before writing this test - pinning it here so a future
+  // regression in the bitcast logic doesn't quietly reintroduce it).
+  lifter.runMem2Reg();
+  lifter.runInstCombine();
+  llvm::Function *optFn = lifter.module().getFunction("fn");
+  REQUIRE(optFn != nullptr);
+  REQUIRE_FALSE(llvm::verifyFunction(*optFn));
+  const std::string optIr = lifter.ir();
+  REQUIRE(optIr.find("fadd double") != std::string::npos);
+
+  std::cout << "\n=== LLVM IR: sitofp/fadd/fptosi (optimized) ===\n"
+            << optIr;
+}
+
+TEST_CASE("IGNIL lifting - shift-by-1 dedicated opcodes "
+          "(SAR32r1/64r1, SHL32r1/64r1, SHR32r1/64r1)",
+          "[ignil][x86_64]") {
+  // Deliberately the D1 /n encoding (implicit count of 1), not C1 /n ib
+  // with an explicit imm byte of 1 (SAR32ri etc., already covered above) -
+  // these are genuinely different opcodes with no immediate operand at all.
+  const std::vector<std::uint8_t> bytes = {
+          0xd1, 0xf8,       // sar eax, 1
+          0xd1, 0xe0,       // shl eax, 1
+          0xd1, 0xe8,       // shr eax, 1
+          0x48, 0xd1, 0xf8, // sar rax, 1
+          0x48, 0xd1, 0xe0, // shl rax, 1
+          0x48, 0xd1, 0xe8, // shr rax, 1
+          0xc3,             // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SAR));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SHL));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SHR));
+  // Each is an implicit count-of-1 shift, so like the imm==1 case above,
+  // only PF/AF/DF are UNDEF per op: 3 * 6 ops.
+  REQUIRE(countUndef(*ib) == 18);
+
+  std::cout << "\n=== IGNIL Lifting: shift-by-1 dedicated opcodes ===";
   printIgnilComparison(g);
 }

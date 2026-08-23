@@ -73,3 +73,28 @@ REG("ZF",   139, 8)
 REG("SF",   140, 8)
 REG("OF",   141, 8)
 REG("DF",   142, 8)
+
+// XMM0-XMM15 - only the low 64 bits are modeled (scalar double lanes,
+// SSE2 MOVSD/ADDSD/SUBSD/MULSD/CVTSI2SD/CVTTSD2SI/PXOR). Real XMM registers
+// are 128 bits wide, but nothing this lifter lifts today (scalar-double
+// obfuscated-predicate arithmetic) reads or writes the upper 64 bits, so
+// modeling them would add real complexity (packed-lane semantics, PXOR's
+// true full-128-bit zero vs. a 64-bit one) for no current benefit. A future
+// packed-SSE/AVX target would need to revisit this - documented as a
+// deliberate scope cut, not an oversight.
+REG("XMM0",  143, 64)
+REG("XMM1",  151, 64)
+REG("XMM2",  159, 64)
+REG("XMM3",  167, 64)
+REG("XMM4",  175, 64)
+REG("XMM5",  183, 64)
+REG("XMM6",  191, 64)
+REG("XMM7",  199, 64)
+REG("XMM8",  207, 64)
+REG("XMM9",  215, 64)
+REG("XMM10", 223, 64)
+REG("XMM11", 231, 64)
+REG("XMM12", 239, 64)
+REG("XMM13", 247, 64)
+REG("XMM14", 255, 64)
+REG("XMM15", 263, 64)

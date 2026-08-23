@@ -200,8 +200,18 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       temps[t->id] = val;
     } else if (const auto *r = std::get_if<ignil::Reg>(&*op.dst)) {
       auto *slotTy = llvm::IntegerType::get(*ctx_, r->width);
-      if (val->getType() != slotTy)
+      if (val->getType()->isDoubleTy()) {
+        // FADD/FSUB/FMUL/SITOFP produce a real `double`-typed value (kept
+        // that way rather than laundered through i64 at every step so
+        // Temp-to-Temp chains stay in LLVM's native float domain, giving
+        // its own float-aware constant folding/InstCombine the best shot
+        // at simplifying it) - reinterpret its bits back into the
+        // register's integer slot, the same width-64-bits-either-way
+        // reinterpretation every XMM Reg already models.
+        val = builder.CreateBitCast(val, slotTy);
+      } else if (val->getType() != slotTy) {
         val = builder.CreateZExt(val, slotTy);
+      }
       builder.CreateStore(val, regs.at(r->offset).at(r->width));
       mergeIntoParent(r->offset, r->width, val, regs, builder);
     }
@@ -228,6 +238,17 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
     if (rhs->getType() != lhs->getType())
       rhs = builder.CreateZExtOrTrunc(rhs, lhs->getType());
     return rhs;
+  };
+  // FADD/FSUB/FMUL/FDIV/FPTOSI's operands are raw 64-bit slots (a Reg read,
+  // a Const, or a Temp chained from an earlier integer op) that need
+  // reinterpreting as `double` before real float arithmetic can run on
+  // them - unless the value is already `double` (a Temp already produced
+  // by a prior float op in the same chain), in which case it's used as-is
+  // rather than round-tripped through another bitcast.
+  auto asDouble = [&](llvm::Value *v) {
+    return v->getType()->isDoubleTy()
+                   ? v
+                   : builder.CreateBitCast(v, builder.getDoubleTy());
   };
 
   switch (op.opcode) {
@@ -273,6 +294,20 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       emit(builder.CreateURem(r0(), r1()));
       break;
 
+    // --- Floating-point (IEEE754 double) ---
+    case ignil::Opcode::FADD:
+      emit(builder.CreateFAdd(asDouble(r0()), asDouble(r1())));
+      break;
+    case ignil::Opcode::FSUB:
+      emit(builder.CreateFSub(asDouble(r0()), asDouble(r1())));
+      break;
+    case ignil::Opcode::FMUL:
+      emit(builder.CreateFMul(asDouble(r0()), asDouble(r1())));
+      break;
+    case ignil::Opcode::FDIV:
+      emit(builder.CreateFDiv(asDouble(r0()), asDouble(r1())));
+      break;
+
     // --- Bitwise ---
     case ignil::Opcode::AND:
       emit(builder.CreateAnd(r0(), r1()));
@@ -311,6 +346,14 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       break;
     case ignil::Opcode::TRUNC:
       emit(builder.CreateTrunc(r0(), dstTy()));
+      break;
+
+    // --- Int <-> float conversion ---
+    case ignil::Opcode::SITOFP:
+      emit(builder.CreateSIToFP(r0(), builder.getDoubleTy()));
+      break;
+    case ignil::Opcode::FPTOSI:
+      emit(builder.CreateFPToSI(asDouble(r0()), dstTy()));
       break;
 
     // --- Comparisons (always produce i1) ---

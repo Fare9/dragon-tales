@@ -177,6 +177,97 @@ class X86IGNILLifter {
   // into a 32-bit slot directly.
   void liftLeaTrunc32(const llvm::MCInst &mc, std::uint64_t addr,
                       ignil::Block &out, std::uint32_t &tmp) const;
+  // INC/DEC: op[0]=dst(out), op[1]=src(tied=dst), no immediate - implicit
+  // +-1. Real x86: CF is left completely untouched (no Op emitted for it
+  // at all, not even UNDEF - that's the whole point of INC/DEC over
+  // ADD/SUB 1: they don't disturb a carry chain from a previous
+  // instruction). OF: for INC, set iff the original value was the maximum
+  // positive value for its width (wrapped to negative); for DEC, set iff
+  // it was the minimum negative value (wrapped to non-negative).
+  void liftInc(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+              std::uint32_t &tmp) const;
+  void liftDec(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+              std::uint32_t &tmp) const;
+  // NEG: op[0]=dst(out), op[1]=src(tied=dst). CF = (src != 0) - negating
+  // zero doesn't borrow, anything else does. OF = (src was the minimum
+  // negative value for its width - unrepresentable when negated).
+  void liftNeg(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+              std::uint32_t &tmp) const;
+  // Zero-extending move (e.g. `movzx eax, bl`): op[0]=dst(wider),
+  // op[1]=src(narrower). No flags affected - same shape as liftMovsx,
+  // ZEXT instead of SEXT.
+  void liftMovzx(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                std::uint32_t &tmp) const;
+  // SHL by immediate: op[0]=dst(out), op[1]=src(tied=dst), op[2]=imm shift
+  // count. Same imm==0-leaves-everything-untouched rule as liftSarImm. CF
+  // = the last bit shifted out the *top* (bit width-imm of the original
+  // value, the opposite end from SAR/SHR). OF (count==1 only) = whether
+  // the sign bit changed (result's sign XOR the original's sign) - SHL can
+  // genuinely overflow either direction, unlike SAR/SHR.
+  void liftShlImm(const llvm::MCInst &mc, std::uint64_t addr,
+                  ignil::Block &out, std::uint32_t &tmp) const;
+  // SHR by immediate: same shape as liftSarImm (CF = bit imm-1 of the
+  // original value, same formula), but OF (count==1 only) = the sign bit
+  // of the *original* value - a logical shift right always clears the new
+  // sign bit, so "did the sign appear to change" reduces to whatever the
+  // original sign bit was.
+  void liftShrImm(const llvm::MCInst &mc, std::uint64_t addr,
+                  ignil::Block &out, std::uint32_t &tmp) const;
+  // 2-operand signed multiply (e.g. `imul eax, ebx`): op[0]=dst,
+  // op[1]=src1(tied=dst), op[2]=src2(reg). Same all-UNDEF flag rationale as
+  // liftImulImm - only the operand kind differs (register instead of imm).
+  void liftImulRR(const llvm::MCInst &mc, std::uint64_t addr,
+                  ignil::Block &out, std::uint32_t &tmp) const;
+  // Shift-by-1 dedicated opcodes (e.g. `sar eax, 1`): op[0]=dst(out),
+  // op[1]=src(tied=dst) - no immediate operand at all, the shift count of 1
+  // is implicit in the opcode itself (distinct from SAR/SHL/SHR *ri with an
+  // explicit imm operand). Each delegates to the corresponding liftXxxImm
+  // by synthesizing a literal imm-1 operand, since the flag formulas are
+  // identical once the count is known.
+  void liftSarR1(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                 std::uint32_t &tmp) const;
+  void liftShlR1(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                 std::uint32_t &tmp) const;
+  void liftShrR1(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                 std::uint32_t &tmp) const;
+
+  // SSE2 scalar-double support (real obfusheader.h/CFLOW_BRANCHING target,
+  // examples/obfusheader/) - only the low 64 bits of each XMM register are
+  // modeled (see x86registers.def), so every form below either reduces to
+  // an existing integer op (MOVSDrr/rm/mr -> COPY/LOAD/STORE, PXORrr ->
+  // XOR - all bitwise/copy semantics, unaffected by the float
+  // reinterpretation) or needs a new float-flavored op. None of these
+  // affect EFLAGS (only UCOMISD/COMISD do, and neither appears in the real
+  // target, so neither is modeled).
+  //
+  // op[0]=dst(xmm), op[1]=tied(=dst - real hardware preserves the upper 64
+  // bits across this write; irrelevant here since only the low 64 bits are
+  // modeled at all, so simply ignored), op[2]=src.
+  void liftCvtsi2sd(const llvm::MCInst &mc, std::uint64_t addr,
+                    ignil::Block &out, std::uint32_t &tmp) const;
+  void liftAddsd(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                std::uint32_t &tmp) const;
+  void liftSubsd(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                std::uint32_t &tmp) const;
+  void liftMulsd(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                std::uint32_t &tmp) const;
+  // op[0]=dst(xmm), op[1]=tied(=dst, ignored), op[2..6]=mem(rhs) - mirrors
+  // liftAddRegMem's shape (e.g. `mulsd xmm0, [rip+K]`, multiplying by a
+  // compile-time double literal - ordinary code, not obfuscation-specific,
+  // same story as item 15's division-by-constant lowering).
+  void liftMulsdMem(const llvm::MCInst &mc, std::uint64_t addr,
+                    ignil::Block &out, std::uint32_t &tmp) const;
+  // op[0]=dst(GPR), op[1]=src(xmm) - not a tied form (an integer
+  // destination has no partial-register-merge concern here).
+  void liftCvttsd2si(const llvm::MCInst &mc, std::uint64_t addr,
+                     ignil::Block &out, std::uint32_t &tmp) const;
+  // op[0]=dst(xmm), op[1]=tied(=dst, ignored), op[2]=src(xmm) - real
+  // hardware merges (preserves dst's upper 64 bits); reduces to a plain
+  // copy in this low-64-bits-only model. liftMov's register form isn't
+  // reusable as-is: its src operand is at index 1, not 2, since MOV64rr
+  // has no tied-merge operand to skip over.
+  void liftMovsdRR(const llvm::MCInst &mc, std::uint64_t addr,
+                   ignil::Block &out, std::uint32_t &tmp) const;
 
   // Helpers
   // Translate an LLVM register integer to an ignil::Reg.
@@ -261,8 +352,11 @@ class X86IGNILLifter {
   unsigned opSub64mi_{}, opSub32mi_{}, opSub64mi8_{}, opSub32mi8_{};
   unsigned opSub64rm_{}, opSub32rm_{};
   unsigned opXor64rr_{}, opXor32rr_{};
+  unsigned opXor32ri_{}, opXor64ri_{}, opXor32ri8_{}, opXor64ri8_{};
   unsigned opAnd64rr_{}, opAnd32rr_{};
+  unsigned opAnd32ri_{}, opAnd64ri_{}, opAnd32ri8_{}, opAnd64ri8_{};
   unsigned opOr64rr_{}, opOr32rr_{};
+  unsigned opOr32ri_{}, opOr64ri_{}, opOr32ri8_{}, opOr64ri8_{};
   unsigned opPush64r_{}, opPop64r_{};
   unsigned opPush32r_{}, opPop32r_{};
   unsigned opCmp64rr_{}, opCmp32rr_{};
@@ -271,6 +365,7 @@ class X86IGNILLifter {
   unsigned opCmp64mr_{}, opCmp32mr_{};
   unsigned opCmp64mi_{}, opCmp32mi_{}, opCmp64mi8_{}, opCmp32mi8_{};
   unsigned opTest64rr_{}, opTest32rr_{};
+  unsigned opTest32ri_{}, opTest64ri_{};
   unsigned opJmp64r_{}, opJmp32r_{}; // indirect
   unsigned opJmp64m_{}, opJmp32m_{}; // indirect memory jump
   unsigned opCall64m_{}, opCall32m_{}; // indirect memory call
@@ -280,10 +375,22 @@ class X86IGNILLifter {
   unsigned opRet64_{}, opRetL_{};
   unsigned opRetI64_{}, opRetIL_{}; // ret N  (callee-cleanup variant)
   unsigned opLeave64_{}, opLeave_{}; // leave (decomposed to mov rsp,rbp / pop rbp)
-  unsigned opMovsx64rr32_{};
+  unsigned opMovsx64rr32_{}, opMovsx32rr8_{};
   unsigned opSar32ri_{}, opSar64ri_{};
   unsigned opImul64rri32_{}, opImul64rri8_{}, opImul32rri_{}, opImul32rri8_{};
+  unsigned opImul32rr_{}, opImul64rr_{};
   unsigned opLea64_32r_{};
+  unsigned opInc32r_{}, opInc64r_{}, opDec32r_{}, opDec64r_{};
+  unsigned opNeg32r_{}, opNeg64r_{};
+  unsigned opMovzx32rr8_{}, opMovzx32rr16_{}, opMovzx64rr8_{}, opMovzx64rr16_{};
+  unsigned opShl32ri_{}, opShl64ri_{}, opShr32ri_{}, opShr64ri_{};
+  unsigned opSar32r1_{}, opSar64r1_{}, opShl32r1_{}, opShl64r1_{},
+          opShr32r1_{}, opShr64r1_{};
+  unsigned opPxorRR_{};
+  unsigned opCvtsi2sd32_{}, opCvtsi2sd64_{};
+  unsigned opCvttsd2si32_{}, opCvttsd2si64_{};
+  unsigned opAddsd_{}, opSubsd_{}, opMulsd_{}, opMulsdMem_{};
+  unsigned opMovsdRR_{}, opMovsdLoad_{}, opMovsdStore_{};
 
   // LLVM register integer -> ignil::Reg mapping
   // Built once in constructor by scanning MCRegisterInfo +
