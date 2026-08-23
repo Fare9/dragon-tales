@@ -117,7 +117,7 @@ void dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
     }
     case Architecture::RISCV32:
     case Architecture::RISCV64:
-      std::cerr << "Not implemented yet\n";
+      impl_->logger.log("disassemble: RISC-V analysis not implemented yet");
       break;
     case Architecture::Unknown:
       break;
