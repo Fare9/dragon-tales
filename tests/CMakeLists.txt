@@ -13,6 +13,7 @@ add_executable(dragon_tests
         sigs/TestPatternParser.cpp
         sigs/TestSignatureMatcher.cpp
         obfush/TestObfush.cpp
+        lifters/TestLLVMLifter.cpp
 )
 
 if(DRAGON_USE_Z3)

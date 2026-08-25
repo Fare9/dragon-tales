@@ -14,6 +14,31 @@
 
 bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
                                           const Graph &graph) {
+  // Refuse an invalid Function view rather than crash on it. Function's
+  // constructor already defines what that means - not a known valid
+  // function, no blocks, or an invalid block inside it - lift() simply
+  // never checked. (Checking blocks().empty() instead would miss the
+  // bad-block case, where blocks_ is partially filled but valid_ is false.)
+  //
+  // A blockless function is not exotic: discoverFunctionStarts() trusts
+  // every call target unconditionally, so a call to an address outside the
+  // disassembled range - an ordinary PLT stub reached from a raw .text
+  // blob - becomes a function start with nothing under it. Graph::functions()
+  // filters those out via isValid(), but a Function can also be built
+  // directly from an address, which is exactly what the C shim's
+  // dragon_graph_get_function() does - so every C and Python caller can
+  // reach one.
+  //
+  // buildBlockMap() below cannot catch this: it only reports a missing
+  // IGNIL block from inside its per-block loop, so with zero blocks it
+  // returns an empty but perfectly valid map and that guard passes
+  // vacuously - after which buildRegFile() -> allocateRegFile() reads
+  // llfn->getEntryBlock() on a function with no basic blocks, and
+  // segfaults. Checked before the llvm::Function is created, so a rejected
+  // lift leaves nothing behind in the module.
+  if (!fn.isValid())
+    return false;
+
   // Generate a function without return value, and without parameters
   // we have not extracted information about that yet...
   // The name is the address of the function.
