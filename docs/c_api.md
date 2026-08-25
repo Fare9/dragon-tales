@@ -255,6 +255,81 @@ dragon_graph_destroy(graph);
 | `dragon_ignil_block_each_op(b, cb, user)` | — | Callback receives addr, opcode, index |
 | `dragon_ignil_opcode_name(opc)` | `const char*` (static) | E.g. `"ADD"`, `"COPY"` |
 
+### Trace lifting
+
+`dragon_disasm_lift_trace` lifts an arbitrary linear sequence of
+already-decoded instructions straight to IGNIL — e.g. a captured execution
+trace (Unicorn/QBDI/Frida/Intel PT) that isn't claimed to form a single
+valid basic block or a coherent CFG. It bypasses `dragon_disasm_analyze`'s
+CFG/function/block-validity checks entirely: each instruction is lifted
+independently and the results concatenated in order, with no synthesized
+fall-through terminator.
+
+Unlike `dragon_graph_get_ignil_block`'s borrowed result, the returned block
+is **owned by the caller** and must be destroyed with
+`dragon_ignil_block_destroy` — never call that function on a block that came
+from `dragon_graph_get_ignil_block` (borrowed, owned by the graph; doing so
+double-frees it).
+
+```c
+dragon_graph_t* graph = dragon_disasm_disassemble(dis, code, sizeof(code), 0x1000);
+
+// Collect borrowed instruction pointers to feed as a trace — here just the
+// whole linear decode, but they could come from anywhere (e.g. addresses
+// visited by a real emulator run), in any order, even non-contiguous.
+const dragon_instruction_t* trace[/* count */];
+size_t n = 0;
+void collect(const dragon_instruction_t* i, void* user) {
+    trace[n++] = i;
+}
+dragon_graph_each_instruction(graph, collect, NULL);
+
+dragon_ignil_block_t* block = dragon_disasm_lift_trace(dis, trace, n);
+char* s = dragon_ignil_block_to_string(block);
+printf("%s", s);
+dragon_cstr_free(s);
+
+dragon_ignil_block_destroy(block);   // owned — NOT dragon_graph_get_ignil_block's block
+dragon_graph_destroy(graph);
+```
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_disasm_lift_trace(d, instructions, count)` | **owned** `dragon_ignil_block_t*` | Empty block for RISC-V or an empty trace |
+| `dragon_ignil_block_destroy(b)` | — | Only for blocks from `dragon_disasm_lift_trace` |
+
+### Peephole simplification
+
+`dragon_ignil_simplify_block` runs `ignil::simplifyBlock` to a fixed point:
+constant folding/propagation, algebraic identity/annihilator elimination,
+no-op width-conversion elimination, and dead-Temp elimination. It is
+block-local only — it never crosses into predecessor/successor blocks, and
+never removes a `Reg`-defining op even if apparently unused within the block
+(a `Reg` may be live-out).
+
+```c
+dragon_ignil_block_t* block = dragon_disasm_lift_trace(dis, trace, n);
+
+size_t folded, identities, removed, iterations;
+dragon_ignil_block_t* simplified = dragon_ignil_simplify_block(
+    block, /*max_iterations=*/0,   // 0 selects the library default (8)
+    &folded, &identities, &removed, &iterations);
+
+printf("folded=%zu identities=%zu removed=%zu iterations=%zu\n",
+       folded, identities, removed, iterations);
+
+char* s = dragon_ignil_block_to_string(simplified);
+printf("%s", s);
+dragon_cstr_free(s);
+
+dragon_ignil_block_destroy(simplified);   // owned, independent of `block`
+dragon_ignil_block_destroy(block);
+```
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_ignil_simplify_block(b, max_iterations, out_folded, out_identities, out_removed, out_iterations)` | **owned** `dragon_ignil_block_t*` | Every `out_*` pointer may be NULL; `max_iterations = 0` selects the default (8) |
+
 ---
 
 ## Backward slicer
@@ -336,6 +411,90 @@ dragon_cstr_free(z3s);
 The returned string is a heap-allocated Z3 expression in SMT-LIB2 format.
 Free it with `dragon_cstr_free`. Returns `"undef"` for a null pointer.
 
+### Value enumeration and unique-value solving
+
+Also gated on `-DDRAGON_USE_Z3=ON`. Both functions construct and own their
+Z3 context internally — there is no way to pass extra Z3 assertions across
+the C boundary, unlike the C++ API's optional `constraints` parameter; use
+the C++ API directly (`dragon::slice::enumeratedValues` /
+`dragon::slice::solveUnique`) if you need that.
+
+```c
+#ifdef DRAGON_WITH_Z3
+size_t count;
+uint64_t* values = dragon_slice_expr_enumerate_values(
+    expr, /*max_values=*/0, /*sorted=*/1, &count);   // 0 -> default cap (256)
+for (size_t i = 0; i < count; ++i)
+    printf("value[%zu] = 0x%llx\n", i, (unsigned long long)values[i]);
+dragon_u64_array_free(values);
+
+uint64_t unique;
+if (dragon_slice_expr_solve_unique(expr, &unique))
+    printf("unique value: 0x%llx\n", (unsigned long long)unique);
+#endif
+```
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_slice_expr_enumerate_values(e, max_values, sorted, out_count)` | **owned** `uint64_t*` | Free with `dragon_u64_array_free`; never NULL except on a null `e` |
+| `dragon_slice_expr_solve_unique(e, out_value)` | `int` | 1 and writes `*out_value` iff exactly one model exists |
+| `dragon_u64_array_free(arr)` | — | Frees arrays from either function above (and from `dragon_read_table_targets`, see SwitchDetector) |
+
+---
+
+## SwitchDetector
+
+Wraps `dragon::slice::detectPossibleSwitch` / `readTableTargets` — recognizes
+a jump-table indirect-branch pattern from a backward-slice result (typically
+the target of an indirect `JMP`, sliced with the backward slicer above) and
+reads the concrete targets out of the table's raw bytes.
+
+```c
+dragon_slice_expr_t* jump_target = dragon_slicer_slice_reg(
+    slicer, graph, block_addr, /*reg_offset=*/0, /*reg_width=*/64, "");
+
+dragon_switch_candidate_t sw;
+if (dragon_detect_possible_switch(jump_target, block_addr, graph, &sw)) {
+    printf("table_base=0x%llx entry_size=%u num_cases=%u\n",
+           (unsigned long long)sw.table_base, sw.entry_size, sw.num_cases);
+
+    // `table_bytes`/`table_base_addr` describe a window of the binary's
+    // image that contains the table (e.g. the whole .rodata section).
+    size_t count;
+    uint64_t* targets = dragon_read_table_targets(
+        &sw, table_bytes, table_bytes_len, table_base_addr, &count);
+    for (size_t i = 0; i < count; ++i)
+        printf("case %zu -> 0x%llx\n", i, (unsigned long long)targets[i]);
+    dragon_u64_array_free(targets);
+}
+
+dragon_slice_expr_destroy(jump_target);
+```
+
+`dragon_switch_candidate_t` is a plain value struct (not an opaque handle,
+nothing to destroy):
+
+```c
+typedef struct {
+    uint64_t table_base;       // base address of the jump table in the image
+    uint32_t entry_size;       // bytes per entry: 4 or 8
+    uint32_t num_cases;        // 0 means the bounds check was not found
+    uint32_t index_reg_offset; // index register, same convention as
+    uint8_t  index_reg_width;  // dragon_slicer_slice_reg's reg_offset/reg_width
+} dragon_switch_candidate_t;
+```
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_detect_possible_switch(jump_target, block_addr, g, out)` | `int` | 1 and populates `*out` on a match; a matched `num_cases == 0` means the bounds guard wasn't found |
+| `dragon_read_table_targets(sw, bytes, bytes_len, base_addr, out_count)` | **owned** `uint64_t*` | Free with `dragon_u64_array_free`; empty (not NULL) if `num_cases == 0` or the table falls outside `bytes` |
+
+Not every indirect jump is a jump table — GCC and Clang often lower a
+`switch` to a plain compare chain instead (no jump table at all) when the
+case count is small or the cases aren't dense, in which case
+`dragon_detect_possible_switch` correctly returns 0 and there's nothing
+further to recover here.
+
 ---
 
 ## LLVMLifter
@@ -402,3 +561,56 @@ dragon_graph_destroy(graph);
 | `dragon_llvm_lifter_run_inst_combine(l)` | — | Folds sub-register patterns |
 | `dragon_llvm_lifter_run_gvn(l)` | — | Eliminates redundant loads |
 | `dragon_llvm_lifter_run_dce(l)` | — | Removes dead flag computations |
+
+---
+
+## FLIRT signatures
+
+`dragon_sigdb_t` wraps a `SignatureDB` — a loaded collection of FLIRT-style
+`.pat` signatures. Destroy it with `dragon_sigdb_destroy` when no longer
+needed.
+
+Text `.pat` format only (the proprietary binary `.sig` format is not
+supported). The CRC16 variant used (`dragon_sigs_crc16`) is a standard one
+(reflected, poly `0xA001`, init `0xFFFF`, no final XOR — CRC-16/ARC) but was
+never verified against a real IDA/FLAIR-generated `.pat` file — if you load
+a real signature database and nothing ever matches, check this first.
+
+```c
+dragon_sigdb_t* db = dragon_sigdb_create();
+dragon_sigdb_load_directory(db, "./signatures");   // every .pat file in the dir
+printf("loaded %zu signatures\n", dragon_sigdb_signature_count(db));
+
+// Single candidate: try every signature against bytes starting at `address`.
+uint64_t match_addr; char* match_name; uint32_t match_len;
+if (dragon_sigdb_match_at(db, code, sizeof(code), 0x1000,
+                          &match_addr, &match_name, &match_len)) {
+    printf("matched: %s (len %u)\n", match_name, match_len);
+    dragon_cstr_free(match_name);
+}
+
+// Many candidates at once: every entry point against every signature.
+// A module can bundle more than one function/offset under one pattern, so
+// one entry point may produce more than one callback invocation.
+void on_match(uint64_t addr, const char* name, uint32_t len, void* user) {
+    printf("0x%llx: %s (len %u)\n", (unsigned long long)addr, name, len);
+}
+uint64_t entry_points[] = { 0x1000, 0x1040 };
+dragon_sigdb_match_entries(db, image, image_len, image_base,
+                           entry_points, 2, on_match, NULL);
+
+dragon_sigdb_destroy(db);
+```
+
+**API summary**
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_sigdb_create()` | `dragon_sigdb_t*` | |
+| `dragon_sigdb_destroy(db)` | — | |
+| `dragon_sigdb_load_directory(db, dir)` | — | Every `.pat` file directly inside `dir`, not recursive; unparseable files are silently skipped |
+| `dragon_sigdb_load_file(db, path)` | — | No-op if the file can't be parsed |
+| `dragon_sigdb_signature_count(db)` | `size_t` | |
+| `dragon_sigs_crc16(data, len)` | `uint16_t` | The raw CRC16 primitive, exposed standalone for verifying it against real `.pat` data |
+| `dragon_sigdb_match_at(db, bytes, len, address, &out_address, &out_name, &out_length)` | `int` (0/1) | `out_name` is heap-allocated — free with `dragon_cstr_free`; any out-pointer may be NULL |
+| `dragon_sigdb_match_entries(db, image, image_len, image_base, entry_points, n, cb, user)` | — | Callback receives `(address, name, length, user)`; `name` is borrowed, valid only during the callback |

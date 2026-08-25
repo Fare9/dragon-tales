@@ -116,6 +116,35 @@ enum class Opcode : std::uint8_t {
 
   // Symbolic unknown - models unresolvable inputs
   UNDEF,
+
+  // Floating-point arithmetic (IEEE754 double, width always 64). Operands
+  // and dst are the *same* raw-bit-pattern Const/Reg/Temp every other
+  // opcode uses - floatness is decided by the operation, exactly like
+  // SDIV/UDIV already decide signedness for the same underlying bits
+  // rather than Value itself carrying a signed/unsigned tag. A lifter
+  // reinterprets (bitcasts) a Reg/Temp/Const's bits as a double only when
+  // an op here consumes it.
+  //
+  // Appended after UNDEF (not grouped with ADD/SUB/MUL above, where they
+  // would read more naturally) rather than interleaved into the enum:
+  // dragon_c.h's dragon_ignil_opcode_t and python/dragon.py's IGNILOpcode
+  // both mirror this enum as hardcoded, value-for-value integer constants
+  // (checked at compile time for a few spot values via static_assert in
+  // dragon_c.cpp, but *not* exhaustively - a mid-enum insertion silently
+  // shifts every later value with no compiler error to catch the ones the
+  // static_asserts don't happen to cover). New opcodes always go at the
+  // end for exactly this reason.
+  FADD,
+  FSUB,
+  FMUL,
+  FDIV,
+
+  // Int <-> float conversion (signed only - no x86 scalar SSE2 instruction
+  // exists for unsigned int<->double in the classic ISA this lifter
+  // targets, so no UITOFP/FPTOUI pair is declared; add one if a real
+  // target ever needs it).
+  SITOFP, // dst(double, width 64) = (double)(signed)srcs[0]
+  FPTOSI, // dst(int) = srcs[0], interpreted as double, truncated toward zero
 };
 
 /// Opcode representation, we have a structure

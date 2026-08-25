@@ -47,6 +47,16 @@ bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
   std::vector<Instruction> instructions =
           disassembler_.disassemble(bytes, baseAddr);
 
+  // The caller explicitly asked us to start analysis here, which is itself
+  // a strong, deliberate signal that this address is a function entry -
+  // independent of whether its bytes happen to match a recognized prologue
+  // pattern. Without this, a leaf/frame-pointer-omitted function passed
+  // directly to disassemble() (rather than reached via a call site, which
+  // *is* already trusted unconditionally below) was never recognized as a
+  // function at all, and Graph::functions() came back empty for it.
+  if (!instructions.empty())
+    fnStarts.insert(baseAddr);
+
   discoverBlockStarts(instructions, blockStarts);
   discoverFunctionStarts(instructions, blockStarts, fnStarts);
   discoverEpilogues(instructions, blockStarts, fnStarts);

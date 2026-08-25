@@ -151,6 +151,29 @@ dis = dragon.Disassembler(dragon.Architecture.X86_64, cfg)
 graph = dis.disassemble(code, 0x1000)
 ```
 
+### Trace lifting
+
+`Disassembler.lift_trace()` lifts an arbitrary linear sequence of
+already-decoded instructions straight to IGNIL — e.g. a captured execution
+trace (Unicorn/QBDI/Frida/Intel PT) that isn't claimed to form a single
+valid basic block or a coherent CFG. It bypasses `disassemble()`'s
+CFG/function/block-validity analysis entirely: each instruction is lifted
+independently and the results concatenated in order, with no synthesized
+fall-through terminator.
+
+```python
+graph = dis.disassemble(code, 0x1000)
+insns = graph.instructions()   # or hand-pick/reorder — need not be contiguous
+
+with dis.lift_trace(insns) as block:
+    print(block.to_string())
+```
+
+The returned `IGNILBlock` is **owned** — unlike `Graph.get_ignil_block()`'s
+borrowed one — and gets destroyed on `__del__`/context-manager exit. It's
+still the same `IGNILBlock` class either way; only the `owned` flag differs
+internally.
+
 ---
 
 ## Graph: blocks and functions
@@ -258,6 +281,25 @@ if ib:
 
 `IGNILBlock` is a borrowed view — it is valid as long as the owning graph
 is alive; no `__exit__` / destroy needed.
+
+### Peephole simplification
+
+`simplify()` runs the peephole simplifier to a fixed point: constant
+folding/propagation, algebraic identity/annihilator elimination, no-op
+width-conversion elimination, and dead-Temp elimination. It is block-local
+only — it never crosses into predecessor/successor blocks, and never
+removes a `Reg`-defining op even if apparently unused within the block (a
+`Reg` may be live-out).
+
+```python
+simplified, stats = ib.simplify()   # max_iterations=0 selects the default (8)
+print(stats)
+# <SimplifyStats constants_folded=2 identities_applied=1 ops_removed=3 iterations=2>
+print(simplified.to_string())
+```
+
+`simplified` is a new, independently owned `IGNILBlock` — `ib` is left
+untouched and both must be cleaned up independently (context manager or GC).
 
 ---
 
@@ -401,6 +443,67 @@ print(z3_str)   # (bvadd rax #x0000000000000004)
 The returned string is the Z3 bitvector expression in SMT-LIB2 format —
 identical to what you would get from lowering with `SliceExprZ3` in C++.
 
+### Value enumeration and unique-value solving
+
+Also requires `-DDRAGON_USE_Z3=ON`; both raise `RuntimeError` otherwise.
+Each call constructs its own Z3 context internally — there is no way to pass
+extra Z3 assertions across the C boundary, unlike the C++ API's optional
+`constraints` parameter; use the C++ API directly
+(`dragon::slice::enumeratedValues` / `solveUnique`) if you need that.
+
+```python
+values = expr.enumerate_values()          # max_values=0 -> default cap (256), sorted=True
+print(values)                             # e.g. [1, 2, 3, 5, 8]
+
+unique = expr.solve_unique()
+print(unique)                             # a single int, or None if not uniquely determined
+```
+
+| Method | Returns | Notes |
+|---|---|---|
+| `enumerate_values(max_values=0, sorted=True)` | `list[int]` | `max_values=0` selects the library default (256) |
+| `solve_unique()` | `int` or `None` | `None` when zero or more than one model exists |
+
+---
+
+## SwitchDetector
+
+Recognizes a jump-table indirect-branch pattern from a backward-slice
+result (typically the target of an indirect jump, sliced with
+`BackwardSlicer` above) and reads the concrete targets out of the table's
+raw bytes.
+
+```python
+with dragon.BackwardSlicer() as slicer:
+    with slicer.slice_reg(graph, block_addr, *dragon.x86.RAX) as jump_target:
+        sw = dragon.detect_possible_switch(jump_target, block_addr, graph)
+        if sw is not None:
+            print(sw)   # <SwitchCandidate table_base=0x... entry_size=8 num_cases=4>
+
+            # `rodata`/`rodata_base` describe a window of the binary's image
+            # (e.g. the whole .rodata section) that contains the table.
+            targets = dragon.read_table_targets(sw, rodata, rodata_base)
+            for i, t in enumerate(targets):
+                print(f"case {i} -> 0x{t:x}")
+```
+
+`SwitchCandidate` is a plain data object (`table_base`, `entry_size`,
+`num_cases`, `index_reg_offset`, `index_reg_width` — the last two use the
+same register-address-space convention as `BackwardSlicer.slice_reg()`),
+returned by `detect_possible_switch()` and also constructible directly if
+you already know the table's shape from other analysis.
+
+| Function | Returns | Notes |
+|---|---|---|
+| `detect_possible_switch(jump_target, block_addr, graph)` | `SwitchCandidate` or `None` | A returned candidate with `num_cases == 0` means the pattern matched but the bounds guard wasn't found |
+| `read_table_targets(candidate, data, base_addr)` | `list[int]` | Empty if `num_cases == 0` or the table falls outside `data` |
+
+Not every indirect jump is a jump table — GCC and Clang often lower a
+`switch` to a plain compare chain instead (no jump table at all) when the
+case count is small or the cases aren't dense, in which case
+`detect_possible_switch` correctly returns `None` and there's nothing
+further to recover here.
+
 ---
 
 ## LLVMLifter
@@ -455,6 +558,49 @@ lifter.optimize()
 | `run_inst_combine()` | — | |
 | `run_gvn()` | — | |
 | `run_dce()` | — | |
+
+---
+
+## FLIRT signatures
+
+`SignatureDB` loads FLIRT-style `.pat` signature databases and matches them
+against disassembled bytes. Text `.pat` format only (the proprietary binary
+`.sig` format is not supported).
+
+`dragon.sigs_crc16(data)` exposes the raw CRC16 primitive used to verify
+matches (reflected, poly `0xA001`, init `0xFFFF`, no final XOR — CRC-16/ARC)
+standalone — useful for checking it against a real `.pat` file, since it was
+only ever verified self-consistently against this codebase's own parser.
+
+```python
+db = dragon.SignatureDB()
+db.load_directory('./signatures')   # every .pat file in the dir, non-recursive
+print(db.signature_count)
+
+# Single candidate: try every signature against code starting at 0x1000.
+match = db.match_at(code, 0x1000)
+if match:
+    address, name, length = match
+    print(f'{name} at 0x{address:x}, length {length}')
+
+# Many candidates at once: every entry point against every signature.
+# A module can bundle more than one function/offset under one pattern, so
+# one entry point may produce more than one match in the result list.
+for address, name, length in db.match_entries(image, image_base, [0x1000, 0x1040]):
+    print(f'0x{address:x}: {name} (len {length})')
+```
+
+### Method reference
+
+| Method | Returns | Notes |
+|---|---|---|
+| `SignatureDB()` | | |
+| `load_directory(path)` | — | Every `.pat` file directly inside `path`, not recursive; unparseable files are silently skipped |
+| `load_file(path)` | — | No-op if the file can't be parsed |
+| `signature_count` | `int` | |
+| `match_at(data, address)` | `(address, name, length)` or `None` | `data` must begin at the candidate function's address |
+| `match_entries(image, image_base, entry_points)` | `list[(address, name, length)]` | |
+| `dragon.sigs_crc16(data)` | `int` | Module-level function, not a `SignatureDB` method |
 | `optimize()` | — | Runs all four passes in the recommended order |
 
 ---
@@ -467,4 +613,6 @@ lifter.optimize()
 | `dragon.Syntax` | `INTEL`, `ATT` |
 | `dragon.Strategy` | `LINEAR_SWEEP`, `RECURSIVE_TRAVERSAL` |
 | `dragon.SliceExprType` | `CONST`, `SYM_REG`, `BINOP`, `UNARYOP`, `LOAD`, `UNDEF` |
-| `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF` (35 values) |
+| `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF`, `FADD`, `FSUB`, `FMUL`, `FDIV`, `SITOFP`, `FPTOSI` (42 values) |
+| `dragon.SwitchCandidate` | `table_base`, `entry_size`, `num_cases`, `index_reg_offset`, `index_reg_width` (plain data, not an enum) |
+| `dragon.SimplifyStats` | `constants_folded`, `identities_applied`, `ops_removed`, `iterations`, `changed` (plain data, not an enum) |

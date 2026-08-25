@@ -27,6 +27,23 @@ class LLVMLifter {
   /// Lift one function (all its IGNIL blocks must be in the graph).
   bool lift(const Function &fn, const Graph &graph);
 
+  /// Lifts a single, already-flattened IGNIL block directly to LLVM IR -
+  /// no Graph/Function needed. This is the Graph-free counterpart to
+  /// Disassembler::liftTrace(): a linear, already-resolved execution trace
+  /// has no unresolved branch left to encode (the block's op order *is*
+  /// the path that was actually taken), so JMP/CJMP ops - which liftTrace
+  /// still emits per-instruction, same as normal lifting - are dropped
+  /// rather than translated, instead of producing `unreachable` (their
+  /// fate under the Graph-based `lift()` when a target isn't in the
+  /// function). CALL is preserved as a real LLVM call. RET, if present,
+  /// must be the block's true terminator - anything after it is ignored,
+  /// matching how a real `ret` would end execution. If the block has no
+  /// RET, a synthetic `ret void` (with the usual register write-back) is
+  /// appended so the function is always well-formed.
+  ///
+  /// Returns false for an empty block.
+  bool liftBlock(const ignil::Block &block, std::string_view name = "trace");
+
   // Run optimization passes in the recommended order.
   void runMem2Reg(); // promotes allocas → SSA, inserts PHIs
   void runInstCombine(); // folds sub-register mask/OR patterns
@@ -53,6 +70,29 @@ class LLVMLifter {
   // in the entry block.
   RegFile buildRegFile(llvm::Function *llfn, const Function *fn,
                        const Graph &graph) const;
+
+  // Shared by buildRegFile() and liftBlock(): scan `ops`, recording every
+  // (offset, width) Reg pair referenced (as dst or src) into `regFile`
+  // (value left null - allocateRegFile fills it in) and any name seen.
+  static void collectRegsFromOps(
+          const std::vector<ignil::Op> &ops, RegFile &regFile,
+          std::map<std::pair<std::uint32_t, ignil::Width>, std::string_view>
+                  &regNames);
+
+  // Shared by buildRegFile() and liftBlock(): given a regFile whose
+  // (offset, width) keys are already collected, create one alloca per pair
+  // at the entry block's insertion point, named from `regNames` where
+  // known.
+  void allocateRegFile(
+          llvm::Function *llfn, RegFile &regFile,
+          const std::map<std::pair<std::uint32_t, ignil::Width>,
+                         std::string_view> &regNames) const;
+
+  // Shared by liftOp()'s RET case and liftBlock()'s synthetic-return
+  // fallback: write the widest register at each offset back to `regsPtr`
+  // and terminate the current block with `ret void`.
+  void emitReturn(RegFile &regs, llvm::Value *regsPtr,
+                  llvm::IRBuilder<> &builder);
 
   // Map each IGNIL block address to a llvm::BasicBlock.
   // Returns nullopt if any block in fn is missing an IGNIL translation,

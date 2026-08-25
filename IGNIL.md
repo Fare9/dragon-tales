@@ -5,6 +5,16 @@ architecture-specific analyses. It sits between raw disassembly and
 heavyweight IRs like LLVM IR. The design follows conventions established
 by VEX IR (angr/Valgrind), P-CODE (Ghidra), and BAP's BIL.
 
+> **This is a historical build log, not a current reference.** It was
+> written incrementally, step by step, as IGNIL and its surrounding
+> analyses were first built, and reads that way (including include paths
+> like `dragon/IGNIL.hpp` that no longer match the real tree, e.g.
+> `dragon/lifters/ignil/IGNIL.hpp`). It's kept for the design rationale
+> behind decisions that aren't obvious from the code alone. For the
+> current, accurate API surface, use [`docs/cpp_api.md`](docs/cpp_api.md)
+> (and `docs/c_api.md`/`docs/python_api.md` for the other two layers)
+> instead.
+
 ---
 
 ## Design decisions already made
@@ -13,6 +23,7 @@ by VEX IR (angr/Valgrind), P-CODE (Ghidra), and BAP's BIL.
 |---|---|---|
 | Value representation | `std::variant<Const, Reg, Temp>` | Fixed set, value semantics, no heap per value |
 | Signedness | In the opcode, not the type | Convention from VEX, P-CODE, LLVM IR |
+| Floatness | In the opcode too - a `Const`/`Reg`/`Temp`'s bits are reinterpreted as `double` only by an `FADD`/`FSUB`/`FMUL`/`FDIV`/`SITOFP`/`FPTOSI` | Same rationale as signedness - no second `Value` variant, no type tag |
 | Register model | Offset + width in a register space | Handles sub-registers (EAX/RAX) naturally |
 | Temporaries | Per-block unique `uint32_t` id | SSA-style, no cross-block aliasing |
 | Block ownership | `Block` owns its `Op` sequence | Matches VEX IRSB, enables per-block analysis |
@@ -119,6 +130,20 @@ enum class Opcode : std::uint8_t {
 
     // Symbolic unknown — models unresolvable inputs
     UNDEF,
+
+    // Floating-point (IEEE754 double, width always 64) — same philosophy
+    // as signedness above: floatness lives in the opcode, not the value.
+    // A Const/Reg/Temp's bits are reinterpreted as a double only when one
+    // of these consumes them. Appended after UNDEF rather than grouped
+    // with ADD/SUB/MUL where they'd read more naturally: dragon_c.h and
+    // python/dragon.py both mirror this enum as hardcoded integer
+    // constants, and only a few spot values are compile-time-checked
+    // against it (see dragon_c.cpp) — a mid-enum insertion silently shifts
+    // every later value with nothing to catch the ones that aren't
+    // individually asserted. New opcodes always go at the end.
+    FADD, FSUB, FMUL, FDIV,
+    SITOFP,  // dst(double) = (double)(signed)srcs[0]
+    FPTOSI,  // dst(int) = srcs[0] interpreted as double, truncated toward zero
 };
 ```
 

@@ -259,6 +259,57 @@ if (auto* ib = graph.getIGNILBlock(0x1000)) {
 }
 ```
 
+### Trace lifting
+
+`Disassembler::liftTrace` lifts an arbitrary linear sequence of
+already-decoded instructions straight to IGNIL — e.g. a captured execution
+trace (Unicorn/QBDI/Frida/Intel PT) that isn't claimed to form a single
+valid basic block or a coherent CFG. It bypasses `disassemble`'s
+CFG/function/block-validity checks entirely: each instruction is lifted
+independently and the results concatenated in order, with no synthesized
+fall-through terminator. Unlike `Graph::getIGNILBlock`'s borrowed pointer,
+this returns a `Block` by value — the caller owns it outright.
+
+```cpp
+std::vector<dragon::Instruction> trace = /* e.g. addresses visited by a
+                                             real emulator run, in order,
+                                             not necessarily contiguous */;
+
+dragon::ignil::Block block = dis.liftTrace(trace);
+std::cout << dragon::ignil::toString(block);
+```
+
+Empty for RISC-V (no IGNIL lifter yet) or an empty trace.
+
+### Peephole simplification
+
+`ignil::simplifyBlock` (`<dragon/lifters/ignil/IGNILSimplify.hpp>`) runs a
+block-local peephole simplifier to a fixed point: constant
+folding/propagation, algebraic identity/annihilator elimination, no-op
+width-conversion elimination, and dead-Temp elimination. It never crosses
+into predecessor/successor blocks, and never removes a `Reg`-defining op
+even if apparently unused within the block (a `Reg` may be live-out).
+
+```cpp
+#include <dragon/lifters/ignil/IGNILSimplify.hpp>
+
+dragon::ignil::Block block = dis.liftTrace(trace);
+
+// Stats-reporting overload
+dragon::ignil::SimplifyStats stats;
+dragon::ignil::Block simplified =
+    dragon::ignil::simplifyBlock(block, stats, /*maxIterations=*/8);
+
+std::cout << "folded=" << stats.constantsFolded
+          << " identities=" << stats.identitiesApplied
+          << " removed=" << stats.opsRemoved
+          << " iterations=" << stats.iterations
+          << " changed=" << stats.changed() << "\n";
+
+// Or, if the stats aren't needed:
+dragon::ignil::Block quiet = dragon::ignil::simplifyBlock(block);
+```
+
 ### x86 register constants
 
 `include/dragon/lifters/ignil/x86/x86IGNILRegs.hpp` provides named `ignil::Reg`
@@ -475,6 +526,35 @@ define void @sub_<addr>(ptr %mem, ptr %regs)
 
 - `%mem` — flat memory image; loads and stores go through GEP offsets into this pointer.
 - `%regs` — register file; registers are loaded from it on entry and written back on `ret`.
+
+### Lifting a single block without a Graph
+
+`liftBlock` is the `Graph`-free counterpart to `Disassembler::liftTrace` —
+lift an already-flattened `ignil::Block` (e.g. the result of `liftTrace`,
+optionally run through `simplifyBlock` first) straight to LLVM IR, with no
+`Graph`/`Function` needed:
+
+```cpp
+dragon::ignil::Block block = dis.liftTrace(trace);
+
+dragon::llvmlifter::LLVMLifter lifter(dragon::Architecture::X86_64);
+if (lifter.liftBlock(block, "my_trace")) {
+    lifter.runMem2Reg();
+    lifter.runInstCombine();
+    std::cout << lifter.ir();
+}
+```
+
+Because a linear, already-resolved trace has no unresolved branch left to
+encode (the block's op order *is* the path that was actually taken),
+`JMP`/`CJMP` ops — which `liftTrace` still emits per-instruction, same as
+normal lifting — are dropped rather than translated, instead of producing
+`unreachable` (their fate under the `Graph`-based `lift()` when a target
+isn't in the function). `CALL` is preserved as a real LLVM call. If the
+block ends in `RET`, anything after it is ignored, matching how a real
+`ret` would end execution; if it has no `RET`, a synthetic `ret void` (with
+the usual register write-back) is appended so the function is always
+well-formed. Returns `false` for an empty block.
 
 After `runMem2Reg()` the alloca-based register representation is promoted to
 SSA values. The `%regs` boundary loads/stores are the only register memory

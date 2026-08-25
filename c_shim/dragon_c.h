@@ -187,6 +187,11 @@
   // "free with dragon_cstr_free".  Do NOT use on static strings.
   void dragon_cstr_free(char* s);
 
+  // Free a uint64_t array returned by any dragon function whose
+  // documentation says "free with dragon_u64_array_free" (e.g.
+  // dragon_read_table_targets, dragon_slice_expr_enumerate_values).
+  void dragon_u64_array_free(uint64_t* arr);
+
   // -- IGNIL opcodes -------------------------------------------------------------
 
   // Mirror of ignil::Opcode.  Numerical values are guaranteed to match.
@@ -227,6 +232,15 @@
       DRAGON_IGNIL_CALL  = 33,
       DRAGON_IGNIL_RET   = 34,
       DRAGON_IGNIL_UNDEF = 35,
+      // Appended after UNDEF, not interleaved with ADD/SUB/MUL above where
+      // they'd read more naturally - see ignil::Opcode's own doc comment
+      // for why new opcodes always go at the end of this mirror.
+      DRAGON_IGNIL_FADD   = 36,
+      DRAGON_IGNIL_FSUB   = 37,
+      DRAGON_IGNIL_FMUL   = 38,
+      DRAGON_IGNIL_FDIV   = 39,
+      DRAGON_IGNIL_SITOFP = 40,
+      DRAGON_IGNIL_FPTOSI = 41,
   } dragon_ignil_opcode_t;
 
   // Returns a static string for the opcode mnemonic (e.g. "ADD", "COPY").
@@ -258,6 +272,51 @@
       void (*cb)(uint64_t op_addr, dragon_ignil_opcode_t opcode, size_t index, void* user),
       void* user);
 
+  // -- Disassembler: trace lifting -------------------------------------------------
+
+  // Lifts an arbitrary linear sequence of already-decoded instructions
+  // straight to IGNIL, bypassing CFG/function/block validity analysis - see
+  // Disassembler::liftTrace. `instructions` is an array of borrowed pointers
+  // (e.g. from dragon_graph_each_instruction / dragon_graph_get_instruction),
+  // consulted in the order given; they need not be contiguous or come from
+  // the same graph, as long as they were decoded for the same architecture
+  // as `d`. Returns an empty block for RISC-V (no IGNIL lifter yet) or an
+  // empty trace.
+  //
+  // Returns an OWNED ignil block that must be destroyed with
+  // dragon_ignil_block_destroy - NOT the same as blocks returned by
+  // dragon_graph_get_ignil_block, which are borrowed from the graph and must
+  // never be destroyed.
+  dragon_ignil_block_t* dragon_disasm_lift_trace(
+      const dragon_disasm_t* d,
+      const dragon_instruction_t* const* instructions,
+      size_t count);
+
+  // Destroys a block returned by dragon_disasm_lift_trace. Do NOT call this
+  // on a block returned by dragon_graph_get_ignil_block.
+  void dragon_ignil_block_destroy(dragon_ignil_block_t* b);
+
+  // -- IGNIL peephole simplifier ---------------------------------------------------
+
+  // Peephole-simplifies `b`: forward constant folding/propagation, algebraic
+  // identity/annihilator elimination, no-op width-conversion elimination, and
+  // dead-Temp elimination, run to a fixed point (bounded by max_iterations -
+  // 0 selects the library default of 8). Block-local only: does not cross
+  // into predecessor/successor blocks, and never removes a Reg-defining op
+  // even if apparently unused within the block (a Reg may be live-out).
+  //
+  // Every out_* pointer may be NULL if that count isn't wanted. When non-NULL
+  // they report: constants folded, algebraic identities applied, dead ops
+  // removed, and fixed-point iterations actually run (see
+  // ignil::SimplifyStats).
+  //
+  // Returns an OWNED block - destroy with dragon_ignil_block_destroy, same as
+  // a block from dragon_disasm_lift_trace, never dragon_graph_get_ignil_block.
+  dragon_ignil_block_t* dragon_ignil_simplify_block(
+      const dragon_ignil_block_t* b, int max_iterations,
+      size_t* out_constants_folded, size_t* out_identities_applied,
+      size_t* out_ops_removed, size_t* out_iterations);
+
   // -- SliceExpr -----------------------------------------------------------------
 
   typedef enum {
@@ -283,6 +342,27 @@
   // Caller must free with dragon_cstr_free.
 #ifdef DRAGON_WITH_Z3
   char* dragon_slice_expr_to_z3_string(const dragon_slice_expr_t* e);
+
+  // Enumerate concrete 64-bit values `e` can take (see
+  // slice::enumeratedValues). Constructs and owns its own Z3 context
+  // internally - there is no way to pass extra Z3 assertions across this
+  // boundary, unlike the C++ API's optional `constraints` parameter; use the
+  // C++ API directly if you need that.
+  //   max_values: 0 selects the library default (256).
+  //   sorted:     non-zero sorts results ascending (library default: sorted).
+  //   out_count:  number of values written to the returned array (may be 0).
+  // Returns an OWNED array - free with dragon_u64_array_free. Never NULL
+  // (returns a zero-length allocation when there are no solutions), except
+  // on a null `e`.
+  uint64_t* dragon_slice_expr_enumerate_values(const dragon_slice_expr_t* e,
+                                               size_t max_values, int sorted,
+                                               size_t* out_count);
+
+  // Solve for a single concrete value (see slice::solveUnique). Returns 1
+  // and writes *out_value if exactly one model exists, 0 otherwise
+  // (unsatisfiable, more than one model, or a null `e`/`out_value`).
+  int dragon_slice_expr_solve_unique(const dragon_slice_expr_t* e,
+                                     uint64_t* out_value);
 #endif
 
   // DRAGON_SLICE_CONST
@@ -333,6 +413,42 @@
       uint8_t     reg_width,
       const char* reg_name);
 
+  // -- SwitchDetector --------------------------------------------------------------
+
+  // Everything extracted from a detected jump-table pattern - mirrors
+  // slice::SwitchCandidate. index_reg_offset/width identify the index
+  // register in the IGNIL register address space (see x86IGNILRegs.hpp /
+  // armIGNILRegs.hpp), the same convention dragon_slicer_slice_reg uses.
+  typedef struct {
+      uint64_t table_base;    // base address of the jump table in the image
+      uint32_t entry_size;    // bytes per entry: 4 or 8
+      uint32_t num_cases;     // 0 means the bounds check was not found
+      uint32_t index_reg_offset;
+      uint8_t  index_reg_width;
+  } dragon_switch_candidate_t;
+
+  // Inspect a backward-slice result (typically from dragon_slicer_slice_reg
+  // on an indirect jump's target) and determine whether it is a jump-table
+  // indirect branch - see slice::detectPossibleSwitch for the exact
+  // recognition rules. Returns 1 and populates *out on a match (out->
+  // num_cases == 0 means the pattern matched but the bounds guard wasn't
+  // found), 0 otherwise (including a null jump_target/g/out).
+  int dragon_detect_possible_switch(const dragon_slice_expr_t* jump_target,
+                                    uint64_t block_addr,
+                                    const dragon_graph_t* g,
+                                    dragon_switch_candidate_t* out);
+
+  // Read sw->num_cases pointer-sized little-endian entries from the jump
+  // table described by `sw` out of `bytes` (a buffer starting at
+  // `base_addr` in the binary's address space) - see
+  // slice::readTableTargets. *out_count is 0 (and an empty allocation is
+  // still returned, never NULL) when num_cases == 0 or the table extends
+  // outside `bytes`. Returns an OWNED array - free with
+  // dragon_u64_array_free.
+  uint64_t* dragon_read_table_targets(const dragon_switch_candidate_t* sw,
+                                      const uint8_t* bytes, size_t bytes_len,
+                                      uint64_t base_addr, size_t* out_count);
+
   // -- LLVMLifter ---------------------------------------------------------------
 
   typedef struct dragon_llvm_lifter dragon_llvm_lifter_t;
@@ -353,6 +469,55 @@
   void dragon_llvm_lifter_run_inst_combine(dragon_llvm_lifter_t* l);
   void dragon_llvm_lifter_run_gvn(dragon_llvm_lifter_t* l);
   void dragon_llvm_lifter_run_dce(dragon_llvm_lifter_t* l);
+
+  // -- FLIRT signatures (dragon::sigs) --------------------------------------------
+
+  typedef struct dragon_sigdb dragon_sigdb_t;
+
+  dragon_sigdb_t* dragon_sigdb_create(void);
+  void            dragon_sigdb_destroy(dragon_sigdb_t* db);
+
+  // Loads every .pat file directly inside dir (not recursive). Files that
+  // fail to parse are silently skipped - compare signature_count() before
+  // and after to see how much was actually loaded.
+  void dragon_sigdb_load_directory(dragon_sigdb_t* db, const char* dir);
+
+  // Loads a single .pat file. No-op if it can't be parsed.
+  void dragon_sigdb_load_file(dragon_sigdb_t* db, const char* path);
+
+  size_t dragon_sigdb_signature_count(const dragon_sigdb_t* db);
+
+  // The CRC16 variant dragon-tales' signature format uses: reflected,
+  // polynomial 0xA001 (CRC-16/ARC), init 0xFFFF, no final XOR. Caveat: this
+  // could not be verified against a real IDA/FLAIR-generated .pat file (see
+  // SignatureMatcher's class doc) - self-consistent with this codebase's own
+  // parser/matcher, but the first thing to check if a real signature
+  // database is loaded and nothing ever matches.
+  uint16_t dragon_sigs_crc16(const uint8_t* data, size_t len);
+
+  // Tries every signature in db against bytes, which must begin at the
+  // candidate function's address. Returns 1 and fills the out params if any
+  // signature matches (the first match's primary name), 0 otherwise. Any out
+  // pointer may be NULL to ignore that field. *out_name receives an owned
+  // string - caller must free with dragon_cstr_free.
+  int dragon_sigdb_match_at(const dragon_sigdb_t* db,
+                            const uint8_t* bytes, size_t len,
+                            uint64_t address,
+                            uint64_t* out_address, char** out_name,
+                            uint32_t* out_length);
+
+  // Tries every address in entry_points against every signature in db.
+  // image/image_base describe the byte region entry_points fall within.
+  // Unlike match_at, every name a matching signature defines is reported (a
+  // module can bundle more than one function/offset under one pattern), so
+  // one entry point may produce more than one callback invocation. `name` is
+  // borrowed - valid only for the duration of the callback.
+  void dragon_sigdb_match_entries(
+      const dragon_sigdb_t* db,
+      const uint8_t* image, size_t image_len, uint64_t image_base,
+      const uint64_t* entry_points, size_t num_entry_points,
+      void (*cb)(uint64_t address, const char* name, uint32_t length, void* user),
+      void* user);
 
   #ifdef __cplusplus
   }

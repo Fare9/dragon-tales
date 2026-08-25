@@ -464,6 +464,34 @@ class Disassembler:
             raise RuntimeError('analysis failed — unsupported architecture or invalid input')
         return Graph(ptr)
 
+    def lift_trace(self, instructions):
+        """Lift an arbitrary linear sequence of already-decoded instructions
+        straight to IGNIL, bypassing CFG/function/block validity analysis —
+        e.g. a captured execution trace (Unicorn/QBDI/Frida/Intel PT) that
+        isn't claimed to form a single valid basic block or a coherent CFG.
+
+        Parameters
+        ----------
+        instructions : list[Instruction]
+            Consulted in the order given — they do not need to be contiguous
+            or even from the same Graph, as long as they were decoded for
+            this Disassembler's architecture. Typically the result of
+            Graph.instructions() or repeated Graph.get_instruction() calls.
+
+        Returns
+        -------
+        IGNILBlock
+            An owned block (unlike Graph.get_ignil_block()'s borrowed one) —
+            use as a context manager or let garbage collection destroy it.
+            Empty for RISC-V (no IGNIL lifter yet) or an empty trace.
+        """
+        ptrs = ffi.new('const dragon_instruction_t *[]',
+                       [insn._ptr for insn in instructions]) if instructions else ffi.NULL
+        ptr = lib.dragon_disasm_lift_trace(self._ptr, ptrs, len(instructions))
+        if ptr == ffi.NULL:
+            raise RuntimeError('lift_trace failed')
+        return IGNILBlock(ptr, owned=True)
+
     def __repr__(self):
         return f'<Disassembler valid={self.is_valid}>'
 
@@ -526,6 +554,10 @@ class IGNILOpcode:
     SLT   = 27; SLE   = 28; SGT   = 29; SGE   = 30
     JMP   = 31; CJMP  = 32; CALL  = 33; RET   = 34
     UNDEF = 35
+    # Appended after UNDEF, not interleaved with ADD/SUB/MUL above where
+    # they'd read more naturally - matches dragon_c.h's dragon_ignil_opcode_t.
+    FADD = 36; FSUB = 37; FMUL = 38; FDIV = 39
+    SITOFP = 40; FPTOSI = 41
 
     @staticmethod
     def name(opcode_int):
@@ -536,11 +568,29 @@ class IGNILOpcode:
 # -- IGNIL block ---------------------------------------------------------------
 
 class IGNILBlock:
-    """Borrowed view of an IGNIL block — valid while the owning Graph is alive.
-    Do NOT destroy this object; its lifetime is managed by the Graph."""
+    """View of an IGNIL block.
 
-    def __init__(self, ptr):
+    Blocks obtained from Graph.get_ignil_block() are borrowed — valid while
+    the owning Graph is alive, and must not be destroyed. Blocks obtained
+    from Disassembler.lift_trace() are owned by this object instead (there is
+    no backing Graph) and are destroyed when it is garbage-collected / the
+    context manager exits.
+    """
+
+    def __init__(self, ptr, owned=False):
         self._ptr = ptr
+        self._owned = owned
+
+    def __del__(self):
+        if self._owned and self._ptr:
+            lib.dragon_ignil_block_destroy(self._ptr)
+        self._ptr = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.__del__()
 
     @property
     def address(self):
@@ -578,8 +628,55 @@ class IGNILBlock:
         lib.dragon_ignil_block_each_op(self._ptr, cb, ffi.NULL)
         return result
 
+    def simplify(self, max_iterations=0):
+        """Peephole-simplify this block to a fixed point: constant
+        folding/propagation, algebraic identity/annihilator elimination,
+        no-op width-conversion elimination, and dead-Temp elimination.
+        Block-local only — never crosses into predecessor/successor blocks,
+        and never removes a Reg-defining op (a Reg may be live-out).
+
+        Parameters
+        ----------
+        max_iterations : int
+            Upper bound on fixed-point passes. 0 selects the library
+            default (8).
+
+        Returns
+        -------
+        (IGNILBlock, SimplifyStats)
+            The simplified block is a new, independently owned IGNILBlock —
+            this block is left untouched.
+        """
+        out_cf = ffi.new('size_t *')
+        out_ia = ffi.new('size_t *')
+        out_or = ffi.new('size_t *')
+        out_it = ffi.new('size_t *')
+        ptr = lib.dragon_ignil_simplify_block(
+            self._ptr, max_iterations, out_cf, out_ia, out_or, out_it)
+        stats = SimplifyStats(out_cf[0], out_ia[0], out_or[0], out_it[0])
+        return IGNILBlock(ptr, owned=True), stats
+
     def __repr__(self):
         return f'<IGNILBlock 0x{self.address:x} ops={self.size}>'
+
+
+class SimplifyStats:
+    """Counts from one IGNILBlock.simplify() call. Mirrors ignil::SimplifyStats."""
+
+    def __init__(self, constants_folded, identities_applied, ops_removed, iterations):
+        self.constants_folded = constants_folded
+        self.identities_applied = identities_applied
+        self.ops_removed = ops_removed
+        self.iterations = iterations
+
+    @property
+    def changed(self):
+        return bool(self.constants_folded or self.identities_applied or self.ops_removed)
+
+    def __repr__(self):
+        return (f'<SimplifyStats constants_folded={self.constants_folded} '
+                f'identities_applied={self.identities_applied} '
+                f'ops_removed={self.ops_removed} iterations={self.iterations}>')
 
 
 # -- SliceExpr -----------------------------------------------------------------
@@ -638,6 +735,46 @@ class SliceExpr:
             return ffi.string(raw).decode()
         finally:
             lib.dragon_cstr_free(raw)
+
+    def enumerate_values(self, max_values=0, sorted=True):
+        """Enumerate concrete 64-bit values this expression can take, via Z3.
+
+        Parameters
+        ----------
+        max_values : int
+            Upper bound on results returned. 0 selects the library default (256).
+        sorted : bool
+            Sort results ascending (library default: True).
+
+        Note: constructs its own Z3 context internally — there is no way to
+        pass extra Z3 assertions across this boundary, unlike the C++ API's
+        optional `constraints` parameter; use the C++ API directly if you
+        need that.
+
+        Raises RuntimeError if the library was built without Z3 support."""
+        out_count = ffi.new('size_t *')
+        try:
+            ptr = lib.dragon_slice_expr_enumerate_values(
+                self._ptr, max_values, 1 if sorted else 0, out_count)
+        except AttributeError:
+            raise RuntimeError('dragon was built without Z3 support (-DDRAGON_USE_Z3=ON required)')
+        try:
+            return [ptr[i] for i in range(out_count[0])]
+        finally:
+            lib.dragon_u64_array_free(ptr)
+
+    def solve_unique(self):
+        """Solve for a single concrete value this expression must take, via Z3.
+        Returns None if zero or more than one model exists (unsatisfiable or
+        underconstrained), the value itself if exactly one does.
+
+        Raises RuntimeError if the library was built without Z3 support."""
+        out_value = ffi.new('uint64_t *')
+        try:
+            found = lib.dragon_slice_expr_solve_unique(self._ptr, out_value)
+        except AttributeError:
+            raise RuntimeError('dragon was built without Z3 support (-DDRAGON_USE_Z3=ON required)')
+        return out_value[0] if found else None
 
     # -- CONST
 
@@ -769,6 +906,93 @@ class BackwardSlicer:
         return '<BackwardSlicer>'
 
 
+# -- SwitchDetector --------------------------------------------------------------
+
+class SwitchCandidate:
+    """Everything extracted from a recognized jump-table dispatch pattern.
+    Mirrors dragon_switch_candidate_t — construct via detect_possible_switch(),
+    not directly.
+
+    index_reg_offset/index_reg_width identify the index register in the
+    IGNIL register address space (see x86/arm register descriptors below),
+    the same convention BackwardSlicer.slice_reg() uses.
+    """
+
+    def __init__(self, table_base, entry_size, num_cases,
+                 index_reg_offset, index_reg_width):
+        self.table_base = table_base
+        self.entry_size = entry_size
+        self.num_cases = num_cases
+        self.index_reg_offset = index_reg_offset
+        self.index_reg_width = index_reg_width
+
+    def __repr__(self):
+        return (f'<SwitchCandidate table_base=0x{self.table_base:x} '
+                f'entry_size={self.entry_size} num_cases={self.num_cases}>')
+
+
+def detect_possible_switch(jump_target, block_addr, graph):
+    """Inspect a backward-slice result (typically from
+    BackwardSlicer.slice_reg() on an indirect jump's target) and determine
+    whether it is a jump-table indirect branch.
+
+    Parameters
+    ----------
+    jump_target : SliceExpr
+    block_addr  : int
+        Address of the block containing the indirect jump.
+    graph       : Graph
+
+    Returns
+    -------
+    SwitchCandidate or None
+        None if the pattern didn't match. A returned candidate with
+        num_cases == 0 means the pattern matched but the bounds guard
+        wasn't found.
+    """
+    out = ffi.new('dragon_switch_candidate_t *')
+    matched = lib.dragon_detect_possible_switch(
+        jump_target._ptr, block_addr, graph._ptr, out)
+    if not matched:
+        return None
+    return SwitchCandidate(out.table_base, out.entry_size, out.num_cases,
+                            out.index_reg_offset, out.index_reg_width)
+
+
+def read_table_targets(candidate, data, base_addr):
+    """Read candidate.num_cases pointer-sized little-endian entries from the
+    jump table *candidate* describes.
+
+    Parameters
+    ----------
+    candidate : SwitchCandidate
+    data      : bytes-like
+        Buffer starting at *base_addr* in the binary's address space (not
+        necessarily starting at candidate.table_base — the table is
+        located within this window using its own address).
+    base_addr : int
+        Address the first byte of *data* corresponds to.
+
+    Returns
+    -------
+    list[int]
+        Empty if num_cases == 0 or the table extends outside *data*.
+    """
+    buf = ffi.from_buffer(data)
+    out_count = ffi.new('size_t *')
+    sw = ffi.new('dragon_switch_candidate_t *')
+    sw.table_base = candidate.table_base
+    sw.entry_size = candidate.entry_size
+    sw.num_cases = candidate.num_cases
+    sw.index_reg_offset = candidate.index_reg_offset
+    sw.index_reg_width = candidate.index_reg_width
+    ptr = lib.dragon_read_table_targets(sw, buf, len(data), base_addr, out_count)
+    try:
+        return [ptr[i] for i in range(out_count[0])]
+    finally:
+        lib.dragon_u64_array_free(ptr)
+
+
 # -- LLVMLifter ----------------------------------------------------------------
 
 class LLVMLifter:
@@ -839,6 +1063,97 @@ class LLVMLifter:
 
     def __repr__(self):
         return '<LLVMLifter>'
+
+
+# -- FLIRT signatures (dragon::sigs) --------------------------------------------
+
+def sigs_crc16(data):
+    """Compute dragon-tales' signature CRC16 (reflected, poly 0xA001, init
+    0xFFFF, no final XOR — CRC-16/ARC) over *data*.
+
+    Caveat: this variant was never verified against a real IDA/FLAIR-generated
+    .pat file — see SignatureDB's class doc.
+    """
+    buf = ffi.from_buffer(data)
+    return lib.dragon_sigs_crc16(buf, len(data))
+
+
+class SignatureDB:
+    """A loaded collection of FLIRT .pat signatures, ready for matching."""
+
+    def __init__(self):
+        self._ptr = lib.dragon_sigdb_create()
+        if self._ptr == ffi.NULL:
+            raise RuntimeError('failed to create SignatureDB')
+
+    def __del__(self):
+        if self._ptr:
+            lib.dragon_sigdb_destroy(self._ptr)
+            self._ptr = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.__del__()
+
+    def load_directory(self, path):
+        """Load and append every .pat file directly inside *path* (not
+        recursive). Files that fail to parse are silently skipped — compare
+        signature_count() before/after to see how much was actually loaded."""
+        lib.dragon_sigdb_load_directory(self._ptr, str(path).encode())
+
+    def load_file(self, path):
+        """Load and append a single .pat file. No-op if it can't be parsed."""
+        lib.dragon_sigdb_load_file(self._ptr, str(path).encode())
+
+    @property
+    def signature_count(self):
+        return lib.dragon_sigdb_signature_count(self._ptr)
+
+    def match_at(self, data, address):
+        """Try every signature against *data*, which must begin at the
+        candidate function's address. Returns the first match as a
+        (address, name, length) tuple, or None if nothing matched."""
+        buf = ffi.from_buffer(data)
+        out_address = ffi.new('uint64_t *')
+        out_name = ffi.new('char **')
+        out_length = ffi.new('uint32_t *')
+        matched = lib.dragon_sigdb_match_at(
+            self._ptr, buf, len(data), address,
+            out_address, out_name, out_length)
+        if not matched:
+            return None
+        try:
+            name = ffi.string(out_name[0]).decode()
+        finally:
+            lib.dragon_cstr_free(out_name[0])
+        return (out_address[0], name, out_length[0])
+
+    def match_entries(self, image, image_base, entry_points):
+        """Try every address in *entry_points* against every signature.
+        *image*/*image_base* describe the byte region the entry points fall
+        within. Unlike match_at, every name a matching signature defines is
+        reported (a module can bundle more than one function/offset under
+        one pattern), so one entry point may produce more than one match.
+
+        Returns a list of (address, name, length) tuples.
+        """
+        buf = ffi.from_buffer(image)
+        entries = ffi.new('uint64_t[]', entry_points) if entry_points else ffi.NULL
+        result = []
+        cb = ffi.callback(
+            'void(uint64_t, const char *, uint32_t, void *)',
+            lambda addr, name, length, _: result.append(
+                (addr, ffi.string(name).decode(), length))
+        )
+        lib.dragon_sigdb_match_entries(
+            self._ptr, buf, len(image), image_base,
+            entries, len(entry_points), cb, ffi.NULL)
+        return result
+
+    def __repr__(self):
+        return f'<SignatureDB signatures={self.signature_count}>'
 
 
 # -- x86 register descriptors --------------------------------------------------

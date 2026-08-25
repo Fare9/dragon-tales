@@ -5,6 +5,7 @@ add_library(libdragon SHARED
         Function.cpp
         Graph.cpp
         IGNIL.cpp
+        IGNILSimplify.cpp
         LLVMLifter.cpp
 )
 
@@ -61,3 +62,4 @@ target_link_libraries(libdragon
 add_subdirectory(disassemblers)
 add_subdirectory(assemblers)
 add_subdirectory(analysis)
+add_subdirectory(sigs)

@@ -3,21 +3,30 @@
 #include <dragon/Architecture.hpp>
 #ifdef DRAGON_WITH_Z3
 #include <dragon/analysis/SliceExprZ3.hpp>
+#include <dragon/analysis/ValueEnumerator.hpp>
 #endif
 #include <dragon/assembler/Assembler.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 #include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/analysis/SwitchDetector.hpp>
 #include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/Configuration.hpp>
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Function.hpp>
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
+#include <dragon/lifters/ignil/IGNILSimplify.hpp>
 #include <dragon/disassembler/Instruction.hpp>
 #include <dragon/analysis/SliceExpr.hpp>
+#include <dragon/sigs/Signature.hpp>
+#include <dragon/sigs/SignatureDB.hpp>
+#include <dragon/sigs/SignatureMatcher.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -425,14 +434,68 @@ static char *dup_string(const std::string &s) {
   return buf;
 }
 
+void dragon_u64_array_free(uint64_t *arr) { delete[] arr; }
+
+// Never returns nullptr, even for an empty vector - callers rely on getting
+// a real (if zero-length) allocation back to free unconditionally.
+static uint64_t *dup_u64_array(const std::vector<std::uint64_t> &v) {
+  auto *buf = new uint64_t[v.size()];
+  std::copy(v.begin(), v.end(), buf);
+  return buf;
+}
+
 // =============================================================================
 // IGNIL opcodes
 // =============================================================================
 
-// Verify the enum values match ignil::Opcode at compile time.
-static_assert(static_cast<int>(dragon::ignil::Opcode::COPY)  == DRAGON_IGNIL_COPY);
-static_assert(static_cast<int>(dragon::ignil::Opcode::LOAD)  == DRAGON_IGNIL_LOAD);
+// Verify every enum value matches ignil::Opcode at compile time (exhaustive,
+// not spot-checked) - a mid-enum insertion on either side desyncs this
+// mirror silently otherwise, which is exactly what happened before (see the
+// comment on the float opcodes in IGNIL.hpp). Keep this list in the same
+// order as the C++ enum and dragon_ignil_opcode_t so a missing entry here
+// is easy to spot by eye.
+static_assert(static_cast<int>(dragon::ignil::Opcode::COPY)   == DRAGON_IGNIL_COPY);
+static_assert(static_cast<int>(dragon::ignil::Opcode::LOAD)   == DRAGON_IGNIL_LOAD);
+static_assert(static_cast<int>(dragon::ignil::Opcode::STORE) == DRAGON_IGNIL_STORE);
+static_assert(static_cast<int>(dragon::ignil::Opcode::ADD)   == DRAGON_IGNIL_ADD);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SUB)   == DRAGON_IGNIL_SUB);
+static_assert(static_cast<int>(dragon::ignil::Opcode::NEG)   == DRAGON_IGNIL_NEG);
+static_assert(static_cast<int>(dragon::ignil::Opcode::MUL)   == DRAGON_IGNIL_MUL);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SDIV)  == DRAGON_IGNIL_SDIV);
+static_assert(static_cast<int>(dragon::ignil::Opcode::UDIV)  == DRAGON_IGNIL_UDIV);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SMOD)  == DRAGON_IGNIL_SMOD);
+static_assert(static_cast<int>(dragon::ignil::Opcode::UMOD)  == DRAGON_IGNIL_UMOD);
+static_assert(static_cast<int>(dragon::ignil::Opcode::AND)   == DRAGON_IGNIL_AND);
+static_assert(static_cast<int>(dragon::ignil::Opcode::OR)    == DRAGON_IGNIL_OR);
+static_assert(static_cast<int>(dragon::ignil::Opcode::XOR)   == DRAGON_IGNIL_XOR);
+static_assert(static_cast<int>(dragon::ignil::Opcode::NOT)   == DRAGON_IGNIL_NOT);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SHL)   == DRAGON_IGNIL_SHL);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SHR)   == DRAGON_IGNIL_SHR);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SAR)   == DRAGON_IGNIL_SAR);
+static_assert(static_cast<int>(dragon::ignil::Opcode::ZEXT)  == DRAGON_IGNIL_ZEXT);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SEXT)  == DRAGON_IGNIL_SEXT);
+static_assert(static_cast<int>(dragon::ignil::Opcode::TRUNC) == DRAGON_IGNIL_TRUNC);
+static_assert(static_cast<int>(dragon::ignil::Opcode::EQ)    == DRAGON_IGNIL_EQ);
+static_assert(static_cast<int>(dragon::ignil::Opcode::NEQ)   == DRAGON_IGNIL_NEQ);
+static_assert(static_cast<int>(dragon::ignil::Opcode::ULT)   == DRAGON_IGNIL_ULT);
+static_assert(static_cast<int>(dragon::ignil::Opcode::ULE)   == DRAGON_IGNIL_ULE);
+static_assert(static_cast<int>(dragon::ignil::Opcode::UGT)   == DRAGON_IGNIL_UGT);
+static_assert(static_cast<int>(dragon::ignil::Opcode::UGE)   == DRAGON_IGNIL_UGE);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SLT)   == DRAGON_IGNIL_SLT);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SLE)   == DRAGON_IGNIL_SLE);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SGT)   == DRAGON_IGNIL_SGT);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SGE)   == DRAGON_IGNIL_SGE);
+static_assert(static_cast<int>(dragon::ignil::Opcode::JMP)   == DRAGON_IGNIL_JMP);
+static_assert(static_cast<int>(dragon::ignil::Opcode::CJMP)  == DRAGON_IGNIL_CJMP);
+static_assert(static_cast<int>(dragon::ignil::Opcode::CALL)  == DRAGON_IGNIL_CALL);
+static_assert(static_cast<int>(dragon::ignil::Opcode::RET)   == DRAGON_IGNIL_RET);
 static_assert(static_cast<int>(dragon::ignil::Opcode::UNDEF) == DRAGON_IGNIL_UNDEF);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FADD)   == DRAGON_IGNIL_FADD);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FSUB)   == DRAGON_IGNIL_FSUB);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FMUL)   == DRAGON_IGNIL_FMUL);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FDIV)   == DRAGON_IGNIL_FDIV);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SITOFP) == DRAGON_IGNIL_SITOFP);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FPTOSI) == DRAGON_IGNIL_FPTOSI);
 
 const char *dragon_ignil_opcode_name(dragon_ignil_opcode_t op) {
   return dragon::ignil::opcodeName(
@@ -485,6 +548,54 @@ void dragon_ignil_block_each_op(
            static_cast<int>(ops[i].opcode)),
        i, user);
   }
+}
+
+// =============================================================================
+// Disassembler: trace lifting - produces an OWNED ignil block (unlike
+// dragon_graph_get_ignil_block's borrowed one), reusing all the accessors
+// above since it's the same underlying dragon::ignil::Block type.
+// =============================================================================
+
+dragon_ignil_block_t *dragon_disasm_lift_trace(
+    const dragon_disasm_t *d, const dragon_instruction_t *const *instructions,
+    size_t count) {
+  if (!d || (!instructions && count > 0))
+    return nullptr;
+  std::vector<dragon::Instruction> trace;
+  trace.reserve(count);
+  for (size_t i = 0; i < count; ++i)
+    trace.push_back(*as_insn(instructions[i]));
+  auto *block = new dragon::ignil::Block(d->disassembler.liftTrace(trace));
+  return reinterpret_cast<dragon_ignil_block_t *>(block);
+}
+
+void dragon_ignil_block_destroy(dragon_ignil_block_t *b) {
+  delete reinterpret_cast<dragon::ignil::Block *>(b);
+}
+
+// =============================================================================
+// IGNIL peephole simplifier
+// =============================================================================
+
+dragon_ignil_block_t *dragon_ignil_simplify_block(
+        const dragon_ignil_block_t *b, int max_iterations,
+        size_t *out_constants_folded, size_t *out_identities_applied,
+        size_t *out_ops_removed, size_t *out_iterations) {
+  if (!b)
+    return nullptr;
+  dragon::ignil::SimplifyStats stats;
+  const int iterations = max_iterations > 0 ? max_iterations : 8;
+  auto *block = new dragon::ignil::Block(dragon::ignil::simplifyBlock(
+          *as_ignil_block(b), stats, iterations));
+  if (out_constants_folded)
+    *out_constants_folded = stats.constantsFolded;
+  if (out_identities_applied)
+    *out_identities_applied = stats.identitiesApplied;
+  if (out_ops_removed)
+    *out_ops_removed = stats.opsRemoved;
+  if (out_iterations)
+    *out_iterations = stats.iterations;
+  return reinterpret_cast<dragon_ignil_block_t *>(block);
 }
 
 // =============================================================================
@@ -606,6 +717,40 @@ char *dragon_slice_expr_to_z3_string(const dragon_slice_expr_t *e) {
   dragon::slice::SliceExprZ3 lowerer{ctx};
   return dup_string(lowerer.lower(*e->expr).to_string());
 }
+
+uint64_t *dragon_slice_expr_enumerate_values(const dragon_slice_expr_t *e,
+                                              size_t max_values, int sorted,
+                                              size_t *out_count) {
+  if (!e) {
+    if (out_count)
+      *out_count = 0;
+    return nullptr;
+  }
+  z3::context ctx;
+  dragon::slice::EnumeratorConfig cfg;
+  if (max_values > 0)
+    cfg.maxValues = max_values;
+  cfg.sorted = sorted != 0;
+  std::vector<std::uint64_t> values =
+      dragon::slice::enumeratedValues(*e->expr, ctx, {}, cfg);
+  if (out_count)
+    *out_count = values.size();
+  return dup_u64_array(values);
+}
+
+int dragon_slice_expr_solve_unique(const dragon_slice_expr_t *e,
+                                    uint64_t *out_value) {
+  if (!e)
+    return 0;
+  z3::context ctx;
+  std::optional<std::uint64_t> value =
+      dragon::slice::solveUnique(*e->expr, ctx, {});
+  if (!value)
+    return 0;
+  if (out_value)
+    *out_value = *value;
+  return 1;
+}
 #endif
 
 // =============================================================================
@@ -688,4 +833,109 @@ dragon_slice_expr_t *dragon_slicer_slice_reg(const dragon_slicer_t *s,
       s->slicer.slice(reg, block_addr, *as_graph(g));
   return new dragon_slice_expr{
       std::make_shared<dragon::slice::Expr>(std::move(result))};
+}
+
+// =============================================================================
+// SwitchDetector
+// =============================================================================
+
+int dragon_detect_possible_switch(const dragon_slice_expr_t *jump_target,
+                                   uint64_t block_addr,
+                                   const dragon_graph_t *g,
+                                   dragon_switch_candidate_t *out) {
+  if (!jump_target || !g || !out)
+    return 0;
+  std::optional<dragon::slice::SwitchCandidate> sw =
+      dragon::slice::detectPossibleSwitch(*jump_target->expr, block_addr,
+                                           *as_graph(g));
+  if (!sw)
+    return 0;
+  out->table_base = sw->tableBase;
+  out->entry_size = sw->entrySize;
+  out->num_cases = sw->numCases;
+  out->index_reg_offset = sw->indexReg.offset;
+  out->index_reg_width = sw->indexReg.width;
+  return 1;
+}
+
+uint64_t *dragon_read_table_targets(const dragon_switch_candidate_t *sw,
+                                     const uint8_t *bytes, size_t bytes_len,
+                                     uint64_t base_addr, size_t *out_count) {
+  if (!sw || (!bytes && bytes_len > 0)) {
+    if (out_count)
+      *out_count = 0;
+    return nullptr;
+  }
+  dragon::slice::SwitchCandidate candidate{
+      sw->table_base, sw->entry_size, sw->num_cases,
+      dragon::ignil::Reg{sw->index_reg_offset, sw->index_reg_width, ""}};
+  std::vector<std::uint64_t> targets = dragon::slice::readTableTargets(
+      candidate, std::span<const std::uint8_t>(bytes, bytes_len), base_addr);
+  if (out_count)
+    *out_count = targets.size();
+  return dup_u64_array(targets);
+}
+
+// =============================================================================
+// FLIRT signatures (dragon::sigs)
+// =============================================================================
+
+struct dragon_sigdb {
+  dragon::sigs::SignatureDB db;
+};
+
+dragon_sigdb_t *dragon_sigdb_create() { return new dragon_sigdb{}; }
+
+void dragon_sigdb_destroy(dragon_sigdb_t *db) { delete db; }
+
+void dragon_sigdb_load_directory(dragon_sigdb_t *db, const char *dir) {
+  if (db && dir)
+    db->db.loadDirectory(dir);
+}
+
+void dragon_sigdb_load_file(dragon_sigdb_t *db, const char *path) {
+  if (db && path)
+    db->db.loadFile(path);
+}
+
+size_t dragon_sigdb_signature_count(const dragon_sigdb_t *db) {
+  return db ? db->db.signatureCount() : 0;
+}
+
+uint16_t dragon_sigs_crc16(const uint8_t *data, size_t len) {
+  return dragon::sigs::SignatureMatcher::computeCRC16({data, len});
+}
+
+int dragon_sigdb_match_at(const dragon_sigdb_t *db, const uint8_t *bytes,
+                          size_t len, uint64_t address,
+                          uint64_t *out_address, char **out_name,
+                          uint32_t *out_length) {
+  if (!db || !bytes)
+    return 0;
+  auto match = dragon::sigs::SignatureMatcher::matchAt(db->db, {bytes, len},
+                                                        address);
+  if (!match)
+    return 0;
+  if (out_address)
+    *out_address = match->address;
+  if (out_name)
+    *out_name = dup_string(match->name);
+  if (out_length)
+    *out_length = match->length;
+  return 1;
+}
+
+void dragon_sigdb_match_entries(
+    const dragon_sigdb_t *db, const uint8_t *image, size_t image_len,
+    uint64_t image_base, const uint64_t *entry_points,
+    size_t num_entry_points,
+    void (*cb)(uint64_t, const char *, uint32_t, void *), void *user) {
+  if (!db || !image || !cb || (!entry_points && num_entry_points > 0))
+    return;
+  std::vector<std::uint64_t> entries(entry_points,
+                                     entry_points + num_entry_points);
+  auto matches = dragon::sigs::SignatureMatcher::matchEntries(
+      db->db, {image, image_len}, image_base, entries);
+  for (const auto &m: matches)
+    cb(m.address, m.name.c_str(), m.length, user);
 }

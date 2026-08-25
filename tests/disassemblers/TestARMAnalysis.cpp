@@ -90,6 +90,38 @@ TEST_CASE("ARMAnalysis arm64 - prologue detected as function start",
 }
 
 // -----------------------------------------------------------------------
+// Entry address without a recognizable prologue
+// -----------------------------------------------------------------------
+
+TEST_CASE("ARMAnalysis arm64 - frame-pointer-omitting leaf function is "
+         "still recognized as a function",
+         "[arm][analysis][arm64]") {
+  // The exact class of bug documented in ToDo/LifterGaps.md #3: a real
+  // leaf function (no calls, so nothing forces x29/x30 preservation) has
+  // no `stp x29, x30` / `mov x29, sp` at all, so isCommonFunctionPrologue
+  // never matches it. Before seeding baseAddr as a function start
+  // unconditionally, graph.functions() came back empty for this even
+  // though the code disassembles and lifts to IGNIL perfectly cleanly -
+  // matches clang -O1's actual output for `int leaf(int n) { return n+1; }`.
+  //
+  // 0x1000: add w0, w0, #1   00 04 00 11
+  // 0x1004: ret              c0 03 5f d6
+  const std::vector<std::uint8_t> bytes = {
+          0x00, 0x04, 0x00, 0x11, // add w0, w0, #1
+          0xc0, 0x03, 0x5f, 0xd6, // ret
+  };
+  auto dis = makeAnalyzer(dragon::Architecture::ARM64);
+  auto g = makeGraph(dragon::Architecture::ARM64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  auto fns = g.functions();
+  REQUIRE(fns.size() == 1);
+  REQUIRE(fns[0].startAddress() == 0x1000);
+  REQUIRE(fns[0].isValid());
+  REQUIRE(fns[0].numInstructions() == 2);
+}
+
+// -----------------------------------------------------------------------
 // Call target -> function start
 // -----------------------------------------------------------------------
 

@@ -254,6 +254,20 @@ dragon::arm::ARMIGNILLifter::liftBlock(const BasicBlock &block,
   return result;
 }
 
+dragon::ignil::Block dragon::arm::ARMIGNILLifter::liftTrace(
+        std::span<const Instruction> trace) const {
+  if (trace.empty())
+    return ignil::Block{0};
+
+  ignil::Block result{trace.front().address()};
+  std::uint32_t tempId = 0;
+
+  for (const Instruction &insn: trace)
+    liftInstruction(insn, result, tempId);
+
+  return result;
+}
+
 void dragon::arm::ARMIGNILLifter::liftInstruction(const Instruction &insn,
                                                   ignil::Block &out,
                                                   std::uint32_t &tempId) const {
