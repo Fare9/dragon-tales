@@ -605,6 +605,174 @@ for address, name, length in db.match_entries(image, image_base, [0x1000, 0x1040
 
 ---
 
+## Symbolic execution
+
+Available when the library is built with `-DDRAGON_USE_Z3=ON`.
+
+`SymbolicExecutor` runs lifted IGNIL over Z3 bitvectors: seed the machine, run
+a block, then ask the solver what it computed. Registers are the
+`(offset, width, name)` tuples from the `x86` / `arm` classes.
+
+```python
+import dragon
+from dragon import x86
+
+cfg = dragon.Configuration(strategy=dragon.Strategy.LINEAR_SWEEP)
+dis = dragon.Disassembler(dragon.Architecture.X86_64, cfg)
+
+#   xor rax, rdi ; add rax, rsi ; ret
+graph = dis.analyze(bytes([0x48,0x31,0xF8, 0x48,0x01,0xF0, 0xC3]), 0x1000)
+block = graph.get_ignil_block(0x1000)
+
+with dragon.SymbolicExecutor() as ex:
+    ex.set_register(x86.RAX, 0)
+    a = ex.symbolize_register(x86.RDI, 'a')
+    b = ex.symbolize_register(x86.RSI, 'b')
+
+    result = ex.run(block)
+
+    rax = ex.read_register(x86.RAX)
+    print(ex.proves(rax == a + b))   # True
+    print(ex.proves(rax == a * b))   # False
+```
+
+State persists across `run()` calls, so walking a path is a sequence of runs.
+
+### Expressions
+
+`SymExpr` operators build expressions rather than computing anything, so `==`
+returns a `SymExpr` and not a `bool` — the same convention z3py uses. Plain
+ints are widened to the other operand's width automatically.
+
+```python
+rax = ex.read_register(x86.RAX)
+
+goal   = rax == 0x1337          # SymExpr, not a bool
+masked = (rax & 0xFF) + 1
+```
+
+Comparison operators (`<`, `<=`, `>`, `>=`) are **signed**, matching Python's
+own integer semantics. Use `ult()`, `ule()`, `ugt()`, `uge()` for the unsigned
+versions, `logical_and()` / `logical_or()` / `implies()` to combine booleans,
+and `~` for boolean negation.
+
+> Expressions may safely outlive the executor that produced them. A
+> `z3::expr` does not own its context, so each handle keeps the executor
+> alive itself — which is what makes `SymExpr` objects safe to hold in
+> globals, where Python finalizes in an order you do not control.
+
+### Solving — recovering an input
+
+A symbolic region of N bytes creates N variables named
+`<region>[0]`..`<region>[N-1]`, which `Solution.bytes()` reads back in address
+order.
+
+```python
+#   mov rax, [rdi] ; xor rax, rsi ; ret
+with dragon.SymbolicExecutor() as ex:
+    ex.set_register(x86.RDI, 0x4000)
+    ex.set_register(x86.RSI, 0x5A5A5A5A5A5A5A5A)
+    ex.symbolize_memory(0x4000, 8, 'flag')
+    ex.run(block)
+
+    solution = ex.solve(ex.read_register(x86.RAX) == ex.const(target, 64))
+    if solution:
+        print(solution.bytes('flag'))    # b'DRAGON!!'
+        print(solution.values())         # every bound symbol
+```
+
+`solve()` returns `None` when no assignment exists — an unreachable goal is
+reported, never guessed at. Narrow the search with `assume()` before running:
+
+```python
+for i in range(4):
+    byte = ex.read_memory(0x5000 + i, 8)
+    ex.assume(byte.uge(ex.const(0x21, 8)))    # printable ASCII only
+    ex.assume(byte.ule(ex.const(0x7E, 8)))
+```
+
+### Control flow — resolving computed jumps
+
+`RunResult.successors` names the concrete addresses control flow can reach,
+each with the guard under which it is reached. A branch whose condition is
+provably constant collapses to a single successor; a computed jump has its
+target enumerated, which is what recovers a jump table or a VM dispatch.
+
+```python
+#   mov esi, [rdi] ; jmp qword ptr [rsi*8 + 0x6000]
+with dragon.SymbolicExecutor() as ex:
+    ex.map_memory(0x6000, handler_table)
+    ex.set_register(x86.RDI, 0x7000)
+
+    opcode = ex.symbolize_memory(0x7000, 4, 'vm_opcode')
+    ex.assume(opcode.ult(ex.const(3, 32)))     # the VM's own range check
+
+    result = ex.run(block)
+    print(result.complete)                     # True
+    print([hex(s.address) for s in result.successors])
+    # ['0xaa00', '0xbb00', '0xcc00']
+```
+
+`result.complete` is the honesty check: True only when the run succeeded *and*
+every address and branch target resolved exactly, so the successor list really
+is the complete set. Otherwise `result.warnings` says what had to be left open:
+
+```python
+for w in result.warnings:
+    print(f"@0x{w.address:x}: {w.message}")
+# @0x1002: branch target has more than 256 possible values ...
+```
+
+### Modelling notes
+
+- Registers and memory are byte-granular, so sub-register aliasing comes out
+  right: `EAX` writes bytes 0–3, `AH` writes byte 1, and a `RAX` read
+  concatenates bytes 0–7.
+- A 32-bit write clears the upper half of a 64-bit register (x86-64 and
+  AArch64). Pass `zero_extend_on_32bit_write=False` for a target where it
+  merges instead.
+- A symbolic address is concretized by enumerating its satisfying values, up
+  to `max_address_solutions`; past that bound the access is reported
+  unresolved rather than guessed at.
+- Blocks stop at the first terminator. Pass `stop_at_terminator=False` to run
+  a trace from `lift_trace()`, whose interior terminators must be stepped
+  over.
+
+### API summary
+
+| Symbol | Description |
+|---|---|
+| `SymbolicExecutor(**options)` | Create an executor (see options below) |
+| `set_register(reg, value)` | Seed a register concretely |
+| `symbolize_register(reg, name)` → `SymExpr` | Bind a register to a fresh variable |
+| `map_memory(addr, data)` | Map a concrete blob |
+| `symbolize_memory(addr, size, name)` → `SymExpr` | Fill a region with per-byte variables |
+| `assume(cond)` | Constrain the rest of the run |
+| `run(block)` → `RunResult` | Execute a block; state persists |
+| `read_register(reg)` / `read_memory(addr, width)` → `SymExpr` | What a location now holds |
+| `const(value, width)` → `SymExpr` | A concrete bitvector |
+| `proves(cond)` → `bool \| None` | Does it hold on every model? `None` = solver gave up |
+| `is_satisfiable(cond)` → `bool \| None` | Can it hold at all? |
+| `evaluate(expr)` → `int \| None` | Value, only if it is forced to exactly one |
+| `enumerate(expr, max)` → `(list, bool)` | Distinct values, and whether that list is complete |
+| `solve(goal)` → `Solution \| None` | A satisfying assignment |
+| `reset()` | Clear register, memory and constraint state |
+| `RunResult.successors` | `Successor(address, taken, condition)` list |
+| `RunResult.complete` | True only if that list is exhaustive |
+| `RunResult.warnings` | `SymWarning(address, message)` list |
+| `RunResult.ops_executed` / `.solver_queries` / `.addresses_concretized` | Run statistics |
+| `Solution.value(name)` / `.values()` / `.bytes(region)` | Read the model back |
+
+Constructor options, all deferring to the library default when omitted:
+`solver_timeout_ms` (5000), `max_address_solutions` (64),
+`max_branch_targets` (256), `zero_extend_on_32bit_write` (True),
+`symbolize_unmapped_reads` (True), `stop_at_terminator` (True).
+
+`examples/python/symbolic_execution.py` runs all of the above against real
+lifted x86-64.
+
+---
+
 ## Enum reference
 
 | Class | Values |
