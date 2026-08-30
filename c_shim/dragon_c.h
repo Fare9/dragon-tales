@@ -519,6 +519,203 @@
       void (*cb)(uint64_t address, const char* name, uint32_t length, void* user),
       void* user);
 
+
+  // -- IGNIL symbolic execution --------------------------------------------
+  //
+  // Executes IGNIL ops over Z3 bitvectors: seed registers and memory
+  // (concretely or symbolically), run a block, then either read a value back
+  // as an expression or ask the solver about it. Two things this is for:
+  // recovering the input that makes a checksum come out to a target value,
+  // and resolving a computed jump to the concrete addresses it can reach.
+  //
+  // Only available when the library is built with -DDRAGON_USE_Z3=ON.
+#ifdef DRAGON_WITH_Z3
+
+  // Owned handle on a Z3 expression. Destroy every handle you are given.
+  typedef struct dragon_symexpr dragon_symexpr_t;
+  // Owned handle on an executor, its state and its solver.
+  typedef struct dragon_symexec dragon_symexec_t;
+  // Owned handle on one run's outcome.
+  typedef struct dragon_symrun dragon_symrun_t;
+  // Owned handle on a satisfying assignment.
+  typedef struct dragon_solution dragon_solution_t;
+
+  // Mirror of ignil::ExecStatus.
+  typedef enum {
+      DRAGON_SYMEXEC_OK             = 0,
+      DRAGON_SYMEXEC_MALFORMED_OP   = 1,
+      DRAGON_SYMEXEC_UNSUPPORTED_OP = 2,
+      DRAGON_SYMEXEC_SOLVER_FAILURE = 3,
+  } dragon_symexec_status_t;
+
+  // Mirror of ignil::ExitKind.
+  typedef enum {
+      DRAGON_SYMEXIT_FALLTHROUGH       = 0,
+      DRAGON_SYMEXIT_JUMP              = 1,
+      DRAGON_SYMEXIT_CONDITIONAL_JUMP  = 2,
+      DRAGON_SYMEXIT_CALL              = 3,
+      DRAGON_SYMEXIT_RETURN            = 4,
+      DRAGON_SYMEXIT_ERROR             = 5,
+  } dragon_symexec_exit_t;
+
+  // Mirror of ignil::SymbolicOptions. Every field takes the library default
+  // when left at 0, so a zero-initialised struct means "all defaults". The
+  // three flags are tri-state for that reason: 0 keeps the default, 1 turns
+  // the behaviour on, -1 turns it off.
+  typedef struct {
+      unsigned solver_timeout_ms;          // 0 -> 5000
+      size_t   max_address_solutions;      // 0 -> 64
+      size_t   max_branch_targets;         // 0 -> 256
+      int      zero_extend_on_32bit_write; // 0 default (on), 1 on, -1 off
+      int      symbolize_unmapped_reads;   // 0 default (on), 1 on, -1 off
+      int      stop_at_terminator;         // 0 default (on), 1 on, -1 off
+  } dragon_symexec_options_t;
+
+  // `opts` may be NULL for the defaults.
+  dragon_symexec_t* dragon_symexec_create(const dragon_symexec_options_t* opts);
+  void              dragon_symexec_destroy(dragon_symexec_t* e);
+  // Drop all register/memory/constraint state; keeps the options.
+  void              dragon_symexec_reset(dragon_symexec_t* e);
+
+  // -- machine setup. Registers are named by their IGNIL register-space byte
+  // offset and bit width - the values in x86IGNILRegs.hpp / armIGNILRegs.hpp.
+  void dragon_symexec_set_register(dragon_symexec_t* e, uint32_t offset,
+                                   uint8_t width, uint64_t value);
+  // Binds the register to a fresh variable and returns it. `name` may be NULL
+  // for an auto-generated one.
+  dragon_symexpr_t* dragon_symexec_symbolize_register(
+      dragon_symexec_t* e, uint32_t offset, uint8_t width, const char* name);
+
+  void dragon_symexec_map_memory(dragon_symexec_t* e, uint64_t address,
+                                 const uint8_t* data, size_t len);
+  // Fills [address, address+size) with per-byte variables named
+  // `<name>[0]`..`<name>[size-1]`; dragon_solution_bytes reads them back.
+  dragon_symexpr_t* dragon_symexec_symbolize_memory(
+      dragon_symexec_t* e, uint64_t address, uint64_t size, const char* name);
+
+  // Constrains the rest of the run. `c` must be a boolean expression.
+  void dragon_symexec_assume(dragon_symexec_t* e, const dragon_symexpr_t* c);
+
+  // -- expressions. Every one of these returns an owned handle.
+  dragon_symexpr_t* dragon_symexec_const(const dragon_symexec_t* e,
+                                         uint64_t value, uint8_t width);
+  dragon_symexpr_t* dragon_symexec_read_register(const dragon_symexec_t* e,
+                                                 uint32_t offset, uint8_t width);
+  dragon_symexpr_t* dragon_symexec_read_memory(const dragon_symexec_t* e,
+                                               uint64_t address, uint8_t width);
+
+  void      dragon_symexpr_destroy(dragon_symexpr_t* x);
+  // Caller must free with dragon_cstr_free.
+  char*     dragon_symexpr_to_string(const dragon_symexpr_t* x);
+  // Bit width of a bitvector expression; 0 for a boolean.
+  uint8_t   dragon_symexpr_width(const dragon_symexpr_t* x);
+  int       dragon_symexpr_is_bool(const dragon_symexpr_t* x);
+
+  typedef enum {
+      // bitvector x bitvector -> bitvector
+      DRAGON_SYMOP_ADD = 0,
+      DRAGON_SYMOP_SUB = 1,
+      DRAGON_SYMOP_MUL = 2,
+      DRAGON_SYMOP_AND = 3,
+      DRAGON_SYMOP_OR  = 4,
+      DRAGON_SYMOP_XOR = 5,
+      // bitvector x bitvector -> boolean
+      DRAGON_SYMOP_EQ  = 6,
+      DRAGON_SYMOP_NE  = 7,
+      DRAGON_SYMOP_ULT = 8,
+      DRAGON_SYMOP_ULE = 9,
+      DRAGON_SYMOP_UGT = 10,
+      DRAGON_SYMOP_UGE = 11,
+      DRAGON_SYMOP_SLT = 12,
+      DRAGON_SYMOP_SLE = 13,
+      DRAGON_SYMOP_SGT = 14,
+      DRAGON_SYMOP_SGE = 15,
+      // boolean x boolean -> boolean
+      DRAGON_SYMOP_BOOL_AND = 16,
+      DRAGON_SYMOP_BOOL_OR  = 17,
+      DRAGON_SYMOP_IMPLIES  = 18,
+  } dragon_symop_t;
+
+  // Returns NULL if the operands' sorts do not fit the operator.
+  dragon_symexpr_t* dragon_symexpr_binop(dragon_symop_t op,
+                                         const dragon_symexpr_t* a,
+                                         const dragon_symexpr_t* b);
+  // Boolean negation. Returns NULL if `a` is not boolean.
+  dragon_symexpr_t* dragon_symexpr_not(const dragon_symexpr_t* a);
+
+  // -- execution.  Returns an owned run handle, or NULL on a NULL argument.
+  dragon_symrun_t* dragon_symexec_run(dragon_symexec_t* e,
+                                      const dragon_ignil_block_t* b);
+  void dragon_symrun_destroy(dragon_symrun_t* r);
+
+  dragon_symexec_status_t dragon_symrun_status(const dragon_symrun_t* r);
+  dragon_symexec_exit_t   dragon_symrun_exit(const dragon_symrun_t* r);
+  // 1 when the run succeeded and every successor and memory access resolved
+  // exactly - i.e. the successor list is the complete set of reachable
+  // addresses. 0 when some of it had to be left open; see the warnings.
+  int    dragon_symrun_complete(const dragon_symrun_t* r);
+  // NULL when the run succeeded; else caller frees with dragon_cstr_free.
+  char*  dragon_symrun_error(const dragon_symrun_t* r);
+
+  void   dragon_symrun_stats(const dragon_symrun_t* r, size_t* out_ops_executed,
+                             size_t* out_solver_queries,
+                             size_t* out_addresses_concretized);
+
+  size_t dragon_symrun_successor_count(const dragon_symrun_t* r);
+  // Reads successor `index`. `out_taken` reports the true-side edge of a
+  // CJMP. Returns 0 if `index` is out of range.
+  int    dragon_symrun_successor(const dragon_symrun_t* r, size_t index,
+                                 uint64_t* out_address, int* out_taken);
+  // The guard under which that successor is reached. Owned handle.
+  dragon_symexpr_t* dragon_symrun_successor_condition(const dragon_symrun_t* r,
+                                                      size_t index);
+
+  size_t dragon_symrun_warning_count(const dragon_symrun_t* r);
+  // Caller frees the returned string with dragon_cstr_free.
+  char*  dragon_symrun_warning(const dragon_symrun_t* r, size_t index,
+                               uint64_t* out_address);
+
+  // -- solver queries. The tri-state ones return 1 (yes), 0 (no) or -1 (the
+  // solver timed out or gave up) - never a guess.
+  int dragon_symexec_is_satisfiable(dragon_symexec_t* e,
+                                    const dragon_symexpr_t* c);
+  int dragon_symexec_proves(dragon_symexec_t* e, const dragon_symexpr_t* c);
+
+  // Writes *out and returns 1 only if the path constraints force exactly one
+  // value for `x` - the "is this obfuscated expression really a constant?"
+  // query.
+  int dragon_symexec_evaluate(dragon_symexec_t* e, const dragon_symexpr_t* x,
+                              uint64_t* out);
+
+  // Up to `max` distinct satisfying values of `x`, written to `out`. Returns
+  // how many were written. *out_exhaustive (may be NULL) is set to 1 only if
+  // the enumeration ran out of values rather than hitting `max`.
+  size_t dragon_symexec_enumerate(dragon_symexec_t* e,
+                                  const dragon_symexpr_t* x, uint64_t* out,
+                                  size_t max, int* out_exhaustive);
+
+  // Solves the path constraints, plus `goal` when it is non-NULL. Returns
+  // NULL if there is no satisfying assignment.
+  dragon_solution_t* dragon_symexec_solve(dragon_symexec_t* e,
+                                          const dragon_symexpr_t* goal);
+  void dragon_solution_destroy(dragon_solution_t* s);
+
+  // Value bound to one symbol. Returns 0 if the model does not bind it.
+  int    dragon_solution_value(const dragon_solution_t* s, const char* symbol,
+                               uint64_t* out);
+  // Bytes of a symbolised memory region, in address order. Writes at most
+  // `cap` bytes and returns the region's full size (which may exceed `cap`);
+  // returns 0 if no region of that name was symbolised.
+  size_t dragon_solution_bytes(const dragon_solution_t* s, const char* region,
+                               uint8_t* out, size_t cap);
+  // Every bound symbol. `name` is borrowed - valid only during the callback.
+  void   dragon_solution_each(const dragon_solution_t* s,
+                              void (*cb)(const char* name, uint64_t value,
+                                         void* user),
+                              void* user);
+
+#endif // DRAGON_WITH_Z3
+
   #ifdef __cplusplus
   }
   #endif

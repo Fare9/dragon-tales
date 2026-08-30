@@ -1,0 +1,158 @@
+00402050    uint64_t sum_to_n(int32_t arg1)
+
+00402050  f30f1efa           endbr64 
+00402054  53                 push    rbx {var_8}
+00402055  4189f8             mov     r8d, edi
+00402058  31c9               xor     ecx, ecx  {0x0}
+0040205a  31ff               xor     edi, edi  {0x0}
+0040205c  418d7001           lea     esi, [r8+0x1]
+
+00402060  0fb615a93f0000     movzx   edx, byte [rel _9]
+00402067  440fbe0da23f0000   movsx   r9d, byte [rel _8]
+0040206f  0fbe1da23f0000     movsx   ebx, byte [rel _1]
+00402076  4831c0             xor     rax, rax  {0x0}  {0x1}
+00402079  7401               je      0x40207c
+
+0040207b  00660f             add     byte [rsi+0xf], ah
+0040207e  ef                 out     dx, eax
+0040207f  c0660fef           shl     byte [rsi+0xf], 0xef
+00402083  d2660f             shl     byte [rsi+0xf], cl
+00402086  ef                 out     dx, eax
+00402087  c9                 leave   
+
+0040207c  660fefc0           pxor    xmm0, xmm0
+00402080  660fefd2           pxor    xmm2, xmm2
+00402084  660fefc9           pxor    xmm1, xmm1
+
+00402088  0fbec2             movsx   eax, dl
+0040208b  83c007             add     eax, 0x7
+0040208e  31d2               xor     edx, edx
+00402090  440fbe1d7a3f0000   movsx   r11d, byte [rel _7]
+00402098  440fbe15763f0000   movsx   r10d, byte [rel _3]
+004020a0  41f7f1             div     r9d  {0x0}  {0x0}
+004020a3  f2410f2ac2         cvtsi2sd xmm0, r10d
+004020a8  f2410f2ad3         cvtsi2sd xmm2, r11d
+004020ad  f20f58c0           addsd   xmm0, xmm0
+004020b1  31d2               xor     edx, edx
+004020b3  f20f5cd0           subsd   xmm2, xmm0
+004020b7  29d8               sub     eax, ebx
+004020b9  f2480f2ac8         cvtsi2sd xmm1, rax
+004020be  f20f59ca           mulsd   xmm1, xmm2
+004020c2  f20f114c24f0       movsd   qword [rsp-0x10], xmm1
+004020c8  0fbe05413f0000     movsx   eax, byte [rel _9]
+004020cf  440fbe0d3a3f0000   movsx   r9d, byte [rel _8]
+004020d7  440fbe15393f0000   movsx   r10d, byte [rel _1]
+004020df  83c007             add     eax, 0x7
+004020e2  41f7f1             div     r9d  {0x0}  {0x0}
+004020e5  4439d0             cmp     eax, r10d
+004020e8  741f               je      0x402109
+
+004020ea  0fbe15253f0000     movsx   edx, byte [rel _3]
+004020f1  0fbe05513f0000     movsx   eax, byte [rel _0]
+004020f8  8d04c0             lea     eax, [rax+rax*8]
+004020fb  8d540206           lea     edx, [rdx+rax+0x6]
+004020ff  b802000000         mov     eax, 0x2
+00402104  83fa09             cmp     edx, 0x9
+00402107  754e               jne     0x402157
+
+00402109  0fb605003f0000     movzx   eax, byte [rel _9]
+00402110  0fb605fa3e0000     movzx   eax, byte [rel _8]
+00402117  31d2               xor     edx, edx
+00402119  660fefc0           pxor    xmm0, xmm0
+0040211d  0fb605f43e0000     movzx   eax, byte [rel _1]
+00402124  0fbe05e53e0000     movsx   eax, byte [rel _9]
+0040212b  440fbe0dde3e0000   movsx   r9d, byte [rel _8]
+00402133  440fbe15dd3e0000   movsx   r10d, byte [rel _1]
+0040213b  83c007             add     eax, 0x7
+0040213e  f20f104c24f0       movsd   xmm1, qword [rsp-0x10]
+00402144  41f7f1             div     r9d  {0x0}  {0x0}
+00402147  4429d0             sub     eax, r10d
+0040214a  f2480f2ac0         cvtsi2sd xmm0, rax
+0040214f  f20f59c1           mulsd   xmm0, xmm1
+00402153  f20f2cc0           cvttsd2si eax, xmm0
+
+00402157  39c7               cmp     edi, eax
+00402159  7d3d               jge     0x402198
+
+0040215b  b801000000         mov     eax, 0x1
+00402160  4585c0             test    r8d, r8d
+00402163  7e26               jle     0x40218b
+
+00402165  40f6c601           test    sil, 0x1
+00402169  7515               jne     0x402180
+
+0040216b  b802000000         mov     eax, 0x2
+00402170  83c101             add     ecx, 0x1
+00402173  39f0               cmp     eax, esi
+00402175  7414               je      0x40218b
+
+00402177  660f1f8400000000…  nop     word [rax+rax]
+
+00402180  8d4c4101           lea     ecx, [rcx+rax*2+0x1]
+00402184  83c002             add     eax, 0x2
+00402187  39f0               cmp     eax, esi
+00402189  75f5               jne     0x402180
+
+0040218b  83c701             add     edi, 0x1
+0040218e  e9cdfeffff         jmp     0x402060
+
+00402193           0f 1f 44 00 00                             ..D..
+
+00402198  0fb615713e0000     movzx   edx, byte [rel _9]
+0040219f  0fbe356b3e0000     movsx   esi, byte [rel _8]
+004021a6  440fbe0d6a3e0000   movsx   r9d, byte [rel _1]
+004021ae  4831c0             xor     rax, rax  {0x0}  {0x1}
+004021b1  7401               je      0x4021b4
+
+004021b3  00660f             add     byte [rsi+0xf], ah
+004021b6  ef                 out     dx, eax
+004021b7  c0660fef           shl     byte [rsi+0xf], 0xef
+004021bb  d2660f             shl     byte [rsi+0xf], cl
+004021be  ef                 out     dx, eax
+004021bf  c9                 leave   
+
+004021b4  660fefc0           pxor    xmm0, xmm0
+004021b8  660fefd2           pxor    xmm2, xmm2
+004021bc  660fefc9           pxor    xmm1, xmm1
+
+004021c0  0fbec2             movsx   eax, dl
+004021c3  83c007             add     eax, 0x7
+004021c6  31d2               xor     edx, edx
+004021c8  440fbe05423e0000   movsx   r8d, byte [rel _7]
+004021d0  0fbe3d3f3e0000     movsx   edi, byte [rel _3]
+004021d7  f7f6               div     esi  {0x0}  {0x0}
+004021d9  f20f2ac7           cvtsi2sd xmm0, edi
+004021dd  f2410f2ad0         cvtsi2sd xmm2, r8d
+004021e2  f20f58c0           addsd   xmm0, xmm0
+004021e6  31d2               xor     edx, edx
+004021e8  f20f5cd0           subsd   xmm2, xmm0
+004021ec  4429c8             sub     eax, r9d
+004021ef  f2480f2ac8         cvtsi2sd xmm1, rax
+004021f4  f20f59ca           mulsd   xmm1, xmm2
+004021f8  f20f114c24f8       movsd   qword [rsp-0x8], xmm1
+004021fe  0fbe050b3e0000     movsx   eax, byte [rel _9]
+00402205  0fbe35053e0000     movsx   esi, byte [rel _8]
+0040220c  0fbe3d053e0000     movsx   edi, byte [rel _1]
+00402213  83c007             add     eax, 0x7
+00402216  f7f6               div     esi  {0x0}  {0x0}
+00402218  39f8               cmp     eax, edi
+0040221a  741a               je      0x402236
+
+0040221c  0fbe15f33d0000     movsx   edx, byte [rel _3]
+00402223  0fbe051f3e0000     movsx   eax, byte [rel _0]
+0040222a  8d04c0             lea     eax, [rax+rax*8]
+0040222d  8d440206           lea     eax, [rdx+rax+0x6]
+00402231  83f809             cmp     eax, 0x9
+00402234  7530               jne     0x402266
+
+00402236  0fb605d33d0000     movzx   eax, byte [rel _9]
+0040223d  0fb605cd3d0000     movzx   eax, byte [rel _8]
+00402244  0fb605cd3d0000     movzx   eax, byte [rel _1]
+0040224b  0fb605be3d0000     movzx   eax, byte [rel _9]
+00402252  0fb605b83d0000     movzx   eax, byte [rel _8]
+00402259  0fb605b83d0000     movzx   eax, byte [rel _1]
+00402260  f20f104424f8       movsd   xmm0, qword [rsp-0x8]
+
+00402266  89c8               mov     eax, ecx
+00402268  5b                 pop     rbx
+00402269  c3                 retn    
