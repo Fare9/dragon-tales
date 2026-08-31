@@ -132,6 +132,13 @@ struct ExecWarning {
 
 /// What a run() did.
 struct RunResult {
+  private:
+  friend class SymbolicExecutor;
+
+  // Must precede Z3 expressions so it is destroyed after successor guards.
+  std::shared_ptr<z3::context> ownedContext_;
+
+  public:
   ExecStatus status = ExecStatus::Ok;
   ExitKind exit = ExitKind::FallThrough;
   std::string error; ///< Set when status != Ok.
@@ -460,7 +467,7 @@ class SymbolicExecutor {
 
   static void warn(RunResult &result, const Op &op, std::string message);
 
-  std::unique_ptr<z3::context> ownedCtx_;
+  std::shared_ptr<z3::context> ownedCtx_;
   z3::context *ctx_;
   SymbolicOptions opts_;
   SymbolicState state_;

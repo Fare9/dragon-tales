@@ -312,7 +312,7 @@ void SymbolicState::addConstraint(const z3::expr &c) {
 // ---------------------------------------------------------------------------
 
 SymbolicExecutor::SymbolicExecutor(SymbolicOptions opts) :
-    ownedCtx_(std::make_unique<z3::context>()), ctx_(ownedCtx_.get()),
+  ownedCtx_(std::make_shared<z3::context>()), ctx_(ownedCtx_.get()),
     opts_(std::move(opts)), state_(*ctx_, opts_), solver_(*ctx_) {
   z3::params p(*ctx_);
   p.set("timeout", opts_.solverTimeoutMs);
@@ -959,6 +959,7 @@ RunResult SymbolicExecutor::run(const Block &block) {
 
 RunResult SymbolicExecutor::run(const std::vector<Op> &ops) {
   RunResult result;
+  result.ownedContext_ = ownedCtx_;
 
   for (const Op &op : ops) {
     const ExecStatus status = step(op, result);
