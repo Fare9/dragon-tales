@@ -25,7 +25,11 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <string_view>
+#include <variant>
 #include <vector>
 
 namespace ignil = dragon::ignil;
@@ -45,6 +49,122 @@ std::string yesNo(std::optional<bool> v) {
   return *v ? "true" : "false";
 }
 
+// ---------------------------------------------------------------------------
+// Showing the work: IGNIL in, Z3 out
+// ---------------------------------------------------------------------------
+
+/// Indent every line of a multi-line string, so a block listing or a Z3
+/// pretty-printed expression nests under the demo output around it.
+std::string indented(const std::string &text, const std::string &pad) {
+  std::string out;
+  std::istringstream in(text);
+  for (std::string line; std::getline(in, line);)
+    out += pad + line + "\n";
+  return out;
+}
+
+/// A pathological expression should not bury the demo it belongs to.
+std::string clipped(const std::string &s, std::size_t max = 640) {
+  if (s.size() <= max)
+    return s;
+  return s.substr(0, max) + "\n... [" + std::to_string(s.size() - max) +
+         " more chars]";
+}
+
+/// Collapse a pretty-printed expression onto one line, for the places it
+/// belongs inline in a listing rather than in a block of its own.
+std::string oneLine(const z3::expr &e, std::size_t max = 180) {
+  const std::string s = e.to_string();
+  std::string out;
+  bool space = false;
+  for (const char c : s) {
+    const bool blank = c == '\n' || c == ' ' || c == '\t';
+    if (blank) {
+      space = true;
+      continue;
+    }
+    if (space && !out.empty())
+      out += ' ';
+    space = false;
+    out += c;
+  }
+  if (out.size() > max)
+    out = out.substr(0, max) + " ...";
+  return out;
+}
+
+/// What the lifter handed the executor.
+///
+/// IGNIL is a flat op list, not a tree: one `Op` per elementary effect, with
+/// every side effect the machine instruction implies - the flags above all -
+/// spelled out explicitly. That flatness is why the executor is a plain `for`
+/// loop over `ops()` rather than a recursive tree walk, and it is why three
+/// x86 instructions become the op counts below.
+void showIGNIL(const ignil::Block &block) {
+  std::cout << "\n  -- IGNIL: what the executor walks --\n"
+            << indented(ignil::toString(block), "  ");
+}
+
+/// What the executor built out of it.
+///
+/// The first form is literally the `z3::expr` the run produced: one Z3 node per
+/// IGNIL op that fed this value, threaded through the byte-granular register
+/// file, with every extract/concat that implies still in place. The second is
+/// Z3's rewriter run over the same term. `simplify()` is syntactic
+/// normalisation, *not* a solver call - it folds constants and collapses
+/// extract-of-concat, but it proves nothing. Anything that needs a proof (an
+/// MBA identity, say) comes through it unchanged, and only `proves()` settles
+/// it. Demo 5 is that difference on purpose.
+void showExpr(std::string_view label, const z3::expr &e) {
+  const std::string raw = e.to_string();
+  const std::string simple = e.simplify().to_string();
+
+  std::cout << "\n  -- Z3: " << label << " --\n"
+            << "  as executed (" << raw.size() << " chars):\n"
+            << indented(clipped(raw), "    ");
+  if (simple == raw) {
+    std::cout << "  simplify() leaves it unchanged\n";
+    return;
+  }
+  std::cout << "  after simplify() (" << simple.size() << " chars"
+            << (simple.size() > raw.size() ? " - bigger, see below" : "")
+            << "):\n"
+            << indented(clipped(simple), "    ");
+  if (simple.size() > raw.size())
+    // Worth seeing at least once: "simplified" means normalised, not smaller.
+    // XOR against a constant is a per-bit rewrite, so Z3 happily expands one
+    // 64-bit bvxor into 64 negations of individual extracts. The solver reads
+    // that form no worse; a human reads it much worse.
+    std::cout << "  (simplify() normalises, it does not minimise)\n";
+}
+
+/// The executor's expression for one IGNIL operand - the bridge the two
+/// listings are there to show: `t7:i64` in the IGNIL *is* this Z3 term.
+/// `SymbolicExecutor::eval` does exactly this internally, but it is private;
+/// the public readTemp/readRegister reproduce it for the two cases that carry
+/// a computed value.
+std::optional<z3::expr> operandExpr(const ignil::SymbolicExecutor &exec,
+                                    const ignil::Value &v) {
+  if (const auto *t = std::get_if<ignil::Temp>(&v))
+    return exec.readTemp(*t);
+  if (const auto *r = std::get_if<ignil::Reg>(&v))
+    return exec.readRegister(*r);
+  return std::nullopt; // a Const operand is already its own expression
+}
+
+/// Source `index` of the block's terminator, as the executor computed it:
+/// the target of a JMP, or the condition of a CJMP.
+std::optional<z3::expr> terminatorSrc(const ignil::Block &block,
+                                      const ignil::SymbolicExecutor &exec,
+                                      std::size_t index = 0) {
+  if (block.empty())
+    return std::nullopt;
+  const ignil::Op &last = block.ops().back();
+  if (index >= last.srcs.size())
+    return std::nullopt;
+  return operandExpr(exec, last.srcs[index]);
+}
+
 /// Disassemble, lift, and hand back the IGNIL block at `base`. The Graph owns
 /// the block, so it is returned alongside it.
 struct Lifted {
@@ -52,6 +172,8 @@ struct Lifted {
   const ignil::Block *block;
 };
 
+/// Create a Graph and lift the first basic block from the code
+/// return the block and the Graph that owns it.
 Lifted lift(const std::vector<std::uint8_t> &code, std::uint64_t base = 0x1000) {
   dragon::Configuration cfg;
   cfg.disassemblyStrategy = dragon::DisassemblyStrategy::LINEAR_SWEEP;
@@ -76,6 +198,7 @@ void demoExpressionRecovery() {
   //   0x1003: 48 01 F0   add rax, rsi
   //   0x1006: c3         ret
   Lifted lifted = lift({0x48, 0x31, 0xF8, 0x48, 0x01, 0xF0, 0xC3});
+  showIGNIL(*lifted.block);
 
   ignil::SymbolicExecutor exec;
   exec.setRegister(x86::RAX, 0);
@@ -87,6 +210,19 @@ void demoExpressionRecovery() {
             << result.stats.opsExecuted << " executed\n";
 
   const z3::expr rax = exec.readRegister(x86::RAX);
+
+  // The point of the whole exercise. Two x86 instructions' worth of IGNIL
+  // collapse into one term over the two symbols, and `simplify()` folds away
+  // the `0 ^ a` that xoring against a zeroed RAX left behind.
+  showExpr("RAX after the block", rax);
+
+  // A flag is an expression like any other, and this is where most of those
+  // IGNIL ops went. ZF is a comparison against zero reified as an 8-bit 0/1
+  // value, because the register file is byte-granular - nothing downstream
+  // reads it here, but the executor computed it anyway, exactly as the machine
+  // would have.
+  showExpr("ZF after the block", exec.readRegister(x86::ZF));
+
   // The flags the lifter sets on the way do not get in the way: the solver is
   // asked about the value, not the syntax.
   std::cout << "  proves RAX == a + b : " << yesNo(exec.proves(rax == a + b))
@@ -120,6 +256,7 @@ void demoCrackme() {
   //   0x1003: 48 31 F0   xor rax, rsi
   //   0x1006: c3         ret
   Lifted lifted = lift({0x48, 0x8B, 0x07, 0x48, 0x31, 0xF0, 0xC3});
+  showIGNIL(*lifted.block);
 
   ignil::SymbolicExecutor exec;
   exec.setRegister(x86::RDI, kBuffer);
@@ -128,6 +265,16 @@ void demoCrackme() {
   exec.run(*lifted.block);
 
   const z3::expr rax = exec.readRegister(x86::RAX);
+
+  // What the LOAD produced: eight symbolic bytes concatenated little-endian,
+  // so flag[7] - the highest address - is leftmost. Those eight symbols are
+  // what Solution::bytes("flag") reads back out of the model below.
+  showExpr("the 8 bytes at [RDI], as loaded", exec.readMemory(kBuffer, 64));
+
+  // ...and the same term XORed with the key. Solving `this == expected` is
+  // the whole crackme.
+  showExpr("RAX after the block", rax);
+
   auto solution = exec.solve(rax == exec.bv(expected, 64));
   if (!solution) {
     std::cout << "  no input satisfies the check\n";
@@ -152,8 +299,12 @@ void demoCrackme() {
 
 void printSuccessors(const ignil::RunResult &r) {
   for (const ignil::Successor &s : r.successors)
+    // Each successor carries the guard under which it is reached, already
+    // simplified by stepBranch. A single-successor result means the other
+    // guard came back unsat - the edge was pruned, not merely unlisted.
     std::cout << "    -> 0x" << std::hex << s.address << std::dec
-              << "  (taken=" << (s.taken ? "true" : "false") << ")\n";
+              << "  (taken=" << (s.taken ? "true" : "false")
+              << ")  under: " << oneLine(s.condition) << "\n";
   std::cout << "    complete=" << (r.complete() ? "true" : "false")
             << ", solver queries=" << r.stats.solverQueries << "\n";
 }
@@ -171,9 +322,19 @@ void demoBranchResolution() {
   {
     std::cout << "  with RDI unknown:\n";
     Lifted lifted = lift(code);
+    showIGNIL(*lifted.block);
+
     ignil::SymbolicExecutor exec;
     exec.symbolizeRegister(x86::RDI, "n");
-    printSuccessors(exec.run(*lifted.block));
+    const ignil::RunResult r = exec.run(*lifted.block);
+
+    // The CJMP's condition operand, as the executor computed it. `jl` is
+    // SF != OF, and both flags trace back through the subtraction the `cmp`
+    // lifted to - which is why a two-instruction compare-and-branch produces
+    // a term this size before Z3's rewriter gets to it.
+    if (auto cond = terminatorSrc(*lifted.block, exec))
+      showExpr("the CJMP condition (jl = SF != OF)", *cond);
+    printSuccessors(r);
   }
   {
     std::cout << "  knowing RDI > 100:\n";
@@ -211,6 +372,8 @@ void demoDispatchRecovery() {
   {
     std::cout << "  with the opcode range-checked:\n";
     Lifted lifted = lift(code);
+    showIGNIL(*lifted.block);
+
     ignil::SymbolicExecutor exec;
     exec.mapMemory(kHandlers, table);
     exec.setRegister(x86::RDI, kBytecode);
@@ -220,6 +383,18 @@ void demoDispatchRecovery() {
     exec.assume(z3::ult(opcode, exec.bv(handlers.size(), 8)));
 
     const ignil::RunResult r = exec.run(*lifted.block);
+
+    // The fetched opcode, zero-extended into ESI by the movzx. This is the
+    // value gap #4 used to lose: before the memory-source MOVZX forms were
+    // lifted, this read UNDEF and the enumeration below found nothing.
+    showExpr("the fetched VM opcode, in RSI", exec.readRegister(x86::RSI));
+
+    // The JMP's target operand - a load from the handler table at a symbolic
+    // index. `assume`ing the opcode in range is what makes this enumerable:
+    // the successors below are exactly its satisfying values.
+    if (auto target = terminatorSrc(*lifted.block, exec))
+      showExpr("the computed jump target", *target);
+
     std::cout << "    discovered " << r.successors.size() << " handlers "
               << "(complete=" << (r.complete() ? "true" : "false") << "):\n";
     for (const ignil::Successor &s : r.successors)
@@ -234,6 +409,16 @@ void demoDispatchRecovery() {
     exec.symbolizeMemory(kBytecode, 1, "vm_opcode");
 
     const ignil::RunResult r = exec.run(*lifted.block);
+
+    // Not the same term at all, and that is the lesson. Without the range
+    // constraint the *load address* `rsi*8 + 0x6000` has 256 satisfying
+    // values, over the concretisation budget - so the LOAD could not be
+    // resolved to any table slot and returned a fresh unconstrained symbol
+    // instead. The jump target is that bare symbol: no table, no handlers, and
+    // nothing for enumeration to bite on. Both warnings below follow from it.
+    if (auto target = terminatorSrc(*lifted.block, exec))
+      showExpr("the jump target, unconstrained", *target);
+
     std::cout << "    successors=" << r.successors.size()
               << ", complete=" << (r.complete() ? "true" : "false") << "\n";
     for (const ignil::ExecWarning &w : r.warnings)
@@ -256,6 +441,7 @@ void demoMBA() {
   {
     Lifted lifted = lift({0x48, 0x89, 0xF8, 0x48, 0x09, 0xF0, 0x48, 0x89,
                           0xF9, 0x48, 0x21, 0xF1, 0x48, 0x01, 0xC8, 0xC3});
+    showIGNIL(*lifted.block);
 
     ignil::SymbolicExecutor exec;
     const z3::expr a = exec.symbolizeRegister(x86::RDI, "a");
@@ -263,6 +449,13 @@ void demoMBA() {
     exec.run(*lifted.block);
 
     const z3::expr rax = exec.readRegister(x86::RAX);
+
+    // The clearest illustration of what simplify() is not. The MBA survives it
+    // intact - `(a|b) + (a&b)` is a rewriter's fixpoint, there is no local
+    // rule that turns it into `a + b`. Only the equivalence *query* below
+    // settles it, by failing to find a counterexample.
+    showExpr("RAX after the MBA block", rax);
+
     std::cout << "  (a|b) + (a&b) == a + b : "
               << yesNo(exec.proves(rax == a + b)) << "\n"
               << "  (a|b) + (a&b) == a ^ b : "
@@ -278,10 +471,17 @@ void demoMBA() {
     Lifted lifted = lift({0x48, 0x89, 0xF8, 0x48, 0x31, 0xF0, 0x48, 0x89,
                           0xC1, 0x48, 0x01, 0xF1, 0x48, 0x29, 0xC1, 0xC3});
 
+    showIGNIL(*lifted.block);
+
     ignil::SymbolicExecutor exec;
     exec.symbolizeRegister(x86::RDI, "x");
     exec.setRegister(x86::RSI, 0xA5A5);
     exec.run(*lifted.block);
+
+    // x appears all over this term, and it still cannot affect the result.
+    // evaluate() is what proves that: a candidate model, then a second query
+    // asking whether any model disagrees.
+    showExpr("RCX = ((x^k) + k) - (x^k)", exec.readRegister(x86::RCX));
 
     const auto constant = exec.evaluate(exec.readRegister(x86::RCX));
     const auto varying = exec.evaluate(exec.readRegister(x86::RAX));
