@@ -1044,3 +1044,100 @@ TEST_CASE("IGNIL lifting - shift-by-1 dedicated opcodes "
   std::cout << "\n=== IGNIL Lifting: shift-by-1 dedicated opcodes ===";
   printIgnilComparison(g);
 }
+
+// -----------------------------------------------------------------------
+// MOVZX / MOVSX with a memory operand (ToDo/LifterGaps.md #4)
+// -----------------------------------------------------------------------
+
+namespace {
+
+// First op with this opcode, or nullptr.
+const dragon::ignil::Op *firstOp(const dragon::ignil::Block &ib,
+                                 dragon::ignil::Opcode opcode) {
+  for (const dragon::ignil::Op &op: ib)
+    if (op.opcode == opcode)
+      return &op;
+  return nullptr;
+}
+
+struct ExtendCase {
+  const char *disasm;
+  std::vector<std::uint8_t> bytes;
+  dragon::ignil::Opcode extend;
+  dragon::ignil::Width dstWidth;
+  dragon::ignil::Width srcWidth;
+  bool fromMemory;
+};
+
+} // namespace
+
+TEST_CASE("IGNIL lifting - movzx/movsx load at the width the mnemonic names",
+          "[ignil][x86_64]") {
+  // The memory-source forms are the point here. Checking only that no UNDEF
+  // is emitted would not catch the failure mode they actually have: op[1] is
+  // a register in *both* forms (for an rm form it is the memory operand's
+  // base), so a lifter that decides which form it has by looking at the
+  // operands takes the register path, emits `EAX = ZEXT(RBX)` with no load at
+  // all, and looks perfectly healthy. So assert the shape: a LOAD of exactly
+  // the mnemonic's width, feeding the extend.
+  using dragon::ignil::Opcode;
+
+  const std::vector<ExtendCase> cases = {
+          // Memory source - the gap this covers.
+          {"movzx eax, byte ptr [rbx]", {0x0f, 0xb6, 0x03}, Opcode::ZEXT, 32, 8, true},
+          {"movzx eax, word ptr [rbx]", {0x0f, 0xb7, 0x03}, Opcode::ZEXT, 32, 16, true},
+          {"movzx rax, byte ptr [rbx]", {0x48, 0x0f, 0xb6, 0x03}, Opcode::ZEXT, 64, 8, true},
+          {"movzx rax, word ptr [rbx]", {0x48, 0x0f, 0xb7, 0x03}, Opcode::ZEXT, 64, 16, true},
+          {"movsx eax, byte ptr [rbx]", {0x0f, 0xbe, 0x03}, Opcode::SEXT, 32, 8, true},
+          {"movsx eax, word ptr [rbx]", {0x0f, 0xbf, 0x03}, Opcode::SEXT, 32, 16, true},
+          {"movsx rax, byte ptr [rbx]", {0x48, 0x0f, 0xbe, 0x03}, Opcode::SEXT, 64, 8, true},
+          {"movsx rax, word ptr [rbx]", {0x48, 0x0f, 0xbf, 0x03}, Opcode::SEXT, 64, 16, true},
+          {"movsxd rax, dword ptr [rbx]", {0x48, 0x63, 0x03}, Opcode::SEXT, 64, 32, true},
+          // Register source - unchanged behaviour, including the widths that
+          // had no dispatch entry before (movsx rax, bl / movsx eax, bx).
+          {"movzx eax, bl", {0x0f, 0xb6, 0xc3}, Opcode::ZEXT, 32, 8, false},
+          {"movsx eax, bl", {0x0f, 0xbe, 0xc3}, Opcode::SEXT, 32, 8, false},
+          {"movsx eax, bx", {0x0f, 0xbf, 0xc3}, Opcode::SEXT, 32, 16, false},
+          {"movsx rax, bl", {0x48, 0x0f, 0xbe, 0xc3}, Opcode::SEXT, 64, 8, false},
+          {"movsx rax, bx", {0x48, 0x0f, 0xbf, 0xc3}, Opcode::SEXT, 64, 16, false},
+          {"movsxd rax, ebx", {0x48, 0x63, 0xc3}, Opcode::SEXT, 64, 32, false},
+  };
+
+  for (const ExtendCase &c: cases) {
+    INFO(c.disasm);
+
+    std::vector<std::uint8_t> bytes = c.bytes;
+    bytes.push_back(0xc3); // ret
+
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    auto g = makeGraph(dragon::Architecture::X86_64);
+    dis.disassemble(bytes, 0x1000, g);
+
+    const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+    REQUIRE(ib != nullptr);
+    REQUIRE(countUndef(*ib) == 0); // neither MOVZX nor MOVSX touches flags
+
+    const dragon::ignil::Op *extend = firstOp(*ib, c.extend);
+    REQUIRE(extend != nullptr);
+    REQUIRE(extend->srcs.size() == 1);
+    REQUIRE(dragon::ignil::widthOf(extend->dst.value()) == c.dstWidth);
+    REQUIRE(dragon::ignil::widthOf(extend->srcs[0]) == c.srcWidth);
+
+    const dragon::ignil::Op *load = firstOp(*ib, dragon::ignil::Opcode::LOAD);
+    if (!c.fromMemory) {
+      // A register source must not have invented a memory access.
+      REQUIRE(load == nullptr);
+      REQUIRE(std::holds_alternative<dragon::ignil::Reg>(extend->srcs[0]));
+      continue;
+    }
+
+    // The extend must consume exactly what the load produced, at the width
+    // the mnemonic names - not the pointer's width, and not the base
+    // register.
+    REQUIRE(load != nullptr);
+    REQUIRE(dragon::ignil::widthOf(load->dst.value()) == c.srcWidth);
+    REQUIRE(std::holds_alternative<dragon::ignil::Temp>(extend->srcs[0]));
+    REQUIRE(std::get<dragon::ignil::Temp>(extend->srcs[0]).id ==
+            std::get<dragon::ignil::Temp>(load->dst.value()).id);
+  }
+}

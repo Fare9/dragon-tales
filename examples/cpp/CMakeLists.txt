@@ -36,6 +36,17 @@ target_include_directories(llvmir_lifting PRIVATE
 )
 
 if(DRAGON_USE_Z3)
+    # Symbolic execution of lifted IGNIL: solving for inputs, proving MBA
+    # identities, and resolving computed jumps to their real targets.
+    add_executable(symbolic_execution symbolic_execution.cpp)
+
+    target_link_libraries(symbolic_execution PRIVATE dragon::libdragon z3::libz3)
+
+    target_include_directories(symbolic_execution PRIVATE
+            ${CMAKE_SOURCE_DIR}/include
+            ${LLVM_INCLUDE_DIRS}
+    )
+
     add_executable(z3_path_discovery z3_path_discovery.cpp)
 
     target_link_libraries(z3_path_discovery PRIVATE dragon::libdragon z3::libz3)

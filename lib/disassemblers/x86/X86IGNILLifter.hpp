@@ -62,6 +62,14 @@ class X86IGNILLifter {
   liftTrace(std::span<const Instruction> trace) const;
 
   private:
+  // How one MOVZX/MOVSX spelling extends: the width in bits of the value
+  // being widened, and whether that value comes from memory (the rm forms)
+  // rather than a register (the rr forms).
+  struct MovExtendForm {
+    ignil::Width srcWidth;
+    bool memorySource;
+  };
+
   internal::Logger& logger_;
 
   Architecture architecture_;
@@ -142,13 +150,27 @@ class X86IGNILLifter {
                std::uint32_t &tmp) const;
   void liftLeave(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                  std::uint32_t &tmp) const;
-  // Sign-extending move (e.g. `movsxd rax, edi`): op[0]=dst(wider),
-  // op[1]=src(narrower). No flags affected. Found while lifting a real
-  // compiled signed-division-by-constant sequence (GCC's standard
-  // multiply-high lowering for `x / C`), not obfuscation-specific - this
-  // shows up in any program that divides by a non-power-of-two constant.
-  void liftMovsx(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
-                 std::uint32_t &tmp) const;
+  // Widening move, MOVSX/MOVZX in both their register-source
+  // (`movsxd rax, edi`) and memory-source (`movzx eax, byte ptr [rdi]`)
+  // forms: op[0]=dst(wider), op[1]=src(narrower) or op[1..5]=mem.
+  // No flags affected.
+  //
+  // Both facts come from the opcode, not the operands. The width, because a
+  // memory reference carries no size of its own - only the MOVZX32rm8 /
+  // MOVZX32rm16 spelling says how many bytes to load. And which form it is,
+  // because op[1] is a register either way: for the rm forms it is the memory
+  // operand's *base* register, so testing isReg() would silently take the
+  // register path and drop the load. movzxForms_ / movsxForms_ hold both.
+  //
+  // The sign-extending form was found while lifting a real compiled
+  // signed-division-by-constant sequence (GCC's standard multiply-high
+  // lowering for `x / C`), not obfuscation-specific - it shows up in any
+  // program that divides by a non-power-of-two constant. The memory-source
+  // forms matter for bytecode dispatchers, where `movzx r32, [vip]` feeding
+  // a handler-table index is the canonical opcode fetch.
+  void liftMovExtend(const llvm::MCInst &mc, std::uint64_t addr,
+                     MovExtendForm form, bool signExtend, ignil::Block &out,
+                     std::uint32_t &tmp) const;
   // SAR by immediate: op[0]=dst(out), op[1]=src(tied=dst), op[2]=imm shift
   // count. Real x86: shift by 0 leaves every flag (and the value) untouched
   // - not even recomputed. CF = the last bit shifted out; SF/ZF as usual;
@@ -193,11 +215,6 @@ class X86IGNILLifter {
   // negative value for its width - unrepresentable when negated).
   void liftNeg(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
               std::uint32_t &tmp) const;
-  // Zero-extending move (e.g. `movzx eax, bl`): op[0]=dst(wider),
-  // op[1]=src(narrower). No flags affected - same shape as liftMovsx,
-  // ZEXT instead of SEXT.
-  void liftMovzx(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
-                std::uint32_t &tmp) const;
   // SHL by immediate: op[0]=dst(out), op[1]=src(tied=dst), op[2]=imm shift
   // count. Same imm==0-leaves-everything-untouched rule as liftSarImm. CF
   // = the last bit shifted out the *top* (bit width-imm of the original
@@ -375,17 +392,22 @@ class X86IGNILLifter {
   unsigned opRet64_{}, opRetL_{};
   unsigned opRetI64_{}, opRetIL_{}; // ret N  (callee-cleanup variant)
   unsigned opLeave64_{}, opLeave_{}; // leave (decomposed to mov rsp,rbp / pop rbp)
-  unsigned opMovsx64rr32_{}, opMovsx32rr8_{};
   unsigned opSar32ri_{}, opSar64ri_{};
   unsigned opImul64rri32_{}, opImul64rri8_{}, opImul32rri_{}, opImul32rri8_{};
   unsigned opImul32rr_{}, opImul64rr_{};
   unsigned opLea64_32r_{};
   unsigned opInc32r_{}, opInc64r_{}, opDec32r_{}, opDec64r_{};
   unsigned opNeg32r_{}, opNeg64r_{};
-  unsigned opMovzx32rr8_{}, opMovzx32rr16_{}, opMovzx64rr8_{}, opMovzx64rr16_{};
   unsigned opShl32ri_{}, opShl64ri_{}, opShr32ri_{}, opShr64ri_{};
   unsigned opSar32r1_{}, opSar64r1_{}, opShl32r1_{}, opShl64r1_{},
           opShr32r1_{}, opShr64r1_{};
+  // MOVZX/MOVSX opcode -> how to lift it. Every variant LLVM decodes is in
+  // here, register- and memory-source alike, so a spelling that is not covered
+  // fails loud (UNDEF from liftInstruction's default case) rather than being
+  // lifted at the wrong width or off the wrong operand.
+  std::unordered_map<unsigned, MovExtendForm> movzxForms_;
+  std::unordered_map<unsigned, MovExtendForm> movsxForms_;
+
   unsigned opPxorRR_{};
   unsigned opCvtsi2sd32_{}, opCvtsi2sd64_{};
   unsigned opCvttsd2si32_{}, opCvttsd2si64_{};

@@ -564,6 +564,182 @@ dragon_graph_destroy(graph);
 
 ---
 
+## Symbolic execution
+
+Declared inside `#ifdef DRAGON_WITH_Z3`, so this section is only available
+when the library was built with `-DDRAGON_USE_Z3=ON`.
+
+Runs lifted IGNIL over Z3 bitvectors. Four handle types, all owned by the
+caller: `dragon_symexec_t` (the executor, its state and its solver),
+`dragon_symexpr_t` (one Z3 expression), `dragon_symrun_t` (one run's outcome)
+and `dragon_solution_t` (a satisfying assignment).
+
+> A `dragon_symexpr_t` may safely outlive the `dragon_symexec_t` that
+> produced it: a Z3 expression does not own its context, so each expression
+> handle holds a reference to the executor and `dragon_symexec_destroy` only
+> drops yours. Destroy every handle you are given, in whatever order suits
+> the caller.
+
+### Setting up and running
+
+Registers are named by their IGNIL register-space byte offset and bit width —
+the values in `x86IGNILRegs.hpp` / `armIGNILRegs.hpp` (`RAX` is offset 0
+width 64, `EAX` offset 0 width 32, `AH` offset 1 width 8).
+
+```c
+// NULL options means all library defaults.
+dragon_symexec_t* ex = dragon_symexec_create(NULL);
+
+dragon_symexec_set_register(ex, /*RDI*/ 56, 64, 0x4000);
+dragon_symexpr_t* flag = dragon_symexec_symbolize_memory(ex, 0x4000, 8, "flag");
+
+dragon_symrun_t* run = dragon_symexec_run(ex, block);
+printf("exit=%d complete=%d\n",
+       dragon_symrun_exit(run), dragon_symrun_complete(run));
+```
+
+State persists across runs, so walking a path is a sequence of
+`dragon_symexec_run` calls. `dragon_symexec_reset` clears it.
+
+Options default when left at zero, so a zero-initialised struct means "all
+defaults". The three flags are tri-state for that reason: `0` keeps the
+default, `1` turns the behaviour on, `-1` turns it off.
+
+```c
+dragon_symexec_options_t opts = {0};
+opts.max_branch_targets = 1024;
+opts.stop_at_terminator = -1;      // trace mode: step over interior jumps
+dragon_symexec_t* ex = dragon_symexec_create(&opts);
+```
+
+### Building expressions
+
+There is no way to pass a Z3 expression across a C boundary, so the shim
+provides leaf constructors and a binary-operator builder instead.
+
+```c
+dragon_symexpr_t* rax = dragon_symexec_read_register(ex, /*RAX*/ 0, 64);
+dragon_symexpr_t* target = dragon_symexec_const(ex, 0xdeadbeef, 64);
+dragon_symexpr_t* goal = dragon_symexpr_binop(DRAGON_SYMOP_EQ, rax, target);
+
+char* text = dragon_symexpr_to_string(goal);
+puts(text);
+dragon_cstr_free(text);
+```
+
+`dragon_symexpr_binop` returns `NULL` rather than crashing when the operands'
+sorts do not fit the operator — mismatched widths, a boolean where a bitvector
+belongs, or two expressions from different executors.
+
+Operators `DRAGON_SYMOP_ADD` … `DRAGON_SYMOP_XOR` take and return bitvectors;
+`DRAGON_SYMOP_EQ` … `DRAGON_SYMOP_SGE` take bitvectors and return a boolean
+(`ULT`/`ULE`/`UGT`/`UGE` unsigned, `SLT`/`SLE`/`SGT`/`SGE` signed);
+`DRAGON_SYMOP_BOOL_AND`/`BOOL_OR`/`IMPLIES` take and return booleans.
+`dragon_symexpr_not` is boolean negation.
+
+### Solver queries
+
+The tri-state predicates return `1` (yes), `0` (no) or `-1` (the solver timed
+out or gave up) — never a guess.
+
+```c
+dragon_symexec_assume(ex, precondition);
+
+int holds = dragon_symexec_proves(ex, goal);
+
+uint64_t value;
+if (dragon_symexec_evaluate(ex, rax, &value))
+    printf("forced to a single value: 0x%llx\n", (unsigned long long)value);
+
+uint64_t targets[64];
+int exhaustive = 0;
+size_t n = dragon_symexec_enumerate(ex, rax, targets, 64, &exhaustive);
+```
+
+`dragon_symexec_evaluate` writes `*out` only when the path constraints force
+exactly one value — the "is this obfuscated expression really a constant?"
+query. `dragon_symexec_enumerate` sets `*out_exhaustive` to 1 only when the
+enumeration ran out of values rather than hitting `max`.
+
+### Reading a model
+
+A symbolic region of N bytes creates N variables named `<region>[0]`..
+`<region>[N-1]`; `dragon_solution_bytes` reads them back in address order. It
+returns the region's full size and writes at most `cap` bytes, so calling it
+with `cap == 0` gives the size to allocate.
+
+```c
+dragon_solution_t* sol = dragon_symexec_solve(ex, goal);
+if (sol) {
+    size_t   size  = dragon_solution_bytes(sol, "flag", NULL, 0);
+    uint8_t* bytes = malloc(size);
+    dragon_solution_bytes(sol, "flag", bytes, size);
+
+    uint64_t n;
+    if (dragon_solution_value(sol, "some_symbol", &n))
+        printf("some_symbol = %llu\n", (unsigned long long)n);
+
+    free(bytes);
+    dragon_solution_destroy(sol);
+}
+```
+
+`dragon_symexec_solve` returns `NULL` when no assignment exists — an
+unreachable goal is reported, never guessed at. Pass `NULL` for `goal` to
+solve the path constraints alone. `dragon_solution_each` walks every bound
+symbol.
+
+### Reading a run's control flow
+
+```c
+for (size_t i = 0; i < dragon_symrun_successor_count(run); ++i) {
+    uint64_t addr; int taken;
+    dragon_symrun_successor(run, i, &addr, &taken);
+    printf("  -> 0x%llx (taken=%d)\n", (unsigned long long)addr, taken);
+
+    // The guard under which that successor is reached; owned.
+    dragon_symexpr_t* guard = dragon_symrun_successor_condition(run, i);
+    dragon_symexpr_destroy(guard);
+}
+
+for (size_t i = 0; i < dragon_symrun_warning_count(run); ++i) {
+    uint64_t at;
+    char* msg = dragon_symrun_warning(run, i, &at);
+    printf("  warning @0x%llx: %s\n", (unsigned long long)at, msg);
+    dragon_cstr_free(msg);
+}
+```
+
+`dragon_symrun_complete` is the honesty check: `1` only when the run succeeded
+*and* every address and branch target resolved exactly, so the successor list
+really is the complete set of reachable addresses. Otherwise the warnings say
+what had to be left open.
+
+### API summary
+
+| Function | Description |
+|---|---|
+| `dragon_symexec_create(opts)` / `_destroy` / `_reset` | Executor lifetime |
+| `dragon_symexec_set_register(e, off, width, value)` | Seed a register concretely |
+| `dragon_symexec_symbolize_register(e, off, width, name)` | Bind it to a fresh variable |
+| `dragon_symexec_map_memory(e, addr, data, len)` | Map a concrete blob |
+| `dragon_symexec_symbolize_memory(e, addr, size, name)` | Per-byte variables for a region |
+| `dragon_symexec_assume(e, cond)` | Constrain the rest of the run |
+| `dragon_symexec_const/read_register/read_memory` | Leaf expressions |
+| `dragon_symexpr_binop(op, a, b)` / `_not(a)` | Build expressions; NULL on a sort mismatch |
+| `dragon_symexpr_to_string/width/is_bool/destroy` | Inspect and free an expression |
+| `dragon_symexec_run(e, block)` | Execute a block; state persists |
+| `dragon_symrun_status/exit/complete/error/stats` | What the run did |
+| `dragon_symrun_successor_count/successor/successor_condition` | Reachable addresses |
+| `dragon_symrun_warning_count/warning` | What was left unresolved |
+| `dragon_symexec_proves/is_satisfiable` | Tri-state: 1 yes, 0 no, -1 unknown |
+| `dragon_symexec_evaluate(e, x, out)` | Value, only if forced to exactly one |
+| `dragon_symexec_enumerate(e, x, out, max, exhaustive)` | Distinct satisfying values |
+| `dragon_symexec_solve(e, goal)` | A satisfying assignment, or NULL |
+| `dragon_solution_value/bytes/each/destroy` | Read the model back |
+
+---
+
 ## FLIRT signatures
 
 `dragon_sigdb_t` wraps a `SignatureDB` — a loaded collection of FLIRT-style

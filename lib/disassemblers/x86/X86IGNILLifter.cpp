@@ -167,8 +167,6 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"RETIL", &X86IGNILLifter::opRetIL_},
           {"LEAVE64", &X86IGNILLifter::opLeave64_},
           {"LEAVE", &X86IGNILLifter::opLeave_},
-          {"MOVSX64rr32", &X86IGNILLifter::opMovsx64rr32_},
-          {"MOVSX32rr8", &X86IGNILLifter::opMovsx32rr8_},
           {"SAR32ri", &X86IGNILLifter::opSar32ri_},
           {"SAR64ri", &X86IGNILLifter::opSar64ri_},
           {"IMUL64rri32", &X86IGNILLifter::opImul64rri32_},
@@ -184,10 +182,6 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"DEC64r", &X86IGNILLifter::opDec64r_},
           {"NEG32r", &X86IGNILLifter::opNeg32r_},
           {"NEG64r", &X86IGNILLifter::opNeg64r_},
-          {"MOVZX32rr8", &X86IGNILLifter::opMovzx32rr8_},
-          {"MOVZX32rr16", &X86IGNILLifter::opMovzx32rr16_},
-          {"MOVZX64rr8", &X86IGNILLifter::opMovzx64rr8_},
-          {"MOVZX64rr16", &X86IGNILLifter::opMovzx64rr16_},
           {"SHL32ri", &X86IGNILLifter::opShl32ri_},
           {"SHL64ri", &X86IGNILLifter::opShl64ri_},
           {"SHR32ri", &X86IGNILLifter::opShr32ri_},
@@ -212,10 +206,64 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"MOVSDmr", &X86IGNILLifter::opMovsdStore_},
   };
 
+  // MOVZX/MOVSX are kept out of kOpcodeFields: there are twenty-odd spellings
+  // between them, all dispatching to one handler, and each needs the width of
+  // the value it extends. A name -> width table keyed by opcode says both
+  // things at once, where twenty named members would say neither.
+  //
+  // The width is the *source* width from the mnemonic (MOVZX32rm8 loads one
+  // byte into a 32-bit register). For the memory-source forms it is the only
+  // place that width exists: an x86 memory reference carries no size. The
+  // rr/rm spelling is equally load-bearing - op[1] is a register in both
+  // forms (the memory operand's base), so the name is the only thing that
+  // distinguishes them.
+  static const std::vector<std::pair<std::string_view, ignil::Width>>
+          kMovzxSpellings = {
+                  {"MOVZX16rr8", 8},        {"MOVZX16rm8", 8},
+                  {"MOVZX16rr16", 16},      {"MOVZX16rm16", 16},
+                  {"MOVZX32rr8", 8},        {"MOVZX32rm8", 8},
+                  {"MOVZX32rr8_NOREX", 8},  {"MOVZX32rm8_NOREX", 8},
+                  {"MOVZX32rr16", 16},      {"MOVZX32rm16", 16},
+                  {"MOVZX64rr8", 8},        {"MOVZX64rm8", 8},
+                  {"MOVZX64rr16", 16},      {"MOVZX64rm16", 16},
+          };
+  static const std::vector<std::pair<std::string_view, ignil::Width>>
+          kMovsxSpellings = {
+                  {"MOVSX16rr8", 8},        {"MOVSX16rm8", 8},
+                  {"MOVSX16rr16", 16},      {"MOVSX16rm16", 16},
+                  {"MOVSX16rr32", 32},      {"MOVSX16rm32", 32},
+                  {"MOVSX32rr8", 8},        {"MOVSX32rm8", 8},
+                  {"MOVSX32rr8_NOREX", 8},  {"MOVSX32rm8_NOREX", 8},
+                  {"MOVSX32rr16", 16},      {"MOVSX32rm16", 16},
+                  {"MOVSX32rr32", 32},      {"MOVSX32rm32", 32},
+                  {"MOVSX64rr8", 8},        {"MOVSX64rm8", 8},
+                  {"MOVSX64rr16", 16},      {"MOVSX64rm16", 16},
+                  {"MOVSX64rr32", 32},      {"MOVSX64rm32", 32},
+          };
+
+  // Index them by name, tagging each with the operand form its spelling
+  // implies. Every entry above is either ...rr<N> or ...rm<N>.
+  const auto indexSpellings =
+          [](const std::vector<std::pair<std::string_view, ignil::Width>> &in) {
+            std::unordered_map<std::string_view, MovExtendForm> out;
+            for (const auto &[name, width]: in)
+              out.emplace(name, MovExtendForm{
+                                        width,
+                                        name.find("rm") != std::string_view::npos});
+            return out;
+          };
+  const auto movzxByName = indexSpellings(kMovzxSpellings);
+  const auto movsxByName = indexSpellings(kMovsxSpellings);
+
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
-    if (auto it = kOpcodeFields.find(instrInfo.getName(i));
-        it != kOpcodeFields.end())
+    const std::string_view name = instrInfo.getName(i);
+
+    if (auto it = kOpcodeFields.find(name); it != kOpcodeFields.end())
       this->*(it->second) = i;
+    else if (auto zx = movzxByName.find(name); zx != movzxByName.end())
+      movzxForms_.emplace(i, zx->second);
+    else if (auto sx = movsxByName.find(name); sx != movsxByName.end())
+      movsxForms_.emplace(i, sx->second);
   }
 }
 
@@ -340,8 +388,10 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftJmpMem(*mc, addr, insn.size(), out, tempId);
   else if (opc == opCall64m_ || opc == opCall32m_)
     liftCallMem(*mc, addr, insn.size(), out, tempId);
-  else if (opc == opMovsx64rr32_ || opc == opMovsx32rr8_)
-    liftMovsx(*mc, addr, out, tempId);
+  else if (auto zx = movzxForms_.find(opc); zx != movzxForms_.end())
+    liftMovExtend(*mc, addr, zx->second, /*signExtend=*/false, out, tempId);
+  else if (auto sx = movsxForms_.find(opc); sx != movsxForms_.end())
+    liftMovExtend(*mc, addr, sx->second, /*signExtend=*/true, out, tempId);
   else if (opc == opSar32ri_ || opc == opSar64ri_)
     liftSarImm(*mc, addr, out, tempId);
   else if (opc == opImul64rri32_ || opc == opImul64rri8_ ||
@@ -357,9 +407,6 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftDec(*mc, addr, out, tempId);
   else if (opc == opNeg32r_ || opc == opNeg64r_)
     liftNeg(*mc, addr, out, tempId);
-  else if (opc == opMovzx32rr8_ || opc == opMovzx32rr16_ ||
-           opc == opMovzx64rr8_ || opc == opMovzx64rr16_)
-    liftMovzx(*mc, addr, out, tempId);
   else if (opc == opShl32ri_ || opc == opShl64ri_)
     liftShlImm(*mc, addr, out, tempId);
   else if (opc == opShr32ri_ || opc == opShr64ri_)
@@ -1162,23 +1209,45 @@ void dragon::x86::X86IGNILLifter::liftLeave(const llvm::MCInst &mc,
   out.append({ignil::Opcode::COPY, sp, {newSP}, addr});
 }
 
-void dragon::x86::X86IGNILLifter::liftMovsx(const llvm::MCInst &mc,
-                                            std::uint64_t addr,
-                                            ignil::Block &out,
-                                            std::uint32_t &tmp) const {
-  // op[0]=dst(wider), op[1]=src(narrower). MOVSX never affects flags.
+void dragon::x86::X86IGNILLifter::liftMovExtend(const llvm::MCInst &mc,
+                                               std::uint64_t addr,
+                                               MovExtendForm form,
+                                               bool signExtend,
+                                               ignil::Block &out,
+                                               std::uint32_t &tmp) const {
+  // op[0]=dst(wider); op[1]=src(narrower) for the rr forms, op[1..5]=mem for
+  // the rm ones. Neither MOVSX nor MOVZX affects flags.
+  const ignil::Opcode extend =
+          signExtend ? ignil::Opcode::SEXT : ignil::Opcode::ZEXT;
+  const char *what = signExtend ? "liftMovsx" : "liftMovzx";
+
   auto dst = toReg(mc.getOperand(0).getReg());
   if (!dst) {
-    logger_.log("Error liftMovsx in addr {:#x} no dst", addr);
+    logger_.log("Error {} in addr {:#x} no dst", what, addr);
     return;
   }
+
+  // Memory source: load form.srcWidth bits from the effective address, then
+  // widen. Note this cannot be decided from the operands - op[1] is a
+  // register in both forms (here it is the memory operand's base), so the
+  // opcode's own spelling is what says which it is.
+  if (form.memorySource) {
+    const ignil::Width ptrWidth =
+            (architecture_ == Architecture::X86_64) ? 64 : 32;
+    auto addrTemp = emitAddress(mc, 1, ptrWidth, addr, out, tmp);
+    auto loaded = newTemp(tmp, form.srcWidth);
+    out.append({ignil::Opcode::LOAD, loaded, {addrTemp}, addr});
+    out.append({extend, *dst, {loaded}, addr});
+    return;
+  }
+
   auto src = toReg(mc.getOperand(1).getReg());
   if (!src) {
-    logger_.log("Error liftMovsx in addr {:#x} no src", addr);
+    logger_.log("Error {} in addr {:#x} no src", what, addr);
     emitUndef(*dst, addr, out);
     return;
   }
-  out.append({ignil::Opcode::SEXT, *dst, {*src}, addr});
+  out.append({extend, *dst, {*src}, addr});
 }
 
 void dragon::x86::X86IGNILLifter::liftSarImm(const llvm::MCInst &mc,
@@ -1471,24 +1540,6 @@ void dragon::x86::X86IGNILLifter::liftNeg(const llvm::MCInst &mc,
   emitArithFlags(addr, out, tmp, flags);
 }
 
-void dragon::x86::X86IGNILLifter::liftMovzx(const llvm::MCInst &mc,
-                                            std::uint64_t addr,
-                                            ignil::Block &out,
-                                            std::uint32_t &tmp) const {
-  // op[0]=dst(wider), op[1]=src(narrower). MOVZX never affects flags.
-  auto dst = toReg(mc.getOperand(0).getReg());
-  if (!dst) {
-    logger_.log("Error liftMovzx in addr {:#x} no dst", addr);
-    return;
-  }
-  auto src = toReg(mc.getOperand(1).getReg());
-  if (!src) {
-    logger_.log("Error liftMovzx in addr {:#x} no src", addr);
-    emitUndef(*dst, addr, out);
-    return;
-  }
-  out.append({ignil::Opcode::ZEXT, *dst, {*src}, addr});
-}
 
 void dragon::x86::X86IGNILLifter::liftShlImm(const llvm::MCInst &mc,
                                              std::uint64_t addr,

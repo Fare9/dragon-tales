@@ -59,6 +59,13 @@ target_link_libraries(libdragon
         ${LLVM_LIBS}
 )
 
+if(DRAGON_USE_Z3)
+    # IGNIL symbolic execution: Z3 is not optional for it, unlike the rest of
+    # libdragon, so the whole translation unit is gated the same way
+    # analysis/SliceExprZ3.cpp is.
+    target_sources(libdragon PRIVATE SymbolicExecutor.cpp)
+endif()
+
 add_subdirectory(disassemblers)
 add_subdirectory(assemblers)
 add_subdirectory(analysis)

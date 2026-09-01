@@ -4,6 +4,7 @@
 #ifdef DRAGON_WITH_Z3
 #include <dragon/analysis/SliceExprZ3.hpp>
 #include <dragon/analysis/ValueEnumerator.hpp>
+#include <dragon/lifters/ignil/SymbolicExecutor.hpp>
 #endif
 #include <dragon/assembler/Assembler.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
@@ -939,3 +940,427 @@ void dragon_sigdb_match_entries(
   for (const auto &m: matches)
     cb(m.address, m.name.c_str(), m.length, user);
 }
+
+#ifdef DRAGON_WITH_Z3
+// =============================================================================
+// IGNIL symbolic execution
+// =============================================================================
+
+namespace {
+
+namespace sym = dragon::ignil;
+
+struct SymExecImpl {
+  sym::SymbolicExecutor exec;
+  explicit SymExecImpl(sym::SymbolicOptions o) : exec(std::move(o)) {}
+};
+
+// A z3::expr does not own the context it was built in, so every expression
+// handed across this boundary has to keep its executor alive by itself.
+// Callers cannot be relied on to destroy expressions before the executor:
+// Python finalizes objects in an order the caller does not control at
+// interpreter shutdown, and a destroyed context makes ~expr a use-after-free.
+// So the executor handle is a shared_ptr and every expression holds one -
+// dragon_symexec_destroy drops the caller's reference, and the executor is
+// really freed once the last expression is gone too.
+using SymExecHandle = std::shared_ptr<SymExecImpl>;
+
+struct SymExprImpl {
+  SymExecHandle owner;
+  z3::expr e;
+};
+
+struct SymRunImpl {
+  SymExecHandle owner; // for the successor conditions handed out from it
+  sym::RunResult result;
+};
+
+struct SolutionImpl {
+  // Plain values only - no Z3 handles - so this one needs no owner.
+  sym::Solution solution;
+};
+
+SymExecHandle *as_handle(dragon_symexec_t *e) {
+  return reinterpret_cast<SymExecHandle *>(e);
+}
+const SymExecHandle *as_handle(const dragon_symexec_t *e) {
+  return reinterpret_cast<const SymExecHandle *>(e);
+}
+SymExecImpl *as_exec(dragon_symexec_t *e) { return as_handle(e)->get(); }
+const SymExecImpl *as_exec(const dragon_symexec_t *e) {
+  return as_handle(e)->get();
+}
+const SymExprImpl *as_expr(const dragon_symexpr_t *x) {
+  return reinterpret_cast<const SymExprImpl *>(x);
+}
+const SymRunImpl *as_run(const dragon_symrun_t *r) {
+  return reinterpret_cast<const SymRunImpl *>(r);
+}
+const SolutionImpl *as_solution(const dragon_solution_t *s) {
+  return reinterpret_cast<const SolutionImpl *>(s);
+}
+
+dragon_symexpr_t *wrap_sym(SymExecHandle owner, const z3::expr &e) {
+  return reinterpret_cast<dragon_symexpr_t *>(
+          new SymExprImpl{std::move(owner), e});
+}
+
+sym::Reg make_reg(std::uint32_t offset, std::uint8_t width) {
+  return sym::Reg{offset, width, ""};
+}
+
+/// 0 keeps the library default; anything else is an explicit yes/no.
+bool tri_state(int value, bool fallback) {
+  if (value == 0)
+    return fallback;
+  return value > 0;
+}
+
+int tri_result(std::optional<bool> v) {
+  if (!v)
+    return -1;
+  return *v ? 1 : 0;
+}
+
+} // namespace
+
+dragon_symexec_t *dragon_symexec_create(const dragon_symexec_options_t *opts) {
+  sym::SymbolicOptions o;
+  if (opts) {
+    if (opts->solver_timeout_ms)
+      o.solverTimeoutMs = opts->solver_timeout_ms;
+    if (opts->max_address_solutions)
+      o.maxAddressSolutions = opts->max_address_solutions;
+    if (opts->max_branch_targets)
+      o.maxBranchTargets = opts->max_branch_targets;
+    o.zeroExtendOn32BitWrite =
+            tri_state(opts->zero_extend_on_32bit_write, o.zeroExtendOn32BitWrite);
+    o.symbolizeUnmappedReads =
+            tri_state(opts->symbolize_unmapped_reads, o.symbolizeUnmappedReads);
+    o.stopAtTerminator = tri_state(opts->stop_at_terminator, o.stopAtTerminator);
+  }
+  return reinterpret_cast<dragon_symexec_t *>(
+          new SymExecHandle(std::make_shared<SymExecImpl>(std::move(o))));
+}
+
+void dragon_symexec_destroy(dragon_symexec_t *e) {
+  // Drops the caller's reference. Any expression still alive holds one of its
+  // own, and the executor goes away with the last of them.
+  delete as_handle(e);
+}
+
+void dragon_symexec_reset(dragon_symexec_t *e) {
+  if (e)
+    as_exec(e)->exec.reset();
+}
+
+void dragon_symexec_set_register(dragon_symexec_t *e, uint32_t offset,
+                                 uint8_t width, uint64_t value) {
+  if (e)
+    as_exec(e)->exec.setRegister(make_reg(offset, width), value);
+}
+
+dragon_symexpr_t *dragon_symexec_symbolize_register(dragon_symexec_t *e,
+                                                    uint32_t offset,
+                                                    uint8_t width,
+                                                    const char *name) {
+  if (!e)
+    return nullptr;
+  return wrap_sym(*as_handle(e),
+                  as_exec(e)->exec.symbolizeRegister(make_reg(offset, width),
+                                                     name ? name : ""));
+}
+
+void dragon_symexec_map_memory(dragon_symexec_t *e, uint64_t address,
+                               const uint8_t *data, size_t len) {
+  if (!e || (!data && len))
+    return;
+  as_exec(e)->exec.mapMemory(address, std::vector<std::uint8_t>(data, data + len));
+}
+
+dragon_symexpr_t *dragon_symexec_symbolize_memory(dragon_symexec_t *e,
+                                                  uint64_t address,
+                                                  uint64_t size,
+                                                  const char *name) {
+  if (!e || !name)
+    return nullptr;
+  return wrap_sym(*as_handle(e),
+                  as_exec(e)->exec.symbolizeMemory(address, size, name));
+}
+
+void dragon_symexec_assume(dragon_symexec_t *e, const dragon_symexpr_t *c) {
+  if (!e || !c || !as_expr(c)->e.is_bool())
+    return;
+  as_exec(e)->exec.assume(as_expr(c)->e);
+}
+
+dragon_symexpr_t *dragon_symexec_const(const dragon_symexec_t *e,
+                                       uint64_t value, uint8_t width) {
+  if (!e || width == 0 || width > 64)
+    return nullptr;
+  return wrap_sym(*as_handle(e), as_exec(e)->exec.bv(value, width));
+}
+
+dragon_symexpr_t *dragon_symexec_read_register(const dragon_symexec_t *e,
+                                               uint32_t offset, uint8_t width) {
+  if (!e || width == 0)
+    return nullptr;
+  return wrap_sym(*as_handle(e),
+                  as_exec(e)->exec.readRegister(make_reg(offset, width)));
+}
+
+dragon_symexpr_t *dragon_symexec_read_memory(const dragon_symexec_t *e,
+                                             uint64_t address, uint8_t width) {
+  if (!e || width == 0)
+    return nullptr;
+  return wrap_sym(*as_handle(e), as_exec(e)->exec.readMemory(address, width));
+}
+
+void dragon_symexpr_destroy(dragon_symexpr_t *x) {
+  delete reinterpret_cast<SymExprImpl *>(x);
+}
+
+char *dragon_symexpr_to_string(const dragon_symexpr_t *x) {
+  if (!x)
+    return nullptr;
+  return dup_string(as_expr(x)->e.to_string());
+}
+
+uint8_t dragon_symexpr_width(const dragon_symexpr_t *x) {
+  if (!x || !as_expr(x)->e.is_bv())
+    return 0;
+  return static_cast<uint8_t>(as_expr(x)->e.get_sort().bv_size());
+}
+
+int dragon_symexpr_is_bool(const dragon_symexpr_t *x) {
+  return x && as_expr(x)->e.is_bool() ? 1 : 0;
+}
+
+dragon_symexpr_t *dragon_symexpr_binop(dragon_symop_t op,
+                                       const dragon_symexpr_t *a,
+                                       const dragon_symexpr_t *b) {
+  if (!a || !b)
+    return nullptr;
+  const SymExecHandle &owner = as_expr(a)->owner;
+  const z3::expr &x = as_expr(a)->e;
+  const z3::expr &y = as_expr(b)->e;
+  // Z3 aborts the process on a cross-context operation, so refuse it here.
+  if (&x.ctx() != &y.ctx())
+    return nullptr;
+
+  const bool wantBool = op >= DRAGON_SYMOP_BOOL_AND;
+  if (wantBool && !(x.is_bool() && y.is_bool()))
+    return nullptr;
+  if (!wantBool && !(x.is_bv() && y.is_bv()))
+    return nullptr;
+  if (!wantBool && x.get_sort().bv_size() != y.get_sort().bv_size())
+    return nullptr;
+
+  switch (op) {
+    case DRAGON_SYMOP_ADD: return wrap_sym(owner, x + y);
+    case DRAGON_SYMOP_SUB: return wrap_sym(owner, x - y);
+    case DRAGON_SYMOP_MUL: return wrap_sym(owner, x * y);
+    case DRAGON_SYMOP_AND: return wrap_sym(owner, x & y);
+    case DRAGON_SYMOP_OR: return wrap_sym(owner, x | y);
+    case DRAGON_SYMOP_XOR: return wrap_sym(owner, x ^ y);
+    case DRAGON_SYMOP_EQ: return wrap_sym(owner, x == y);
+    case DRAGON_SYMOP_NE: return wrap_sym(owner, x != y);
+    case DRAGON_SYMOP_ULT: return wrap_sym(owner, z3::ult(x, y));
+    case DRAGON_SYMOP_ULE: return wrap_sym(owner, z3::ule(x, y));
+    case DRAGON_SYMOP_UGT: return wrap_sym(owner, z3::ugt(x, y));
+    case DRAGON_SYMOP_UGE: return wrap_sym(owner, z3::uge(x, y));
+    case DRAGON_SYMOP_SLT: return wrap_sym(owner, x < y);
+    case DRAGON_SYMOP_SLE: return wrap_sym(owner, x <= y);
+    case DRAGON_SYMOP_SGT: return wrap_sym(owner, x > y);
+    case DRAGON_SYMOP_SGE: return wrap_sym(owner, x >= y);
+    case DRAGON_SYMOP_BOOL_AND: return wrap_sym(owner, x && y);
+    case DRAGON_SYMOP_BOOL_OR: return wrap_sym(owner, x || y);
+    case DRAGON_SYMOP_IMPLIES: return wrap_sym(owner, z3::implies(x, y));
+    default: return nullptr;
+  }
+}
+
+dragon_symexpr_t *dragon_symexpr_not(const dragon_symexpr_t *a) {
+  if (!a || !as_expr(a)->e.is_bool())
+    return nullptr;
+  return wrap_sym(as_expr(a)->owner, !as_expr(a)->e);
+}
+
+dragon_symrun_t *dragon_symexec_run(dragon_symexec_t *e,
+                                    const dragon_ignil_block_t *b) {
+  if (!e || !b)
+    return nullptr;
+  auto *run = new SymRunImpl{*as_handle(e),
+                             as_exec(e)->exec.run(*as_ignil_block(b))};
+  return reinterpret_cast<dragon_symrun_t *>(run);
+}
+
+void dragon_symrun_destroy(dragon_symrun_t *r) {
+  delete reinterpret_cast<SymRunImpl *>(r);
+}
+
+dragon_symexec_status_t dragon_symrun_status(const dragon_symrun_t *r) {
+  if (!r)
+    return DRAGON_SYMEXEC_MALFORMED_OP;
+  return static_cast<dragon_symexec_status_t>(as_run(r)->result.status);
+}
+
+dragon_symexec_exit_t dragon_symrun_exit(const dragon_symrun_t *r) {
+  if (!r)
+    return DRAGON_SYMEXIT_ERROR;
+  return static_cast<dragon_symexec_exit_t>(as_run(r)->result.exit);
+}
+
+int dragon_symrun_complete(const dragon_symrun_t *r) {
+  return r && as_run(r)->result.complete() ? 1 : 0;
+}
+
+char *dragon_symrun_error(const dragon_symrun_t *r) {
+  if (!r || as_run(r)->result.error.empty())
+    return nullptr;
+  return dup_string(as_run(r)->result.error);
+}
+
+void dragon_symrun_stats(const dragon_symrun_t *r, size_t *out_ops_executed,
+                         size_t *out_solver_queries,
+                         size_t *out_addresses_concretized) {
+  if (!r)
+    return;
+  const auto &s = as_run(r)->result.stats;
+  if (out_ops_executed)
+    *out_ops_executed = s.opsExecuted;
+  if (out_solver_queries)
+    *out_solver_queries = s.solverQueries;
+  if (out_addresses_concretized)
+    *out_addresses_concretized = s.addressesConcretized;
+}
+
+size_t dragon_symrun_successor_count(const dragon_symrun_t *r) {
+  return r ? as_run(r)->result.successors.size() : 0;
+}
+
+int dragon_symrun_successor(const dragon_symrun_t *r, size_t index,
+                            uint64_t *out_address, int *out_taken) {
+  if (!r || index >= as_run(r)->result.successors.size())
+    return 0;
+  const auto &s = as_run(r)->result.successors[index];
+  if (out_address)
+    *out_address = s.address;
+  if (out_taken)
+    *out_taken = s.taken ? 1 : 0;
+  return 1;
+}
+
+dragon_symexpr_t *dragon_symrun_successor_condition(const dragon_symrun_t *r,
+                                                    size_t index) {
+  if (!r || index >= as_run(r)->result.successors.size())
+    return nullptr;
+  return wrap_sym(as_run(r)->owner,
+                  as_run(r)->result.successors[index].condition);
+}
+
+size_t dragon_symrun_warning_count(const dragon_symrun_t *r) {
+  return r ? as_run(r)->result.warnings.size() : 0;
+}
+
+char *dragon_symrun_warning(const dragon_symrun_t *r, size_t index,
+                            uint64_t *out_address) {
+  if (!r || index >= as_run(r)->result.warnings.size())
+    return nullptr;
+  const auto &w = as_run(r)->result.warnings[index];
+  if (out_address)
+    *out_address = w.address;
+  return dup_string(w.message);
+}
+
+int dragon_symexec_is_satisfiable(dragon_symexec_t *e,
+                                  const dragon_symexpr_t *c) {
+  if (!e || !c || !as_expr(c)->e.is_bool())
+    return -1;
+  return tri_result(as_exec(e)->exec.isSatisfiable(as_expr(c)->e));
+}
+
+int dragon_symexec_proves(dragon_symexec_t *e, const dragon_symexpr_t *c) {
+  if (!e || !c || !as_expr(c)->e.is_bool())
+    return -1;
+  return tri_result(as_exec(e)->exec.proves(as_expr(c)->e));
+}
+
+int dragon_symexec_evaluate(dragon_symexec_t *e, const dragon_symexpr_t *x,
+                            uint64_t *out) {
+  if (!e || !x || !as_expr(x)->e.is_bv())
+    return 0;
+  auto v = as_exec(e)->exec.evaluate(as_expr(x)->e);
+  if (!v)
+    return 0;
+  if (out)
+    *out = *v;
+  return 1;
+}
+
+size_t dragon_symexec_enumerate(dragon_symexec_t *e, const dragon_symexpr_t *x,
+                                uint64_t *out, size_t max,
+                                int *out_exhaustive) {
+  if (out_exhaustive)
+    *out_exhaustive = 0;
+  if (!e || !x || !out || !max || !as_expr(x)->e.is_bv())
+    return 0;
+
+  bool exhaustive = false;
+  auto values = as_exec(e)->exec.enumerate(as_expr(x)->e, max, &exhaustive);
+  std::copy(values.begin(), values.end(), out);
+  if (out_exhaustive)
+    *out_exhaustive = exhaustive ? 1 : 0;
+  return values.size();
+}
+
+dragon_solution_t *dragon_symexec_solve(dragon_symexec_t *e,
+                                        const dragon_symexpr_t *goal) {
+  if (!e)
+    return nullptr;
+  if (goal && !as_expr(goal)->e.is_bool())
+    return nullptr;
+
+  auto solution = goal ? as_exec(e)->exec.solve(as_expr(goal)->e)
+                       : as_exec(e)->exec.solve();
+  if (!solution)
+    return nullptr;
+  return reinterpret_cast<dragon_solution_t *>(
+          new SolutionImpl{std::move(*solution)});
+}
+
+void dragon_solution_destroy(dragon_solution_t *s) {
+  delete reinterpret_cast<SolutionImpl *>(s);
+}
+
+int dragon_solution_value(const dragon_solution_t *s, const char *symbol,
+                          uint64_t *out) {
+  if (!s || !symbol)
+    return 0;
+  auto v = as_solution(s)->solution.value(symbol);
+  if (!v)
+    return 0;
+  if (out)
+    *out = *v;
+  return 1;
+}
+
+size_t dragon_solution_bytes(const dragon_solution_t *s, const char *region,
+                             uint8_t *out, size_t cap) {
+  if (!s || !region)
+    return 0;
+  const auto bytes = as_solution(s)->solution.bytes(region);
+  if (out && cap)
+    std::copy_n(bytes.begin(), std::min(cap, bytes.size()), out);
+  return bytes.size();
+}
+
+void dragon_solution_each(const dragon_solution_t *s,
+                          void (*cb)(const char *, uint64_t, void *),
+                          void *user) {
+  if (!s || !cb)
+    return;
+  for (const auto &[name, value]: as_solution(s)->solution.values())
+    cb(name.c_str(), value, user);
+}
+#endif // DRAGON_WITH_Z3

@@ -19,6 +19,7 @@ trimmed versions of the example programs under [`examples/`](../../examples).
 5. [Lifting to IGNIL](05-lifting-to-ignil.md) — dragon-tales' architecture-independent IL
 6. [Moving to LLVM IR](06-moving-to-llvm-ir.md) — from IGNIL to optimizable LLVM IR
 7. [A Real-World Example](07-a-real-world-example.md) — compiling C, pulling `.text` with `objdump`, and running it through the whole pipeline
+8. [Symbolic Execution with Z3](08-symbolic-execution.md) — solving for inputs, pruning dead branches, and resolving computed jumps
 
 ## Which API layer?
 

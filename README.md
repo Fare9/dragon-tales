@@ -10,6 +10,7 @@ Features:
 - **Backward slicer** — propagates values through IGNIL CFGs without crossing join nodes
 - **LLVMLifter** — lifts a recovered `Function`, or a single flattened IGNIL block (no CFG needed), to LLVM IR, with an optimization pipeline (mem2reg/instcombine/GVN/DCE) on top
 - **Z3 integration** — lower a sliced expression to a Z3 bitvector formula, enumerate the concrete values it can take, or solve for a unique one
+- **Symbolic execution** — run an IGNIL block over Z3 bitvectors with registers and memory seeded concretely or symbolically: solve for an input that makes a check pass, prove what an obfuscated expression really computes, and resolve a computed jump (jump table, VM dispatch) to the concrete addresses it can reach
 - **SwitchDetector** — recognize a jump-table indirect-branch pattern from a sliced jump target and read its concrete case targets
 - **FLIRT-compatible signature matching** — identify known functions from `.pat` signature databases
 - **Trace lifting** — lift an arbitrary linear instruction sequence (e.g. a captured execution trace) straight to IGNIL, bypassing CFG/function/block-validity analysis entirely
@@ -49,6 +50,7 @@ include/        C++ public headers
   dragon/
     lifters/ignil/IGNIL.hpp          — IGNIL value types, opcodes, Block
     lifters/ignil/IGNILSimplify.hpp  — peephole simplifier (constant folding, identities, dead-Temp elimination)
+    lifters/ignil/SymbolicExecutor.hpp — symbolic execution of IGNIL over Z3 (solving, branch/jump-target recovery)
     lifters/ignil/x86/x86IGNILRegs.hpp — x86/x86-64 register constants (offsets, widths, names)
     lifters/ignil/arm/armIGNILRegs.hpp — AArch64 register constants (offsets, widths, names)
     lifters/llvm/LLVMLifter.hpp      — lifts a Function or a single IGNIL block to LLVM IR
@@ -75,6 +77,10 @@ Full examples for every API layer are in [`docs/`](docs/):
 - [`docs/c_api.md`](docs/c_api.md) — C shim API
 - [`docs/python_api.md`](docs/python_api.md) — Python API
 - [`IGNIL.md`](IGNIL.md) — IGNIL design and implementation guide
+
+A hands-on walkthrough, organized by task rather than by class, is in
+[`docs/manual/`](docs/manual/index.md) — from raw bytes through IGNIL and LLVM
+IR to [symbolic execution](docs/manual/08-symbolic-execution.md).
 
 ## Quick start
 

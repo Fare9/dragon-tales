@@ -11,11 +11,12 @@ committed to yet, just not lost.
 - **Symbolic slicing with Z3** — walkthrough of `BackwardSlicer` +
   `SliceExprZ3` (see `examples/cpp/z3_path_discovery.cpp`), e.g. "what values
   of `x` reach this branch."
-- **Full symbolic execution + Z3 solving** — beyond single-expression slicing,
-  a chapter on driving symbolic execution over IGNIL to solve for inputs that
-  reach/avoid a target path, framed around practical use cases like CTF
-  reversing challenges (recover the input that satisfies a check) or malware
-  analysis (solve a decryption key/config embedded in an unpacking routine).
+- ~~**Full symbolic execution + Z3 solving**~~ — written, chapter 8. Covers
+  solving for an input that satisfies a check, pruning branches the solver
+  proves unreachable, and resolving computed jumps (jump tables, VM dispatch)
+  to their real targets. Still uncovered and worth a follow-up: driving *many*
+  blocks — loop handling and automatic path exploration, which chapter 8
+  leaves to the caller.
 - **Writing a custom analysis pass** — a tutorial-shaped version of
   `docs/cpp_api.md`'s Graph/BasicBlock/Function APIs, e.g. a simple dead-store
   detector over IGNIL.

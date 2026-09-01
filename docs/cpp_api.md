@@ -638,6 +638,167 @@ else
 | `EnumeratorConfig::maxValues` | Maximum solutions to collect (default 256) |
 | `EnumeratorConfig::sorted` | Sort results ascending (default true) |
 
+### SymbolicExecutor — running IGNIL over Z3
+
+`SymbolicExecutor` interprets IGNIL ops against a `SymbolicState`, producing a
+Z3 bitvector expression for every value the block computes. Registers and
+memory can be seeded concretely, symbolically, or left alone — an untouched
+location reads back as a fresh free variable, so a block always executes even
+when its inputs are unknown.
+
+It is architecture-agnostic: the executor only ever sees `ignil::Reg` offsets,
+so an x86 block and an AArch64 block run through the same code.
+
+```cpp
+#ifdef DRAGON_WITH_Z3
+#include <dragon/lifters/ignil/SymbolicExecutor.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
+
+namespace ignil = dragon::ignil;
+namespace x86   = dragon::x86;
+
+ignil::SymbolicExecutor exec;
+exec.setRegister(x86::RAX, 0);
+z3::expr a = exec.symbolizeRegister(x86::RDI, "a");
+z3::expr b = exec.symbolizeRegister(x86::RSI, "b");
+
+ignil::RunResult r = exec.run(*graph.getIGNILBlock(0x1000));
+
+// Ask about the value, not the syntax - the flag-setting ops the lifter
+// emits alongside the arithmetic do not get in the way.
+z3::expr rax = exec.readRegister(x86::RAX);
+exec.proves(rax == a + b);          // std::optional<bool>
+#endif
+```
+
+State persists across `run()` calls, so walking a path is a sequence of runs.
+
+#### Solving — recovering an input
+
+Symbolise a buffer, run the block that checks it, then ask for an assignment
+that makes the check pass. A symbolic region of N bytes creates N eight-bit
+variables named `<region>[0]`..`<region>[N-1]`, which `Solution::bytes()`
+reads back in address order.
+
+```cpp
+ignil::SymbolicExecutor exec;
+exec.setRegister(x86::RDI, 0x4000);
+exec.symbolizeMemory(0x4000, 8, "flag");
+exec.run(block);
+
+auto solution = exec.solve(exec.readRegister(x86::RAX) == exec.bv(target, 64));
+if (solution) {
+    std::vector<std::uint8_t> flag = solution->bytes("flag");
+    std::uint64_t             n    = solution->value("some_symbol").value_or(0);
+}
+```
+
+`solve()` returns `std::nullopt` when no assignment exists — an unreachable
+goal is reported, never guessed at. Constrain the search with `assume()`
+before running, e.g. to keep an input inside a charset:
+
+```cpp
+for (int i = 0; i < 4; ++i) {
+    z3::expr byte = exec.readMemory(0x5000 + i, 8);
+    exec.assume(z3::uge(byte, exec.bv(0x21, 8)));
+    exec.assume(z3::ule(byte, exec.bv(0x7E, 8)));
+}
+```
+
+#### Control flow — resolving computed jumps
+
+`RunResult::successors` names the concrete addresses control flow can reach,
+each with the guard under which it is reached. A `CJMP` whose condition is
+provably constant under the path constraints collapses to a single successor —
+that is how an opaque predicate disappears, with no pattern matching involved.
+A computed `JMP` has its target expression enumerated, which is what recovers a
+jump table or a VM dispatch:
+
+```cpp
+exec.mapMemory(0x6000, handlerTable);
+z3::expr opcode = exec.symbolizeMemory(0x7000, 4, "vm_opcode");
+exec.assume(z3::ult(opcode, exec.bv(3, 32)));   // the VM's range check
+
+ignil::RunResult r = exec.run(dispatcher);
+for (const ignil::Successor &s : r.successors)
+    std::cout << "handler at 0x" << std::hex << s.address << "\n";
+```
+
+`RunResult::complete()` is the honesty check: it is true only when the run
+succeeded *and* every address and branch target resolved exactly, so the
+successor list really is the complete set of reachable addresses. Otherwise
+`warnings` says what had to be left open — an address with more candidates
+than the budget allows, or a solver timeout. Nothing is invented to fill the
+gap.
+
+#### Modelling notes
+
+- **Registers and memory are byte-granular.** That is what makes sub-register
+  aliasing come out right with no per-architecture table: `EAX` writes bytes
+  0–3, `AH` writes byte 1, and a later `RAX` read concatenates bytes 0–7
+  whatever mix of widths produced them.
+- **A 32-bit write clears the upper half** of a 64-bit register, matching
+  x86-64 and AArch64. Turn it off with
+  `SymbolicOptions::zeroExtendOn32BitWrite` for a target where a 32-bit write
+  merges.
+- **A symbolic address is concretized**, not modelled with the theory of
+  arrays: the executor enumerates the address's satisfying values (bounded by
+  `maxAddressSolutions`) and folds them into a select chain, or a conditional
+  update for a store. Past the bound the access is reported unresolved.
+- **Division follows Z3's total semantics** (`x/0` is all-ones unsigned).
+  IGNIL leaves division by zero unspecified, so constrain the divisor if it
+  matters. `SMOD` is `srem`, matching the `%` `IGNILSimplify` folds with.
+- **`CALL` does not model the callee.** Its target is reported as a successor
+  and nothing else happens.
+- **Blocks stop at the first terminator.** Set
+  `SymbolicOptions::stopAtTerminator = false` to run a *trace* from
+  `liftTrace()`, whose interior terminators must be stepped over.
+
+#### Options
+
+```cpp
+ignil::SymbolicOptions opts;
+opts.solverTimeoutMs        = 5000;  // per query
+opts.maxAddressSolutions    = 64;    // candidates for a symbolic LOAD/STORE
+opts.maxBranchTargets       = 256;   // candidates for a computed jump
+opts.zeroExtendOn32BitWrite = true;
+opts.symbolizeUnmappedReads = true;  // false -> untouched locations read zero
+opts.stopAtTerminator       = true;  // false -> trace mode
+
+ignil::SymbolicExecutor exec{opts};
+// Or share a context with other Z3 work:
+z3::context ctx;
+ignil::SymbolicExecutor shared{ctx, opts};
+```
+
+**API summary**
+
+| Symbol | Description |
+|---|---|
+| `SymbolicExecutor(opts)` / `(ctx, opts)` | Own a Z3 context, or borrow one |
+| `setRegister(reg, value)` | Seed a register concretely |
+| `symbolizeRegister(reg, name)` → `z3::expr` | Bind a register to a fresh variable |
+| `mapMemory(addr, bytes)` | Map a concrete blob |
+| `symbolizeMemory(addr, size, name)` → `z3::expr` | Fill a region with per-byte variables |
+| `assume(cond)` | Constrain the rest of the run |
+| `run(block)` → `RunResult` | Execute a block; state persists |
+| `step(op, result)` → `ExecStatus` | Execute one op |
+| `readRegister(reg)` / `readMemory(addr, width)` → `z3::expr` | What a location now holds |
+| `bv(value, width)` → `z3::expr` | A concrete bitvector in this context |
+| `proves(cond)` → `optional<bool>` | Does it hold on every model? |
+| `isSatisfiable(cond)` → `optional<bool>` | Can it hold at all? |
+| `evaluate(expr)` → `optional<uint64_t>` | Value, only if it is forced to exactly one |
+| `enumerate(expr, max, &exhaustive)` → `vector<uint64_t>` | Distinct satisfying values |
+| `solve(goal)` → `optional<Solution>` | A satisfying assignment, or nullopt |
+| `state()` / `setState(s)` / `reset()` | Snapshot, restore, or clear the machine |
+| `RunResult::successors` | Reachable addresses, each with its guard |
+| `RunResult::complete()` | True only if that list is exhaustive |
+| `RunResult::warnings` | What had to be left unresolved |
+| `Solution::value(name)` / `bytes(region)` | Read the model back |
+
+The `symbolic_execution` example (`examples/cpp/symbolic_execution.cpp`) runs
+all of the above against real lifted x86-64.
+
 ---
 
 ## SliceExprMatch

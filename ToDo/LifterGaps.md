@@ -1,8 +1,9 @@
 # Known lifter/analysis gaps — found while writing docs/manual/
 
-Three real, verified bugs found on 2026-07-25 while writing the `docs/manual/`
-tutorial and checking every code snippet against the actual build (not
-guessed). Distinct from `TODO.md`/`ArchitecturalRefactor.txt`/`Done.txt`,
+Real, verified bugs found by checking every code snippet against the actual
+build (not guessed): gaps 1-3 on 2026-07-25 while writing the `docs/manual/`
+tutorial, gap 4 on 2026-08-29 while writing the symbolic-execution examples.
+Distinct from `TODO.md`/`ArchitecturalRefactor.txt`/`Done.txt`,
 which are pre-C-shim design history — this file tracks concrete, currently-
 reproducible gaps in the code as it stands today.
 
@@ -223,3 +224,147 @@ function start if nothing else claimed it," which is effectively what the
 `ENDBR64` special-case gives x86 for free in the common case. Full repro and
 current-behavior writeup in `docs/manual/07-a-real-world-example.md`,
 "Cross-compiling for ARM64" section.
+
+---
+
+## 4. x86 IGNIL lifter emits UNDEF for MOVZX/MOVSX with a memory operand — FIXED
+
+**Status:** fixed. `liftMovzx`/`liftMovsx` — which differed only in
+ZEXT-vs-SEXT — are replaced by one `liftMovExtend` that takes the memory path
+when the opcode is an `rm` form: `emitAddress()` + a `LOAD` of the mnemonic's
+width, then the existing `ZEXT`/`SEXT` to the destination.
+
+Dispatch moved out of `kOpcodeFields` (a named `unsigned` member per opcode)
+into two `opcode -> MovExtendForm` maps, because there are 34 MOVZX/MOVSX
+spellings between them and each needs two facts the operands do not carry:
+the width being extended, and whether the source is memory. All 34 that
+`tool/opcode_audit` reports are now covered, including the `_NOREX` and
+16-bit-destination variants that had no entry before, plus the register forms
+`MOVSX32rr16`/`MOVSX64rr8`/`MOVSX64rr16` which were missing for the same
+reason.
+
+**Watch out for** the failure mode this has: op[1] is a register in *both*
+forms — for an `rm` form it is the memory operand's base — so deciding the
+form from the operands (`mc.getOperand(1).isReg()`) silently takes the
+register path and emits `EAX = ZEXT(RBX)` with no load at all. That lifts
+without an UNDEF and looks perfectly healthy. The opcode's own spelling is
+the only reliable discriminator, which is why `MovExtendForm` carries it.
+`tests/disassemblers/TestX86IGNILLifter.cpp` covers all 15 encodings by
+asserting the *shape* — a LOAD of exactly the mnemonic's width, feeding the
+extend — rather than just the absence of UNDEF, which would not have caught
+it.
+
+**Original report:**
+
+Found 2026-08-29 while writing
+`examples/{cpp,python}/symbolic_execution.cpp/.py`.
+
+**Where:** `lib/disassemblers/x86/X86IGNILLifter.cpp`, `liftMovzx` (~line
+1474) / `liftMovsx` (~line 1165) and their entries in `liftInstruction()`'s
+opcode dispatch.
+
+**What's wrong:** both handlers call `toReg(mc.getOperand(1).getReg())` for
+the source, so only the register-source forms (`MOVZX32rr8`, `MOVSX64rr32`,
+...) are recognized. The memory-source forms (`MOVZX32rm8`, `MOVZX32rm16`,
+`MOVSX64rm32`, ...) fall through to `liftInstruction()`'s default case, which
+emits `UNDEF` for the destination.
+
+**Repro:** all three of these lift the destination to a bare `UNDEF`
+(verified against the current build):
+
+| Instruction | Bytes | Lifts to |
+|---|---|---|
+| `movzx esi, byte ptr [rdi]` | `0F B6 37` | `ESI:i32 = UNDEF()` |
+| `movsx esi, byte ptr [rdi]` | `0F BE 37` | `ESI:i32 = UNDEF()` |
+| `movsxd rsi, dword ptr [rdi]` | `48 63 37` | `RSI:i64 = UNDEF()` |
+
+The rest of the block lifts fine, so the damage is silent unless you look:
+
+```
+IGNILBlock @ 0x1000
+  ESI:i32 = UNDEF()  ; @0x1000            <-- movzx esi, byte ptr [rdi]
+  t0:i64 = COPY(0x0:i64)  ; @0x1003
+  t1:i64 = SHL(RSI:i64, 0x3:i8)  ; @0x1003
+  ...
+  JMP(t4:i64)  ; @0x1003
+```
+
+**Why it matters:** a zero-extending byte fetch feeding a table index is the
+canonical bytecode-VM dispatcher (`movzx r32, [vip]` then
+`jmp [table + r*8]`). With the fetch lifted to `UNDEF`, the index is
+unconstrained and `SymbolicExecutor` can only report the jump target as
+unresolved — the handler set that would otherwise fall straight out of the
+dispatcher is lost. The executor's behaviour here is correct (it declines to
+invent targets and records a warning); the missing information is the
+lifter's.
+
+**Suggested fix (what was done):** give both handlers the memory-operand path
+the MOV handlers already have — `emitAddress()` + `LOAD` into a temp of the
+source width, then the existing `ZEXT`/`SEXT` to the destination width.
+`liftMovLoad` (~line 442) was the shape to follow.
+
+---
+
+## 5. x86 IGNIL lifter silently emits *nothing* for the accumulator-form immediates
+
+**Status:** open. Found 2026-08-29 while writing the symbolic-execution manual
+chapter, on the very first real compiled function tried.
+
+**Where:** `lib/disassemblers/x86/X86IGNILLifter.cpp`, `liftInstruction()`'s
+opcode dispatch, and the `liftAdd`/`liftSub`/`liftAnd`/`liftOr`/`liftXor`/
+`liftCmp`/`liftTest` handlers.
+
+**What's wrong:** x86 has a second, shorter encoding for `<op> eAX, imm` with
+no ModRM byte and an implicit accumulator destination — `xor eax, imm32` is
+`35 id`, not `81 f1 id`. LLVM names these `XOR32i32`, `ADD64i32`, `TEST8i8`
+and so on. None of the 36 are in the dispatch table, so they lift to **zero
+IGNIL ops**.
+
+Not to `UNDEF` — to *nothing at all*:
+
+```
+xor eax, 0x11223344   (35 44 33 22 11 = XOR32i32)  ->  0 ops
+xor ecx, 0x11223344   (81 f1 ...      = XOR32ri)   -> 11 ops
+```
+
+**Why this is worse than gap #1 or #4.** An `UNDEF` destination reads
+downstream as "this value is unknown", which is wrong but *safe*: the slicer
+gives up, `LLVMLifter::lift()` refuses, `SymbolicExecutor` returns a free
+variable. Emitting nothing means the destination register silently keeps its
+**previous** value, so the lifted IGNIL computes a different function than the
+machine code with no signal anywhere. Every consumer is confidently wrong.
+
+Gap #1's fix added exactly the mitigation that should have caught this —
+`liftInstruction()`'s default case emits `UNDEF` for any explicit register-def
+operand of an unhandled opcode, via `MCInstrDesc::getNumDefs()`. It does not
+fire here because the accumulator destination is an **implicit** operand
+(`implicit-def $eax`), not an explicit one, so `getNumDefs()` reports nothing
+to make undefined.
+
+**Why it went unnoticed:** `scripts/audit_x86_lifter_coverage.py` covers this
+exact mnemonic family, but its `FORM_SUFFIXES` listed `ri32`/`mi32` and not
+the bare `i32`, so `XOR32i32` never matched `FORM_RE` and was never counted —
+an unhandled form looked like no form at all. That list is now fixed, and the
+audit reports the 36 (total went from 261 to 297 known forms).
+
+**How common:** very. `clang -O1` picks the accumulator encoding whenever the
+destination lands in EAX/RAX, which is most of the time for a value being
+returned. This was hit immediately by:
+```c
+unsigned fnv4(const unsigned char *s) {
+    unsigned h = 0x811C9DC5u;
+    h = (h ^ s[0]) * 0x01000193u;   /* ... unrolled x4 ... */
+    return h;
+}
+```
+whose `-O1` output opens `movzbl (%rdi),%eax` / `xor $0x811c9dc5,%eax` — the
+`xor` vanishes, and the lifted block hashes the *un-seeded* input.
+
+**Suggested fix:** route the 36 opcodes to the existing handlers with an
+accumulator path. The handlers read `getOperand(0)` as dst and `getOperand(2)`
+as the immediate; for these forms the MCInst carries only the immediate, and
+the destination is the architectural accumulator for the width (AL/AX/EAX/RAX
+— `TEST`/`CMP` write no destination at all, only flags). Worth doing at the
+same time: make the default-case `UNDEF` mitigation consider implicit defs
+(`MCInstrDesc::implicit_defs()`) so the next gap of this shape fails loud
+instead of vanishing.

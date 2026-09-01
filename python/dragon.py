@@ -1306,3 +1306,481 @@ class arm:
 
     # NZCV condition flags — "VF" avoids collision with the V register prefix.
     NF = (784, 8, 'NF'); ZF = (785, 8, 'ZF'); CF = (786, 8, 'CF'); VF = (787, 8, 'VF')
+
+
+# -- IGNIL symbolic execution ---------------------------------------------------
+
+class SymExecStatus:
+    """Mirror of ignil::ExecStatus."""
+    OK = 0
+    MALFORMED_OP = 1
+    UNSUPPORTED_OP = 2
+    SOLVER_FAILURE = 3
+
+
+class SymExit:
+    """Mirror of ignil::ExitKind — how a block left control flow."""
+    FALLTHROUGH = 0
+    JUMP = 1
+    CONDITIONAL_JUMP = 2
+    CALL = 3
+    RETURN = 4
+    ERROR = 5
+
+
+class _SymOp:
+    ADD = 0; SUB = 1; MUL = 2; AND = 3; OR = 4; XOR = 5
+    EQ = 6; NE = 7
+    ULT = 8; ULE = 9; UGT = 10; UGE = 11
+    SLT = 12; SLE = 13; SGT = 14; SGE = 15
+    BOOL_AND = 16; BOOL_OR = 17; IMPLIES = 18
+
+
+class SymExpr:
+    """Owned handle to a Z3 expression produced by a SymbolicExecutor.
+
+    Arithmetic and comparison operators build new expressions rather than
+    computing anything, so ``==`` returns a SymExpr and not a bool — the same
+    convention z3py uses::
+
+        goal = exec.read_register(x86.RAX) == 0x1337
+        solution = exec.solve(goal)
+
+    Comparison operators are *signed*, matching Python's own semantics for
+    integers. Use ult()/ule()/ugt()/uge() for the unsigned versions.
+    """
+
+    __hash__ = object.__hash__
+
+    def __init__(self, ptr):
+        self._ptr = ptr
+
+    def _release(self):
+        """Free the underlying Z3 expression. Idempotent."""
+        if getattr(self, '_ptr', None):
+            lib.dragon_symexpr_destroy(self._ptr)
+            self._ptr = None
+
+    def _handle(self):
+        if not getattr(self, '_ptr', None):
+            raise RuntimeError('this expression has already been released')
+        return self._ptr
+
+    def __del__(self):
+        self._release()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self._release()
+
+    @property
+    def width(self):
+        """Bit width of a bitvector expression; 0 for a boolean."""
+        return int(lib.dragon_symexpr_width(self._handle()))
+
+    @property
+    def is_bool(self):
+        return bool(lib.dragon_symexpr_is_bool(self._handle()))
+
+    def to_string(self):
+        raw = lib.dragon_symexpr_to_string(self._handle())
+        try:
+            return ffi.string(raw).decode()
+        finally:
+            lib.dragon_cstr_free(raw)
+
+    def __str__(self):
+        return self.to_string()
+
+    def __repr__(self):
+        return 'SymExpr(%s)' % self.to_string()
+
+    def _coerce(self, other):
+        """Turn a plain int operand into a bitvector of this expression's
+        width, so `rax + 1` works."""
+        if isinstance(other, SymExpr):
+            return other, False
+        if isinstance(other, int):
+            if self._owner is None:
+                raise TypeError('cannot build a constant without an executor')
+            return self._owner.const(other, self.width), True
+        raise TypeError('expected SymExpr or int, got %r' % type(other))
+
+    def _binop(self, op, other):
+        rhs, temporary = self._coerce(other)
+        try:
+            ptr = lib.dragon_symexpr_binop(op, self._handle(), rhs._handle())
+        finally:
+            if temporary:
+                rhs._release()
+        if ptr == ffi.NULL:
+            raise ValueError('operand sorts do not fit this operator')
+        return SymExpr._own(ptr, self._owner)
+
+    # The executor that built this expression, so int operands can be widened
+    # to a matching bitvector. Set by _own().
+    _owner = None
+
+    @staticmethod
+    def _own(ptr, owner):
+        e = SymExpr(ptr)
+        e._owner = owner
+        return e
+
+    def __add__(self, o): return self._binop(_SymOp.ADD, o)
+    def __sub__(self, o): return self._binop(_SymOp.SUB, o)
+    def __mul__(self, o): return self._binop(_SymOp.MUL, o)
+    def __and__(self, o): return self._binop(_SymOp.AND, o)
+    def __or__(self, o): return self._binop(_SymOp.OR, o)
+    def __xor__(self, o): return self._binop(_SymOp.XOR, o)
+    def __radd__(self, o): return self._binop(_SymOp.ADD, o)
+    def __rmul__(self, o): return self._binop(_SymOp.MUL, o)
+    def __rand__(self, o): return self._binop(_SymOp.AND, o)
+    def __ror__(self, o): return self._binop(_SymOp.OR, o)
+    def __rxor__(self, o): return self._binop(_SymOp.XOR, o)
+
+    def __eq__(self, o): return self._binop(_SymOp.EQ, o)
+    def __ne__(self, o): return self._binop(_SymOp.NE, o)
+    def __lt__(self, o): return self._binop(_SymOp.SLT, o)
+    def __le__(self, o): return self._binop(_SymOp.SLE, o)
+    def __gt__(self, o): return self._binop(_SymOp.SGT, o)
+    def __ge__(self, o): return self._binop(_SymOp.SGE, o)
+
+    def ult(self, o): return self._binop(_SymOp.ULT, o)
+    def ule(self, o): return self._binop(_SymOp.ULE, o)
+    def ugt(self, o): return self._binop(_SymOp.UGT, o)
+    def uge(self, o): return self._binop(_SymOp.UGE, o)
+
+    def logical_and(self, o): return self._binop(_SymOp.BOOL_AND, o)
+    def logical_or(self, o): return self._binop(_SymOp.BOOL_OR, o)
+    def implies(self, o): return self._binop(_SymOp.IMPLIES, o)
+
+    def __invert__(self):
+        """Boolean negation. Only valid on a boolean expression."""
+        ptr = lib.dragon_symexpr_not(self._handle())
+        if ptr == ffi.NULL:
+            raise ValueError('~ is boolean negation; this expression is not a bool')
+        return SymExpr._own(ptr, self._owner)
+
+
+class Successor:
+    """One address control flow can reach out of a block, and the condition
+    under which it is reached."""
+
+    def __init__(self, address, taken, condition):
+        self.address = address
+        self.taken = taken
+        self.condition = condition
+
+    def __repr__(self):
+        return 'Successor(address=0x%x, taken=%s)' % (self.address, self.taken)
+
+
+class SymWarning:
+    """A soft problem that did not stop execution: an address too symbolic to
+    resolve, an enumeration that hit its bound, a solver timeout."""
+
+    def __init__(self, address, message):
+        self.address = address
+        self.message = message
+
+    def __repr__(self):
+        return 'SymWarning(0x%x: %s)' % (self.address, self.message)
+
+
+class RunResult:
+    """What one SymbolicExecutor.run() did."""
+
+    def __init__(self, ptr, owner):
+        self.status = int(lib.dragon_symrun_status(ptr))
+        self.exit = int(lib.dragon_symrun_exit(ptr))
+        self.complete = bool(lib.dragon_symrun_complete(ptr))
+
+        raw = lib.dragon_symrun_error(ptr)
+        if raw == ffi.NULL:
+            self.error = None
+        else:
+            try:
+                self.error = ffi.string(raw).decode()
+            finally:
+                lib.dragon_cstr_free(raw)
+
+        ops = ffi.new('size_t*'); queries = ffi.new('size_t*'); conc = ffi.new('size_t*')
+        lib.dragon_symrun_stats(ptr, ops, queries, conc)
+        self.ops_executed = int(ops[0])
+        self.solver_queries = int(queries[0])
+        self.addresses_concretized = int(conc[0])
+
+        self.successors = []
+        addr = ffi.new('uint64_t*'); taken = ffi.new('int*')
+        for i in range(int(lib.dragon_symrun_successor_count(ptr))):
+            if not lib.dragon_symrun_successor(ptr, i, addr, taken):
+                continue
+            cond = lib.dragon_symrun_successor_condition(ptr, i)
+            self.successors.append(Successor(
+                int(addr[0]), bool(taken[0]),
+                SymExpr._own(cond, owner) if cond != ffi.NULL else None))
+
+        self.warnings = []
+        for i in range(int(lib.dragon_symrun_warning_count(ptr))):
+            waddr = ffi.new('uint64_t*')
+            raw = lib.dragon_symrun_warning(ptr, i, waddr)
+            if raw == ffi.NULL:
+                continue
+            try:
+                self.warnings.append(SymWarning(int(waddr[0]),
+                                                ffi.string(raw).decode()))
+            finally:
+                lib.dragon_cstr_free(raw)
+
+    @property
+    def ok(self):
+        return self.status == SymExecStatus.OK
+
+    @property
+    def successor_addresses(self):
+        return [s.address for s in self.successors]
+
+    def __repr__(self):
+        return 'RunResult(ok=%s, exit=%d, successors=%s, complete=%s)' % (
+            self.ok, self.exit,
+            ['0x%x' % s.address for s in self.successors], self.complete)
+
+
+class Solution:
+    """A satisfying assignment: every free variable the executor created,
+    bound to a concrete value."""
+
+    def __init__(self, ptr):
+        self._ptr = ptr
+        self._values = {}
+
+        @ffi.callback('void(const char*, uint64_t, void*)')
+        def collect(name, value, _user):
+            self._values[ffi.string(name).decode()] = int(value)
+
+        lib.dragon_solution_each(ptr, collect, ffi.NULL)
+
+    def __del__(self):
+        if getattr(self, '_ptr', None):
+            lib.dragon_solution_destroy(self._ptr)
+            self._ptr = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.__del__()
+
+    def value(self, symbol):
+        """Concrete value of one symbol, or None if the model does not bind it."""
+        return self._values.get(symbol)
+
+    def values(self):
+        """Every bound symbol, as a name -> value dict."""
+        return dict(self._values)
+
+    def bytes(self, region):
+        """Bytes of a symbolised memory region, in address order.
+        Returns b'' if no region of that name was symbolised."""
+        name = region.encode()
+        size = int(lib.dragon_solution_bytes(self._ptr, name, ffi.NULL, 0))
+        if size == 0:
+            return b''
+        buf = ffi.new('uint8_t[]', size)
+        lib.dragon_solution_bytes(self._ptr, name, buf, size)
+        return bytes(ffi.buffer(buf, size))
+
+    def __repr__(self):
+        return 'Solution(%d symbols)' % len(self._values)
+
+
+class SymbolicExecutor:
+    """Symbolic execution of IGNIL blocks over Z3 bitvectors.
+
+    Seed the machine, run a block, then ask the solver about what it computed::
+
+        exec = SymbolicExecutor()
+        exec.symbolize_memory(0x4000, 8, 'flag')
+        exec.set_register(x86.RDI, 0x4000)
+        result = exec.run(block)
+        solution = exec.solve(exec.read_register(x86.RAX) == 0xdeadbeef)
+        if solution:
+            print(solution.bytes('flag'))
+
+    Registers are the (offset, width, name) tuples from the x86 / arm classes.
+    State persists across run() calls, so walking a path is a sequence of runs.
+
+    Expressions may safely outlive the executor that produced them — each one
+    keeps the underlying Z3 context alive on its own.
+
+    Requires the library to have been built with -DDRAGON_USE_Z3=ON.
+    """
+
+    def __init__(self, solver_timeout_ms=0, max_address_solutions=0,
+                 max_branch_targets=0, zero_extend_on_32bit_write=None,
+                 symbolize_unmapped_reads=None, stop_at_terminator=None):
+        """Every argument left at its default defers to the library default:
+        a 5 s solver timeout, 64 candidate addresses per symbolic access, 256
+        candidate branch targets, 32-bit register writes clearing the upper
+        half, unmapped reads becoming fresh variables, and execution stopping
+        at the first terminator (turn that off to run a lifted trace)."""
+
+        def tri(v):
+            if v is None:
+                return 0
+            return 1 if v else -1
+
+        opts = ffi.new('dragon_symexec_options_t*')
+        opts.solver_timeout_ms = solver_timeout_ms
+        opts.max_address_solutions = max_address_solutions
+        opts.max_branch_targets = max_branch_targets
+        opts.zero_extend_on_32bit_write = tri(zero_extend_on_32bit_write)
+        opts.symbolize_unmapped_reads = tri(symbolize_unmapped_reads)
+        opts.stop_at_terminator = tri(stop_at_terminator)
+
+        self._ptr = lib.dragon_symexec_create(opts)
+        if self._ptr == ffi.NULL:
+            raise RuntimeError('could not create a symbolic executor')
+
+    def _handle(self):
+        if not getattr(self, '_ptr', None):
+            raise RuntimeError('this SymbolicExecutor has been destroyed')
+        return self._ptr
+
+    def __del__(self):
+        # Only drops this object's reference. An expression still alive holds
+        # one of its own (see the C shim's SymExecHandle), so the underlying
+        # Z3 context outlives any expression built from it no matter which
+        # order Python happens to finalize them in.
+        if getattr(self, '_ptr', None):
+            lib.dragon_symexec_destroy(self._ptr)
+            self._ptr = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.__del__()
+
+    def reset(self):
+        """Drop all register, memory and constraint state; keep the options."""
+        lib.dragon_symexec_reset(self._handle())
+
+    # -- machine setup ---------------------------------------------------------
+
+    @staticmethod
+    def _reg(reg):
+        """Accept an (offset, width, name) descriptor or a bare
+        (offset, width) pair."""
+        return int(reg[0]), int(reg[1])
+
+    def set_register(self, reg, value):
+        """Give a register a concrete value."""
+        offset, width = self._reg(reg)
+        lib.dragon_symexec_set_register(self._handle(), offset, width, value)
+
+    def symbolize_register(self, reg, name=None):
+        """Bind a register to a fresh free variable and return it."""
+        offset, width = self._reg(reg)
+        ptr = lib.dragon_symexec_symbolize_register(
+            self._handle(), offset, width,
+            name.encode() if name else ffi.NULL)
+        return SymExpr._own(ptr, self)
+
+    def map_memory(self, address, data):
+        """Map a concrete blob — a lookup table, a constant pool, a captured
+        stack frame."""
+        buf = bytes(data)
+        lib.dragon_symexec_map_memory(self._handle(), address, buf, len(buf))
+
+    def symbolize_memory(self, address, size, name):
+        """Fill [address, address+size) with per-byte free variables named
+        `name[0]`..`name[size-1]`. Solution.bytes(name) reads them back."""
+        ptr = lib.dragon_symexec_symbolize_memory(
+            self._handle(), address, size, name.encode())
+        if ptr == ffi.NULL:
+            raise ValueError('could not symbolize that memory region')
+        return SymExpr._own(ptr, self)
+
+    def assume(self, condition):
+        """Constrain the rest of the run — a precondition on an input, or a
+        fact recovered from a trace."""
+        lib.dragon_symexec_assume(self._handle(), condition._handle())
+
+    # -- expressions -----------------------------------------------------------
+
+    def const(self, value, width):
+        """A concrete bitvector."""
+        ptr = lib.dragon_symexec_const(self._handle(), value, width)
+        if ptr == ffi.NULL:
+            raise ValueError('width must be between 1 and 64')
+        return SymExpr._own(ptr, self)
+
+    def read_register(self, reg):
+        """The expression a register currently holds."""
+        offset, width = self._reg(reg)
+        return SymExpr._own(
+            lib.dragon_symexec_read_register(self._handle(), offset, width), self)
+
+    def read_memory(self, address, width):
+        """The expression `width` bits at `address` currently hold."""
+        return SymExpr._own(
+            lib.dragon_symexec_read_memory(self._handle(), address, width), self)
+
+    # -- execution -------------------------------------------------------------
+
+    def run(self, block):
+        """Execute every op of an IGNILBlock against the current state."""
+        ptr = lib.dragon_symexec_run(self._handle(), block._ptr)
+        if ptr == ffi.NULL:
+            raise ValueError('could not run that block')
+        try:
+            return RunResult(ptr, self)
+        finally:
+            lib.dragon_symrun_destroy(ptr)
+
+    # -- solver queries --------------------------------------------------------
+
+    def is_satisfiable(self, condition):
+        """True/False, or None if the solver timed out — never a guess."""
+        r = int(lib.dragon_symexec_is_satisfiable(self._handle(), condition._handle()))
+        return None if r < 0 else bool(r)
+
+    def proves(self, condition):
+        """Does the condition hold on every model of the path constraints?
+        None if the solver timed out."""
+        r = int(lib.dragon_symexec_proves(self._handle(), condition._handle()))
+        return None if r < 0 else bool(r)
+
+    def evaluate(self, expr):
+        """The value of an expression if the path constraints force exactly
+        one, else None — the 'is this obfuscated expression really a
+        constant?' query."""
+        out = ffi.new('uint64_t*')
+        if not lib.dragon_symexec_evaluate(self._handle(), expr._handle(), out):
+            return None
+        return int(out[0])
+
+    def enumerate(self, expr, max_solutions=64):
+        """Up to `max_solutions` distinct satisfying values of an expression.
+
+        Returns (values, exhaustive); `exhaustive` is True only when the
+        enumeration ran out of values rather than hitting the bound, i.e. the
+        list is the complete set."""
+        buf = ffi.new('uint64_t[]', max_solutions)
+        exhaustive = ffi.new('int*')
+        n = int(lib.dragon_symexec_enumerate(
+            self._handle(), expr._handle(), buf, max_solutions, exhaustive))
+        return [int(buf[i]) for i in range(n)], bool(exhaustive[0])
+
+    def solve(self, goal=None):
+        """Solve the path constraints, plus `goal` if given. Returns a
+        Solution, or None if there is no satisfying assignment."""
+        ptr = lib.dragon_symexec_solve(
+            self._handle(), goal._handle() if goal is not None else ffi.NULL)
+        if ptr == ffi.NULL:
+            return None
+        return Solution(ptr)

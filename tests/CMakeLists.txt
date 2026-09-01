@@ -17,7 +17,11 @@ add_executable(dragon_tests
 )
 
 if(DRAGON_USE_Z3)
-    target_sources(dragon_tests PRIVATE analysis/TestSliceExprZ3.cpp obfush/TestObfushZ3.cpp)
+    target_sources(dragon_tests PRIVATE
+        analysis/TestSliceExprZ3.cpp
+        obfush/TestObfushZ3.cpp
+        symbolic/TestSymbolicExecutor.cpp
+        symbolic/TestSymbolicCFG.cpp)
 endif()
 
 if(DRAGON_USE_UNICORN)

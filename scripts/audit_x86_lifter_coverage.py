@@ -34,14 +34,21 @@ DEFAULT_BIN = REPO_ROOT / "build" / "bin" / "opcode_audit"
 # LLVM operand-form naming vocabulary (rr/ri/ri8/ri32/rm/mr/mi/mi8/mi32), so
 # a single generic scan finds every variant of every mnemonic in the list.
 # Grow this list as the lifter grows into more mnemonics of the same shape;
-# mnemonics with a different encoding shape (INC/DEC/shifts/MOVZX/...) need
-# their own audit and are intentionally not included here yet.
+# mnemonics with a different encoding shape (INC/DEC/shifts/...) need their
+# own audit and are intentionally not included here yet - except MOVZX/MOVSX,
+# which get the exhaustive check below instead.
 PRIORITY_MNEMONICS = [
     "MOV", "ADD", "SUB", "AND", "OR", "XOR", "CMP", "TEST", "ADC", "SBB",
 ]
 
-# Every suffix ever used for this family, across every operand width.
-FORM_SUFFIXES = ["rr", "ri", "ri8", "ri32", "rm", "mr", "mi", "mi8", "mi32"]
+# Every suffix ever used for this family, across every operand width. The
+# bare "i8"/"i16"/"i32" are the accumulator forms (`xor eax, imm32`, opcode
+# 0x35) - no ModRM byte, destination implicit. They were missing from this
+# list, which is why ToDo/LifterGaps.md #5 went unreported for so long: not
+# matching FORM_RE means not counted, so an unhandled form looks like no form
+# at all rather than like a gap.
+FORM_SUFFIXES = ["rr", "ri", "ri8", "ri32", "rm", "mr", "mi", "mi8", "mi32",
+                 "i8", "i16", "i32"]
 WIDTHS = ["8", "16", "32", "64"]
 
 FORM_RE = re.compile(
@@ -65,6 +72,35 @@ def get_llvm_opcodes(binary: Path) -> set[str]:
 def get_handled_mnemonics(src: Path) -> set[str]:
     text = src.read_text()
     return set(re.findall(r'\{"([A-Za-z0-9]+)",\s*&X86IGNILLifter::', text))
+
+
+# MOVZX/MOVSX do not share the dyadic family's rr/ri/rm/mr vocabulary - their
+# forms are rr/rm crossed with a source width (MOVZX32rm8), plus _NOREX
+# variants - so FORM_RE cannot describe them and they get their own check.
+# They are also not dispatched through kOpcodeFields: each spelling needs a
+# width and an operand form, so the lifter keeps them in name -> width tables
+# instead (see MovExtendForm). Coverage has to be exhaustive rather than
+# best-effort, because an unlisted spelling does not fail loudly at the right
+# place - it lifts to a bare UNDEF, which reads as "instruction not modelled"
+# rather than "this instruction was forgotten". See ToDo/LifterGaps.md #4.
+EXTEND_MNEMONICS = ("MOVZX", "MOVSX")
+
+
+def get_extend_spellings(src: Path) -> set[str]:
+    """Opcode names listed in the lifter's MOVZX/MOVSX width tables."""
+    text = src.read_text()
+    return {
+        name
+        for name in re.findall(r'\{"([A-Za-z0-9_]+)",\s*\d+\}', text)
+        if name.startswith(EXTEND_MNEMONICS)
+    }
+
+
+def audit_extends(llvm_opcodes: set[str], src: Path) -> list[str]:
+    """Every MOVZX/MOVSX opcode LLVM decodes but the lifter does not list."""
+    listed = get_extend_spellings(src)
+    known = {n for n in llvm_opcodes if n.startswith(EXTEND_MNEMONICS)}
+    return sorted(known - listed)
 
 
 def main() -> int:
@@ -116,7 +152,21 @@ def main() -> int:
         for name in missing_list:
             print(f"  {name}")
 
-    if total_missing and not args.allow_missing:
+    # MOVZX/MOVSX, checked exhaustively rather than by operand-form matrix.
+    extend_missing = audit_extends(llvm_opcodes, LIFTER_SRC)
+    extend_total = len([n for n in llvm_opcodes
+                        if n.startswith(EXTEND_MNEMONICS)])
+    print()
+    print(f"MOVZX/MOVSX: {extend_total - len(extend_missing)}/{extend_total} "
+          f"spellings listed "
+          f"[{'OK' if not extend_missing else 'GAP'}]")
+    if extend_missing:
+        print(f"\nMissing MOVZX/MOVSX width-table entries "
+              f"({len(extend_missing)}):")
+        for name in extend_missing:
+            print(f"  {name}")
+
+    if (total_missing or extend_missing) and not args.allow_missing:
         return 1
     return 0
 
