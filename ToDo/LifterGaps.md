@@ -368,3 +368,45 @@ the destination is the architectural accumulator for the width (AL/AX/EAX/RAX
 same time: make the default-case `UNDEF` mitigation consider implicit defs
 (`MCInstrDesc::implicit_defs()`) so the next gap of this shape fails loud
 instead of vanishing.
+
+---
+
+## 6. x86 IGNIL lifter silently emits *nothing* for POPFQ / PUSHFQ — FIXED
+
+**Status:** fixed on the `feature/ignil-optimizations` branch (found 2026-09-01
+while bringing up register/flag dead-store elimination and testing it against
+Jonathan Salwan's VMProtect example, which is dense with `popfq`).
+
+**What was wrong:** `POPF64` (`popfq`) and `PUSHF64` (`pushfq`) were absent from
+the lifter's opcode dispatch table, so both fell through to the default case.
+Neither has an *explicit* register-def operand (they define RFLAGS and adjust
+RSP implicitly), so the gap-#1 `UNDEF` mitigation — which only fires on explicit
+defs via `MCInstrDesc::getNumDefs()` — did not catch it, exactly like gap #5.
+Both instructions produced **zero** IGNIL ops.
+
+**Impact:** two ways. (1) The flags are neither read nor written, so any later
+`CJMP`/`SETcc`/`ADC` runs on stale flag values — the same silent-miscompile
+class as gaps #1 and #5. (2) Worse for these two specifically: `popfq`/`pushfq`
+are stack operations, so dropping them entirely also drops the `RSP += 8` /
+`RSP -= 8`, desynchronizing every subsequent stack access and `ret` in the
+block. Concretely, dead-store elimination could not collapse Salwan's VMProtect
+block under the sound "assume-everything-live-out" model: the never-clobbered
+junk flag writes stayed live because no `popfq` ever overwrote them.
+
+**Fix:** register `POPF64`/`PUSHF64` and add `liftPopf`/`liftPushf`
+(`lib/disassemblers/x86/X86IGNILLifter.cpp`). POPFQ loads the 8-byte word from
+`[RSP]`, scatters bits 0/2/4/6/7/10/11 into `CF/PF/AF/ZF/SF/DF/OF` (`SHR`+`AND`+
+`TRUNC`), then `RSP += 8`. PUSHFQ gathers those flags into an RFLAGS word
+(`ZEXT`+`SHL`+`OR`, reserved bit 1 forced to 1), then `RSP -= 8` and stores it.
+The system bits IGNIL does not model (TF/IF/IOPL/NT/...) are dropped on pop and
+emitted as 0 on push — a deliberate, documented modeling limit, not a silent
+gap. Covered by two Unicorn-vs-JIT semantic round-trips in
+`tests/semantic/TestX86SemanticRoundTrip.cpp` (a known-value `popfq`, and a
+`pushfq`→`popfq` flag-preservation round-trip), and exercised end-to-end by the
+Salwan VMProtect case in `tests/analysis/TestDeadStoreElimination.cpp`.
+
+**Still open (same class, not hit by this work):** the 8/16-bit ALU forms
+(`or si,si`, `xadd`, `rcl`/`shld`/`bt`/`setcc`, ...) still lift to `UNDEF` —
+these are on `scripts/audit_x86_lifter_coverage.py --allow-missing` and are the
+reason the Salwan test drives DSE with the sound live-out model rather than
+relying on those instructions lifting precisely.
