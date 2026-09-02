@@ -561,6 +561,122 @@ Block passBackwardDCE(const Block &in, SimplifyStats &stats) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Dead-store elimination: byte-precise backward register/flag liveness.
+//
+// Generalizes passBackwardDCE from Temps to architectural Regs. The register
+// address space is a flat byte array (see IGNIL.hpp / x86registers.def), so
+// overlapping sub-registers (RAX/EAX/AX/AL, AH) alias by byte and flags are
+// ordinary single bytes. One backward pass is exact for straight-line code:
+// a removed store's sources are not counted as uses, so a whole dead chain
+// collapses without needing a fixed point.
+// ---------------------------------------------------------------------------
+
+// Bytes clobbered by writing `r`. width bits -> ceil(width/8) bytes at
+// [offset, offset+n). A 32-bit write also clears the upper half of its 64-bit
+// parent under the zero-extend rule, so it clobbers the full 8 bytes - this
+// wider set is what makes the removal decision sound (dropping the write would
+// otherwise leak the parent's stale upper half).
+std::uint32_t clobberByteCount(const Reg &r, bool zeroExtend32) {
+  if (zeroExtend32 && r.width == 32)
+    return 8;
+  return (static_cast<std::uint32_t>(r.width) + 7u) / 8u;
+}
+
+// Bytes actually read when `r` is a source: exactly its own width, never
+// zero-extended (reading EAX reads bytes [0,4), not RAX[4,8)).
+std::uint32_t readByteCount(const Reg &r) {
+  return (static_cast<std::uint32_t>(r.width) + 7u) / 8u;
+}
+
+void insertBytes(std::unordered_set<std::uint32_t> &set, std::uint32_t offset,
+                 std::uint32_t count) {
+  for (std::uint32_t b = 0; b < count; ++b)
+    set.insert(offset + b);
+}
+
+Block passRegDSE(const Block &in,
+                 const std::optional<std::vector<Reg>> &liveOut,
+                 const DeadStoreOptions &opts, SimplifyStats &stats) {
+  const std::vector<Op> &ops = in.ops();
+
+  std::unordered_set<std::uint32_t> liveBytes; // live register-space bytes
+  std::unordered_set<std::uint32_t> liveTemps; // live temp ids
+
+  if (liveOut) {
+    for (const Reg &r: *liveOut)
+      insertBytes(liveBytes, r.offset, readByteCount(r));
+  } else {
+    // "assume everything live on exit": seed with every register byte the
+    // block mentions. A byte never mentioned cannot be defined here, so its
+    // liveness is irrelevant; every byte that *is* defined starts live, so a
+    // store is removable only once overwritten later in the block before any
+    // read. This is Triton's block-DSE model and needs no ABI knowledge.
+    for (const Op &op: ops) {
+      if (op.dst)
+        if (const auto *r = std::get_if<Reg>(&*op.dst))
+          insertBytes(liveBytes, r->offset,
+                      clobberByteCount(*r, opts.zeroExtendOn32BitWrite));
+      for (const auto &s: op.srcs)
+        if (const auto *r = std::get_if<Reg>(&s))
+          insertBytes(liveBytes, r->offset, readByteCount(*r));
+    }
+  }
+
+  auto anyByteLive = [&](std::uint32_t offset, std::uint32_t count) {
+    for (std::uint32_t b = 0; b < count; ++b)
+      if (liveBytes.count(offset + b))
+        return true;
+    return false;
+  };
+
+  std::vector<bool> keep(ops.size(), true);
+
+  for (std::size_t i = ops.size(); i-- > 0;) {
+    const Op &op = ops[i];
+
+    bool removable = false;
+    if (op.dst && !hasSideEffect(op.opcode)) {
+      if (const auto *r = std::get_if<Reg>(&*op.dst))
+        removable = !anyByteLive(
+                r->offset, clobberByteCount(*r, opts.zeroExtendOn32BitWrite));
+      else if (const auto *t = std::get_if<Temp>(&*op.dst))
+        removable = !liveTemps.count(t->id);
+    }
+
+    if (removable) {
+      keep[i] = false;
+      ++stats.opsRemoved;
+      continue; // dropped: its sources do not count as uses
+    }
+
+    // Kept: kill the bytes/temp this op defines, then mark its reads live.
+    // Kill-before-add keeps a read-modify-write (dst also a src, e.g.
+    // ADD rax, rbx) live, since the src re-adds it.
+    if (op.dst) {
+      if (const auto *r = std::get_if<Reg>(&*op.dst)) {
+        std::uint32_t n = clobberByteCount(*r, opts.zeroExtendOn32BitWrite);
+        for (std::uint32_t b = 0; b < n; ++b)
+          liveBytes.erase(r->offset + b);
+      } else if (const auto *t = std::get_if<Temp>(&*op.dst)) {
+        liveTemps.erase(t->id);
+      }
+    }
+    for (const auto &s: op.srcs) {
+      if (const auto *r = std::get_if<Reg>(&s))
+        insertBytes(liveBytes, r->offset, readByteCount(*r));
+      else if (const auto *t = std::get_if<Temp>(&s))
+        liveTemps.insert(t->id);
+    }
+  }
+
+  Block out{in.startAddress()};
+  for (std::size_t i = 0; i < ops.size(); ++i)
+    if (keep[i])
+      out.append(ops[i]);
+  return out;
+}
+
 } // namespace
 
 Block simplifyBlock(const Block &block, SimplifyStats &stats,
@@ -587,6 +703,22 @@ Block simplifyBlock(const Block &block, SimplifyStats &stats,
 Block simplifyBlock(const Block &block, int maxIterations) {
   SimplifyStats stats;
   return simplifyBlock(block, stats, maxIterations);
+}
+
+Block deadStoreEliminate(const Block &block,
+                         const std::optional<std::vector<Reg>> &liveOut,
+                         SimplifyStats &stats, DeadStoreOptions opts) {
+  stats = SimplifyStats{};
+  Block out = passRegDSE(block, liveOut, opts, stats);
+  stats.iterations = 1; // exact in a single backward pass
+  return out;
+}
+
+Block deadStoreEliminate(const Block &block,
+                         const std::optional<std::vector<Reg>> &liveOut,
+                         DeadStoreOptions opts) {
+  SimplifyStats stats;
+  return deadStoreEliminate(block, liveOut, stats, opts);
 }
 
 } // namespace dragon::ignil

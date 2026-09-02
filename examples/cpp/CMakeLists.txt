@@ -35,6 +35,28 @@ target_include_directories(llvmir_lifting PRIVATE
         ${LLVM_INCLUDE_DIRS}
 )
 
+# Register/flag dead-store elimination on Salwan's VMProtect junk example:
+# prints the original lifted IGNIL and the optimized (collapsed) block.
+add_executable(dead_store_elimination dead_store_elimination.cpp)
+
+target_link_libraries(dead_store_elimination PRIVATE dragon::libdragon)
+
+target_include_directories(dead_store_elimination PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${LLVM_INCLUDE_DIRS}
+)
+
+# The AArch64 counterpart: scratch-register junk collapsed under an ABI-aware
+# (AAPCS64) live-out set, contrasted with the assume-all-live model.
+add_executable(dead_store_elimination_arm64 dead_store_elimination_arm64.cpp)
+
+target_link_libraries(dead_store_elimination_arm64 PRIVATE dragon::libdragon)
+
+target_include_directories(dead_store_elimination_arm64 PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${LLVM_INCLUDE_DIRS}
+)
+
 if(DRAGON_USE_Z3)
     # Symbolic execution of lifted IGNIL: solving for inputs, proving MBA
     # identities, and resolving computed jumps to their real targets.
