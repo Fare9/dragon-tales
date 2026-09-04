@@ -20,6 +20,7 @@
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/lifters/ignil/IGNILSimplify.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
 #include <cstdint>
 #include <format>
@@ -136,9 +137,14 @@ int main() {
   // Run the pass with the conservative "assume everything is live on exit"
   // model (std::nullopt) - exactly Triton's. A store is removed only when it
   // is overwritten within the block before any read.
+  // The x86-64 register file resolves a 32-bit write's zero-extend range
+  // exactly (EAX -> RAX) rather than leaning on the assumed 8-byte parent.
+  dragon::ignil::DeadStoreOptions opts;
+  opts.registerFile = dragon::x86::registerFile();
+
   dragon::ignil::SimplifyStats stats;
   dragon::ignil::Block optimized =
-          dragon::ignil::deadStoreEliminate(*lifted, std::nullopt, stats);
+          dragon::ignil::deadStoreEliminate(*lifted, std::nullopt, stats, opts);
 
   printBlockByInstruction("OPTIMIZED (after dead-store elimination)", optimized,
                           disasmAt);

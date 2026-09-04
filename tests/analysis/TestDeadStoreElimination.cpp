@@ -4,6 +4,7 @@
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/lifters/ignil/IGNILSimplify.hpp>
+#include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
 #include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
 #include <algorithm>
@@ -14,6 +15,7 @@
 #include <unordered_map>
 #include <vector>
 
+namespace arm = dragon::arm;
 namespace x86 = dragon::x86;
 using dragon::ignil::Block;
 using dragon::ignil::Const;
@@ -116,6 +118,87 @@ TEST_CASE("DSE - 32-bit write zero-extends over the 64-bit parent",
   Block out = deadStoreEliminate(block, std::nullopt, stats);
   REQUIRE(stats.opsRemoved == 1);
   REQUIRE_FALSE(writesReg(out, x86::EAX));
+}
+
+TEST_CASE("DSE - a 32-bit write's zero-extend range comes from the register file",
+          "[ignil][dse]") {
+  using dragon::ignil::DeadStoreOptions;
+
+  // On AArch64 S0 is a 32-bit *lane view* of the 128-bit V0 at the same
+  // offset, so `fmov s0, ...` zeroes all 16 bytes of V0 - not 8, the way W0
+  // zeroes the 8 bytes of X0. A store is only droppable when every byte it
+  // clobbers is dead, so under-stating that range at 8 bytes would let a write
+  // whose upper V0 bytes are still live be removed.
+  SECTION("an S write is kept when only the far half of its parent V is live") {
+    Block block{kAddr};
+    block.append({Opcode::COPY, Value{arm::S0}, {Value{Const{1, 32}}}, kAddr});
+    block.append({Opcode::RET, std::nullopt, {}, kAddr + 4});
+
+    // Live out: only V0's upper 8 bytes - past anything an 8-byte parent
+    // covers, but squarely inside the 16 bytes the write really zeroes.
+    const std::vector<Reg> liveOut{Reg{arm::kOffV0 + 8, 64, "V0[127:64]"}};
+
+    DeadStoreOptions withFile;
+    withFile.registerFile = arm::registerFile();
+    REQUIRE(writesReg(deadStoreEliminate(block, liveOut, withFile), arm::S0));
+
+    // Pins the documented fallback: with no register file the parent is assumed
+    // to be 8 bytes, so the clobber is under-stated as V0[63:0], the live upper
+    // half is never considered, and the write is dropped - leaving those bytes
+    // stale instead of zeroed. This is why registerFile() must be passed for
+    // any block that can touch FP/SIMD registers.
+    REQUIRE_FALSE(writesReg(
+            deadStoreEliminate(block, liveOut, DeadStoreOptions{}), arm::S0));
+  }
+
+  SECTION("an S write is still killed by a later write to its parent V") {
+    Block block{kAddr};
+    block.append({Opcode::COPY, Value{arm::S0}, {Value{Const{1, 32}}}, kAddr});
+    block.append(
+            {Opcode::COPY, Value{arm::V0}, {Value{Const{2, 128}}}, kAddr + 4});
+    block.append({Opcode::RET, std::nullopt, {}, kAddr + 8});
+
+    DeadStoreOptions opts;
+    opts.registerFile = arm::registerFile();
+    SimplifyStats stats;
+    Block out = deadStoreEliminate(block, std::nullopt, stats, opts);
+
+    REQUIRE(stats.opsRemoved == 1);
+    REQUIRE_FALSE(writesReg(out, arm::S0));
+    REQUIRE(writesReg(out, arm::V0));
+  }
+
+  SECTION("a W write still zero-extends over exactly its 8-byte X parent") {
+    Block block{kAddr};
+    block.append({Opcode::COPY, Value{arm::X0}, {Value{Const{1, 64}}}, kAddr});
+    block.append(
+            {Opcode::COPY, Value{arm::W0}, {Value{Const{2, 32}}}, kAddr + 4});
+    block.append({Opcode::RET, std::nullopt, {}, kAddr + 8});
+
+    DeadStoreOptions opts;
+    opts.registerFile = arm::registerFile();
+    SimplifyStats stats;
+    Block out = deadStoreEliminate(block, std::nullopt, stats, opts);
+
+    REQUIRE(stats.opsRemoved == 1); // the X0 write is fully clobbered by W0
+    REQUIRE_FALSE(writesReg(out, arm::X0));
+  }
+
+  SECTION("the x86 register file leaves EAX->RAX behaviour unchanged") {
+    Block block{kAddr};
+    block.append({Opcode::COPY, Value{x86::RAX}, {Value{Const{1, 64}}}, kAddr});
+    block.append(
+            {Opcode::COPY, Value{x86::EAX}, {Value{Const{2, 32}}}, kAddr + 7});
+    block.append({Opcode::RET, std::nullopt, {}, kAddr + 12});
+
+    DeadStoreOptions opts;
+    opts.registerFile = x86::registerFile();
+    SimplifyStats stats;
+    Block out = deadStoreEliminate(block, std::nullopt, stats, opts);
+
+    REQUIRE(stats.opsRemoved == 1);
+    REQUIRE_FALSE(writesReg(out, x86::RAX));
+  }
 }
 
 TEST_CASE("DSE - precise live-out removes a final store that nullopt keeps",

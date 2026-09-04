@@ -17,6 +17,8 @@
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/lifters/ignil/IGNILSimplify.hpp>
+#include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 #include <dragon/disassembler/Instruction.hpp>
 #include <dragon/analysis/SliceExpr.hpp>
 #include <dragon/sigs/Signature.hpp>
@@ -596,6 +598,58 @@ dragon_ignil_block_t *dragon_ignil_simplify_block(
     *out_ops_removed = stats.opsRemoved;
   if (out_iterations)
     *out_iterations = stats.iterations;
+  return reinterpret_cast<dragon_ignil_block_t *>(block);
+}
+
+// =============================================================================
+// IGNIL dead-store elimination
+// =============================================================================
+
+namespace {
+
+// The maximal registers for `arch`, so a 32-bit write's zero-extend range is
+// resolved exactly. An unknown/unsupported architecture yields an empty file,
+// which makes deadStoreEliminate fall back to assuming an 8-byte parent.
+std::vector<dragon::ignil::RegExtent> register_file_for(
+        dragon_architecture_t arch) {
+  switch (arch) {
+    case DRAGON_ARCH_X86_32:
+    case DRAGON_ARCH_X86_64:
+      return dragon::x86::registerFile();
+    case DRAGON_ARCH_ARM64:
+      return dragon::arm::registerFile();
+    default:
+      return {};
+  }
+}
+
+} // namespace
+
+dragon_ignil_block_t *dragon_ignil_dead_store_eliminate(
+        const dragon_ignil_block_t *b, dragon_architecture_t arch,
+        const dragon_ignil_reg_t *live_out, size_t live_out_count,
+        size_t *out_ops_removed) {
+  if (!b)
+    return nullptr;
+
+  dragon::ignil::DeadStoreOptions opts;
+  opts.registerFile = register_file_for(arch);
+
+  std::optional<std::vector<dragon::ignil::Reg>> live;
+  if (live_out) {
+    std::vector<dragon::ignil::Reg> regs;
+    regs.reserve(live_out_count);
+    for (size_t i = 0; i < live_out_count; ++i)
+      regs.push_back(dragon::ignil::Reg{live_out[i].offset, live_out[i].width,
+                                        std::string{}});
+    live = std::move(regs);
+  }
+
+  dragon::ignil::SimplifyStats stats;
+  auto *block = new dragon::ignil::Block(dragon::ignil::deadStoreEliminate(
+          *as_ignil_block(b), live, stats, opts));
+  if (out_ops_removed)
+    *out_ops_removed = stats.opsRemoved;
   return reinterpret_cast<dragon_ignil_block_t *>(block);
 }
 

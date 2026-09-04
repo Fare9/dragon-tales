@@ -572,21 +572,46 @@ Block passBackwardDCE(const Block &in, SimplifyStats &stats) {
 // collapses without needing a fixed point.
 // ---------------------------------------------------------------------------
 
-// Bytes clobbered by writing `r`. width bits -> ceil(width/8) bytes at
-// [offset, offset+n). A 32-bit write also clears the upper half of its 64-bit
-// parent under the zero-extend rule, so it clobbers the full 8 bytes - this
-// wider set is what makes the removal decision sound (dropping the write would
-// otherwise leak the parent's stale upper half).
-std::uint32_t clobberByteCount(const Reg &r, bool zeroExtend32) {
-  if (zeroExtend32 && r.width == 32)
-    return 8;
-  return (static_cast<std::uint32_t>(r.width) + 7u) / 8u;
-}
+// Parent size assumed for a 32-bit write when no register file is supplied.
+// Exact for x86-64 GPRs (EAX -> RAX) and AArch64 W registers (W0 -> X0); see
+// DeadStoreOptions::registerFile for when that assumption is not enough.
+constexpr std::uint32_t kAssumedParentBytes = 8;
 
 // Bytes actually read when `r` is a source: exactly its own width, never
 // zero-extended (reading EAX reads bytes [0,4), not RAX[4,8)).
 std::uint32_t readByteCount(const Reg &r) {
   return (static_cast<std::uint32_t>(r.width) + 7u) / 8u;
+}
+
+// Bytes from `r`'s offset to the end of the maximal register containing it, or
+// 0 if the register file does not describe one. Sub-registers share their
+// parent's base offset in this model (EAX/RAX at 0, S0/V0 at 272), with
+// AH-style high bytes sitting inside it, so containment - not equality - is the
+// test, and the count runs from r.offset rather than the parent's so a view
+// that does not start at the base still stops exactly at the parent's end.
+std::uint32_t bytesToParentEnd(const std::vector<RegExtent> &regFile,
+                               const Reg &r) {
+  const std::uint32_t own = readByteCount(r);
+  for (const RegExtent &p: regFile)
+    if (p.offset <= r.offset && r.offset + own <= p.offset + p.byteSize)
+      return p.offset + p.byteSize - r.offset;
+  return 0;
+}
+
+// Bytes clobbered by writing `r`. width bits -> ceil(width/8) bytes at
+// [offset, offset+n). Under the zero-extend rule a 32-bit write also clears the
+// rest of its parent, so it clobbers the parent's *whole* extent: EAX kills
+// RAX[0,8), W0 kills X0[0,8), and S0 kills V0[0,16) - the AArch64 case an
+// 8-byte assumption gets wrong. Since a store is dropped only when every byte
+// it clobbers is dead, under-estimating this range is what would let a write
+// whose upper parent bytes are live be removed.
+std::uint32_t clobberByteCount(const Reg &r, const DeadStoreOptions &opts) {
+  const std::uint32_t own = readByteCount(r);
+  if (!opts.zeroExtendOn32BitWrite || r.width != 32)
+    return own;
+  if (std::uint32_t toParentEnd = bytesToParentEnd(opts.registerFile, r))
+    return toParentEnd;
+  return std::max(own, kAssumedParentBytes);
 }
 
 void insertBytes(std::unordered_set<std::uint32_t> &set, std::uint32_t offset,
@@ -616,7 +641,7 @@ Block passRegDSE(const Block &in,
       if (op.dst)
         if (const auto *r = std::get_if<Reg>(&*op.dst))
           insertBytes(liveBytes, r->offset,
-                      clobberByteCount(*r, opts.zeroExtendOn32BitWrite));
+                      clobberByteCount(*r, opts));
       for (const auto &s: op.srcs)
         if (const auto *r = std::get_if<Reg>(&s))
           insertBytes(liveBytes, r->offset, readByteCount(*r));
@@ -639,7 +664,7 @@ Block passRegDSE(const Block &in,
     if (op.dst && !hasSideEffect(op.opcode)) {
       if (const auto *r = std::get_if<Reg>(&*op.dst))
         removable = !anyByteLive(
-                r->offset, clobberByteCount(*r, opts.zeroExtendOn32BitWrite));
+                r->offset, clobberByteCount(*r, opts));
       else if (const auto *t = std::get_if<Temp>(&*op.dst))
         removable = !liveTemps.count(t->id);
     }
@@ -655,7 +680,7 @@ Block passRegDSE(const Block &in,
     // ADD rax, rbx) live, since the src re-adds it.
     if (op.dst) {
       if (const auto *r = std::get_if<Reg>(&*op.dst)) {
-        std::uint32_t n = clobberByteCount(*r, opts.zeroExtendOn32BitWrite);
+        std::uint32_t n = clobberByteCount(*r, opts);
         for (std::uint32_t b = 0; b < n; ++b)
           liveBytes.erase(r->offset + b);
       } else if (const auto *t = std::get_if<Temp>(&*op.dst)) {

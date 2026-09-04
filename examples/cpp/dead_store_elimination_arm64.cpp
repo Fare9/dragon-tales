@@ -105,10 +105,17 @@ int main() {
   printBlock("ORIGINAL (real work buried in scratch-register junk)", *lifted,
              disasmAt);
 
+  // Hand the pass the AArch64 register file so a 32-bit write's zero-extend
+  // range is resolved exactly: W0 zeroes the 8 bytes of X0, but S0 zeroes all
+  // 16 bytes of V0. Without it an 8-byte parent is assumed, which is wrong for
+  // the S registers (see DeadStoreOptions::registerFile).
+  dragon::ignil::DeadStoreOptions opts;
+  opts.registerFile = arm::registerFile();
+
   // (1) Conservative model: assume every register is live on exit.
   dragon::ignil::SimplifyStats allLiveStats;
-  dragon::ignil::Block allLive =
-          dragon::ignil::deadStoreEliminate(*lifted, std::nullopt, allLiveStats);
+  dragon::ignil::Block allLive = dragon::ignil::deadStoreEliminate(
+          *lifted, std::nullopt, allLiveStats, opts);
   printBlock("AFTER DSE - assume-all-live (std::nullopt)", allLive, disasmAt);
 
   // (2) ABI-aware: AAPCS64 live-out at a `ret` is X0 + callee-saved + SP.
@@ -117,7 +124,7 @@ int main() {
           arm::X25, arm::X26, arm::X27, arm::X28, arm::X29, arm::SP};
   dragon::ignil::SimplifyStats abiStats;
   dragon::ignil::Block abi =
-          dragon::ignil::deadStoreEliminate(*lifted, liveOut, abiStats);
+          dragon::ignil::deadStoreEliminate(*lifted, liveOut, abiStats, opts);
   printBlock("AFTER DSE - AAPCS64 live-out (X0 + callee-saved + SP)", abi,
              disasmAt);
 

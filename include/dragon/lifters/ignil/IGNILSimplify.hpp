@@ -46,14 +46,29 @@ struct SimplifyStats {
 /// Tuning knobs for deadStoreEliminate().
 struct DeadStoreOptions {
   /// Model the x86-64 / AArch64 rule that a 32-bit write to a register clears
-  /// the upper 32 bits of its 64-bit parent (`mov eax, ...` zeroes RAX[63:32],
-  /// `mov w0, ...` zeroes X0[63:32]). With this on, a width-32 write is treated
-  /// as clobbering the full 8-byte parent register, which is required for
+  /// the rest of its parent (`mov eax, ...` zeroes RAX[63:32], `mov w0, ...`
+  /// zeroes X0[63:32]). With this on, a width-32 write is treated as
+  /// clobbering its *whole parent register*, which is required for
   /// *correctness* of the removal decision - dropping such a write would
-  /// otherwise leak the parent's stale upper half. 8- and 16-bit writes always
+  /// otherwise leak the parent's stale upper bytes. 8- and 16-bit writes always
   /// preserve the surrounding bytes on these targets, so they are unaffected.
   /// Turn off only for a target where a 32-bit write is a merge, not a zero.
   bool zeroExtendOn32BitWrite = true;
+
+  /// The target's maximal registers, which is how a 32-bit write's parent - and
+  /// therefore the byte range it zero-extends over - is resolved exactly. Pass
+  /// dragon::x86::registerFile() or dragon::arm::registerFile().
+  ///
+  /// Supplying it MATTERS whenever a 32-bit register can be a lane view of
+  /// something wider than 8 bytes. On AArch64 `S0` is a 32-bit view of the
+  /// 128-bit `V0` at the same offset, and `fmov s0, ...` zeroes all 16 bytes of
+  /// V0, not 8. Left empty, an 8-byte parent is assumed, which is exact for
+  /// x86-64 GPRs (EAX->RAX) and AArch64 W registers (W0->X0) but
+  /// *under*-estimates an S register's clobber - and since a store is removed
+  /// only when every byte it clobbers is dead, under-estimating it can drop a
+  /// write whose upper parent bytes were still live. Pass the register file for
+  /// any block that can touch FP/SIMD registers.
+  std::vector<RegExtent> registerFile;
 };
 
 /// Removes dead register/flag stores from a single block, byte-precisely.
