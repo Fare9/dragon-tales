@@ -656,6 +656,61 @@ class IGNILBlock:
         stats = SimplifyStats(out_cf[0], out_ia[0], out_or[0], out_it[0])
         return IGNILBlock(ptr, owned=True), stats
 
+    def dead_store_eliminate(self, arch, live_out=None):
+        """Remove dead register and flag stores from this block by
+        byte-precise backward liveness: a value written to a register that is
+        overwritten before it is ever read, and is not live on exit, carries no
+        information, so the op producing it is dropped.
+
+        Overlapping sub-registers alias correctly — writing AX kills AL and AH
+        but leaves the rest of RAX live. Unlike :meth:`simplify` this *does*
+        remove Reg-defining ops, which is what collapses VM-protector junk;
+        dead Temps go too, so a machine instruction whose only live effect was
+        the removed register write disappears entirely. Side-effecting ops
+        (STORE/CALL/JMP/CJMP/RET) are never removed.
+
+        Parameters
+        ----------
+        arch : int
+            An :class:`Architecture` value — the architecture this block was
+            lifted for. Selects the register file used to resolve which bytes a
+            32-bit write zero-extends over, so pass the right one: falling back
+            (UNKNOWN, or an unsupported target) assumes an 8-byte parent, which
+            is correct for x86-64 GPRs and AArch64 W registers but not for
+            AArch64 S registers, which alias the 16-byte V registers.
+        live_out : iterable of (offset, width), or None
+            The registers observable after this block. ``None`` (the default)
+            means "assume everything is live on exit": a store is then removed
+            only when provably overwritten within this block before any read,
+            which needs no ABI knowledge and is always safe. Passing a list
+            means precisely those registers are live out, allowing more
+            aggressive elimination (e.g. a RET-terminated block whose live-out
+            is just the ABI return plus callee-saved registers) — correctness
+            then rests on the list being sound.
+
+        Returns
+        -------
+        (IGNILBlock, int)
+            The new, independently owned block and the number of ops removed.
+            This block is left untouched.
+        """
+        if live_out is None:
+            regs, count = ffi.NULL, 0
+        else:
+            live_out = list(live_out)
+            count = len(live_out)
+            # An empty list is meaningful ("nothing is live out"), and differs
+            # from None, so the pointer must stay non-NULL — allocate at least
+            # one slot and let count carry the length.
+            regs = ffi.new('dragon_ignil_reg_t[]', max(count, 1))
+            for i, (offset, width) in enumerate(live_out):
+                regs[i].offset = offset
+                regs[i].width = width
+        out_removed = ffi.new('size_t *')
+        ptr = lib.dragon_ignil_dead_store_eliminate(
+            self._ptr, arch, regs, count, out_removed)
+        return IGNILBlock(ptr, owned=True), out_removed[0]
+
     def __repr__(self):
         return f'<IGNILBlock 0x{self.address:x} ops={self.size}>'
 

@@ -2,6 +2,9 @@
 
 #include <dragon/lifters/ignil/IGNIL.hpp>
 
+#include <cstdint>
+#include <vector>
+
 /// IGNIL register descriptors for the x86 / x86-64 architecture.
 ///
 /// Every architectural register is represented as an ignil::Reg value:
@@ -165,5 +168,34 @@ inline const ignil::Reg ZF{kOffZF, k8, "ZF"}; ///< Zero flag
 inline const ignil::Reg SF{kOffSF, k8, "SF"}; ///< Sign flag
 inline const ignil::Reg OF{kOffOF, k8, "OF"}; ///< Overflow flag
 inline const ignil::Reg DF{kOffDF, k8, "DF"}; ///< Direction flag
+
+// ---------------------------------------------------------------------------
+// Register file - the maximal registers of the space above. Analyses that must
+// resolve how many bytes a sub-register write really clobbers take this list;
+// see ignil::RegExtent and ignil::DeadStoreOptions::registerFile.
+// ---------------------------------------------------------------------------
+
+/// Base offset of XMM0. Only the low 64 bits of each XMM register are modeled
+/// (scalar double lanes), so the slots are 8 bytes apart - see
+/// x86registers.def.
+inline constexpr std::uint32_t kOffXMM0 = 143;
+inline constexpr unsigned kNumXMM = 16;
+
+/// The x86-64 register file: RAX..R15 and RIP (8 bytes each), the seven modeled
+/// EFLAGS bits (one byte each), and XMM0..XMM15 (8 bytes each, the modeled low
+/// half). Every 32-bit view in this space has an 8-byte parent, so passing this
+/// to deadStoreEliminate() matches the default assumption - it is here so the
+/// caller never has to rely on that assumption holding.
+[[nodiscard]] inline std::vector<ignil::RegExtent> registerFile() {
+  std::vector<ignil::RegExtent> file;
+  file.reserve(17 + 7 + kNumXMM);
+  for (std::uint32_t off = kOffRAX; off <= kOffRIP; off += 8)
+    file.push_back({off, 8}); // RAX..R15, RIP
+  for (std::uint32_t off = kOffCF; off <= kOffDF; ++off)
+    file.push_back({off, 1}); // CF PF AF ZF SF OF DF
+  for (unsigned i = 0; i < kNumXMM; ++i)
+    file.push_back({kOffXMM0 + i * 8, 8}); // XMM0..XMM15
+  return file;
+}
 
 } // namespace dragon::x86

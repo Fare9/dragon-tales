@@ -2,6 +2,9 @@
 
 #include <dragon/lifters/ignil/IGNIL.hpp>
 
+#include <cstdint>
+#include <vector>
+
 /// IGNIL register descriptors for AArch64.
 ///
 /// Every architectural register is an ignil::Reg:
@@ -416,5 +419,30 @@ inline const ignil::Reg NF{kOffNF, k8, "NF"}; ///< Negative
 inline const ignil::Reg ZF{kOffZF, k8, "ZF"}; ///< Zero
 inline const ignil::Reg CF{kOffCF, k8, "CF"}; ///< Carry
 inline const ignil::Reg VF{kOffVF, k8, "VF"}; ///< Overflow
+
+// ---------------------------------------------------------------------------
+// Register file - the maximal registers of the space above. Analyses that must
+// resolve how many bytes a sub-register write really clobbers take this list;
+// see ignil::RegExtent and ignil::DeadStoreOptions::registerFile.
+// ---------------------------------------------------------------------------
+
+/// The AArch64 register file: X0..X30, XZR, SP and PC (8 bytes each), V0..V31
+/// (16 bytes each) and the four NZCV flags (one byte each).
+///
+/// Passing this to deadStoreEliminate() is what makes the FP/SIMD case correct.
+/// S0 is a 32-bit view of V0 at the *same* offset, and `fmov s0, ...` zeroes all
+/// 16 bytes of V0 - without the register file an S register's parent is assumed
+/// to be 8 bytes, which under-states the clobber.
+[[nodiscard]] inline std::vector<ignil::RegExtent> registerFile() {
+  std::vector<ignil::RegExtent> file;
+  file.reserve(34 + 32 + 4);
+  for (std::uint32_t off = kOffX0; off <= kOffPC; off += 8)
+    file.push_back({off, 8}); // X0..X30, XZR, SP, PC
+  for (std::uint32_t off = kOffV0; off <= kOffV31; off += 16)
+    file.push_back({off, 16}); // V0..V31
+  for (std::uint32_t off = kOffNF; off <= kOffVF; ++off)
+    file.push_back({off, 1}); // NF ZF CF VF
+  return file;
+}
 
 } // namespace dragon::arm

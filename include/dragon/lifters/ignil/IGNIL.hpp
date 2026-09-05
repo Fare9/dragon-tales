@@ -40,6 +40,21 @@ struct Reg {
   std::string name; // an optional name to improve output
 };
 
+/// A maximal (architectural) register: the widest view of one storage slot in
+/// the register address space - RAX (never EAX/AX/AL/AH), V0 (never S0/D0/Q0).
+///
+/// A list of these describes a target's register file, which is what lets an
+/// analysis resolve how many bytes a *sub*-register write really touches.
+/// That matters for the zero-extend rule: a 32-bit write clears the rest of
+/// its parent, and the parent is 8 bytes for x86-64's EAX and AArch64's W0 but
+/// 16 bytes for AArch64's S0, whose parent V0 is 128-bit.
+///
+/// Ready-made lists: dragon::x86::registerFile(), dragon::arm::registerFile().
+struct RegExtent {
+  std::uint32_t offset; // byte offset of the parent register
+  std::uint32_t byteSize; // its size in bytes
+};
+
 /// SSA temporary value, the registers need to
 /// be loaded into temporary values to be used
 /// acting as a memory location.

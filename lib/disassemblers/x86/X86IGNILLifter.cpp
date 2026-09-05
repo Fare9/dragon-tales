@@ -134,6 +134,8 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"PUSH32r", &X86IGNILLifter::opPush32r_},
           {"POP64r", &X86IGNILLifter::opPop64r_},
           {"POP32r", &X86IGNILLifter::opPop32r_},
+          {"POPF64", &X86IGNILLifter::opPopf64_},
+          {"PUSHF64", &X86IGNILLifter::opPushf64_},
           {"CMP64rr", &X86IGNILLifter::opCmp64rr_},
           {"CMP32rr", &X86IGNILLifter::opCmp32rr_},
           {"CMP64ri32", &X86IGNILLifter::opCmp64ri_},
@@ -364,6 +366,10 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftPush(*mc, addr, out, tempId);
   else if (opc == opPop64r_ || opc == opPop32r_)
     liftPop(*mc, addr, out, tempId);
+  else if (opc == opPopf64_)
+    liftPopf(*mc, addr, out, tempId);
+  else if (opc == opPushf64_)
+    liftPushf(*mc, addr, out, tempId);
   else if (opc == opLea64r_ || opc == opLea32r_)
     liftLea(*mc, addr, out, tempId);
   else if (opc == opCmp64rr_ || opc == opCmp32rr_ || opc == opCmp64ri_ ||
@@ -916,6 +922,91 @@ void dragon::x86::X86IGNILLifter::liftPop(const llvm::MCInst &mc,
               {sp, ignil::Const{dstBytes, ptrWidth}},
               addr});
   out.append({ignil::Opcode::COPY, sp, {newSP}, addr});
+}
+
+// POPFQ/PUSHFQ move RFLAGS to/from the stack. Only the flags IGNIL models are
+// handled (CF/PF/AF/ZF/SF/DF/OF, at their RFLAGS bit positions below); the
+// system bits (TF/IF/IOPL/NT/...) are not modeled - POPFQ drops them and
+// PUSHFQ emits them as 0. Bit 1 of RFLAGS always reads as 1 (reserved), which
+// PUSHFQ sets explicitly.
+void dragon::x86::X86IGNILLifter::liftPopf(const llvm::MCInst & /*mc*/,
+                                           std::uint64_t addr,
+                                           ignil::Block &out,
+                                           std::uint32_t &tmp) const {
+  // POPFQ: t = memory[RSP]; scatter t's bits into the modeled flag registers;
+  // RSP += 8. Unmodeled system bits in t are simply not read.
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+  ignil::Reg sp = (architecture_ == Architecture::X86_64) ? regRSP_ : regESP_;
+
+  auto loaded = newTemp(tmp, ptrWidth);
+  out.append({ignil::Opcode::LOAD, loaded, {sp}, addr});
+
+  const std::array<std::pair<ignil::Reg, unsigned>, 7> flags = {{
+          {regCF_, 0}, {regPF_, 2}, {regAF_, 4}, {regZF_, 6}, {regSF_, 7},
+          {regDF_, 10}, {regOF_, 11},
+  }};
+  for (const auto &[flagReg, bit]: flags) {
+    auto shifted = newTemp(tmp, ptrWidth);
+    out.append({ignil::Opcode::SHR,
+                shifted,
+                {loaded, ignil::Const{bit, ptrWidth}},
+                addr});
+    auto masked = newTemp(tmp, ptrWidth);
+    out.append({ignil::Opcode::AND,
+                masked,
+                {shifted, ignil::Const{1, ptrWidth}},
+                addr});
+    auto narrowed = newTemp(tmp, flagReg.width);
+    out.append({ignil::Opcode::TRUNC, narrowed, {masked}, addr});
+    out.append({ignil::Opcode::COPY, flagReg, {narrowed}, addr});
+  }
+
+  // RSP += pointer size (8 in 64-bit).
+  auto newSP = newTemp(tmp, ptrWidth);
+  out.append({ignil::Opcode::ADD,
+              newSP,
+              {sp, ignil::Const{static_cast<std::uint64_t>(ptrWidth / 8), ptrWidth}},
+              addr});
+  out.append({ignil::Opcode::COPY, sp, {newSP}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftPushf(const llvm::MCInst & /*mc*/,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  // PUSHFQ: gather the modeled flags into an RFLAGS word (reserved bit 1 = 1,
+  // unmodeled system bits = 0); RSP -= 8; memory[RSP] = word.
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+  ignil::Reg sp = (architecture_ == Architecture::X86_64) ? regRSP_ : regESP_;
+
+  const std::array<std::pair<ignil::Reg, unsigned>, 7> flags = {{
+          {regCF_, 0}, {regPF_, 2}, {regAF_, 4}, {regZF_, 6}, {regSF_, 7},
+          {regDF_, 10}, {regOF_, 11},
+  }};
+  ignil::Value acc = ignil::Const{2, ptrWidth}; // reserved bit 1
+  for (const auto &[flagReg, bit]: flags) {
+    auto widened = newTemp(tmp, ptrWidth);
+    out.append({ignil::Opcode::ZEXT, widened, {flagReg}, addr});
+    auto shifted = newTemp(tmp, ptrWidth);
+    out.append({ignil::Opcode::SHL,
+                shifted,
+                {widened, ignil::Const{bit, ptrWidth}},
+                addr});
+    auto combined = newTemp(tmp, ptrWidth);
+    out.append({ignil::Opcode::OR, combined, {acc, shifted}, addr});
+    acc = combined;
+  }
+
+  // RSP -= pointer size, then store the word.
+  auto newSP = newTemp(tmp, ptrWidth);
+  out.append({ignil::Opcode::SUB,
+              newSP,
+              {sp, ignil::Const{static_cast<std::uint64_t>(ptrWidth / 8), ptrWidth}},
+              addr});
+  out.append({ignil::Opcode::COPY, sp, {newSP}, addr});
+  out.append({ignil::Opcode::STORE, std::nullopt, {sp, acc}, addr});
 }
 
 void dragon::x86::X86IGNILLifter::liftLea(const llvm::MCInst &mc,

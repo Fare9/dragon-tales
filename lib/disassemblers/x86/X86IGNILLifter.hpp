@@ -117,6 +117,12 @@ class X86IGNILLifter {
                 std::uint32_t &tmp) const;
   void liftPop(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
+  // POPFQ/PUSHFQ: pop RFLAGS off / push RFLAGS onto the stack, spreading the
+  // popped value across (or gathering) the individual modeled flag registers.
+  void liftPopf(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                std::uint32_t &tmp) const;
+  void liftPushf(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                 std::uint32_t &tmp) const;
   void liftLea(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftCmp(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -376,6 +382,7 @@ class X86IGNILLifter {
   unsigned opOr32ri_{}, opOr64ri_{}, opOr32ri8_{}, opOr64ri8_{};
   unsigned opPush64r_{}, opPop64r_{};
   unsigned opPush32r_{}, opPop32r_{};
+  unsigned opPopf64_{}, opPushf64_{};
   unsigned opCmp64rr_{}, opCmp32rr_{};
   unsigned opCmp64ri_{}, opCmp32ri_{}, opCmp64ri8_{}, opCmp32ri8_{};
   unsigned opCmp64rm_{}, opCmp32rm_{};

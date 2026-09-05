@@ -317,6 +317,55 @@
       size_t* out_constants_folded, size_t* out_identities_applied,
       size_t* out_ops_removed, size_t* out_iterations);
 
+  // -- IGNIL dead-store elimination ------------------------------------------------
+
+  // One register in the IGNIL register address space: `offset` is its byte
+  // position, `width` its bit width. Sub-registers share their parent's offset
+  // and differ only in width (RAX {0,64}, EAX {0,32}, AX {0,16}, AL {0,8},
+  // AH {1,8}). See dragon::ignil::Reg.
+  typedef struct {
+      uint32_t offset;
+      uint8_t  width;
+  } dragon_ignil_reg_t;
+
+  // Removes dead register and flag stores from `b` by byte-precise backward
+  // liveness: a value written to a register that is overwritten before it is
+  // ever read, and is not live on exit, carries no information, so the op
+  // producing it is dropped. Overlapping sub-registers alias correctly (writing
+  // AX kills AL and AH but leaves the rest of RAX live). Unlike
+  // dragon_ignil_simplify_block this DOES remove Reg-defining ops, which is
+  // what collapses VM-protector junk. Dead Temps go too, so a machine
+  // instruction whose only live effect was the removed register write
+  // disappears entirely.
+  //
+  // Side-effecting ops (STORE/CALL/JMP/CJMP/RET) are never removed, and a store
+  // is dropped only when every byte it clobbers is dead.
+  //
+  // `arch` selects the register file used to resolve which bytes a 32-bit write
+  // zero-extends over - pass the architecture `b` was lifted for. Getting it
+  // wrong (or passing DRAGON_ARCH_UNKNOWN) falls back to assuming an 8-byte
+  // parent, which is correct for x86-64 GPRs and AArch64 W registers but not
+  // for AArch64 S registers, which alias the 16-byte V registers.
+  //
+  // `live_out` names the registers observable after the block:
+  //   - NULL (with live_out_count 0) means "assume everything is live on exit".
+  //     A store is then removed only when provably overwritten within this
+  //     block before any read, which needs no ABI knowledge and is always safe.
+  //   - a non-NULL array means precisely those registers are live out, allowing
+  //     more aggressive elimination (e.g. a RET-terminated block whose live-out
+  //     is just the ABI return plus callee-saved registers). Correctness then
+  //     rests on the caller supplying a sound live-out set.
+  //
+  // out_ops_removed may be NULL if the count isn't wanted.
+  //
+  // Returns an OWNED block - destroy with dragon_ignil_block_destroy, same as
+  // a block from dragon_disasm_lift_trace, never dragon_graph_get_ignil_block.
+  dragon_ignil_block_t* dragon_ignil_dead_store_eliminate(
+      const dragon_ignil_block_t* b,
+      dragon_architecture_t arch,
+      const dragon_ignil_reg_t* live_out, size_t live_out_count,
+      size_t* out_ops_removed);
+
   // -- SliceExpr -----------------------------------------------------------------
 
   typedef enum {

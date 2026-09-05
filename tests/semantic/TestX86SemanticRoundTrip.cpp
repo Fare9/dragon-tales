@@ -232,3 +232,76 @@ TEST_CASE("Semantic round-trip - inc/dec leave CF exactly as a prior cmp "
   REQUIRE(getReg64(actual.regs, x86off::RDX) == 4);
   requireStatesMatch(expected, actual, initialRegs);
 }
+
+// -----------------------------------------------------------------------
+// POPFQ / PUSHFQ - previously lifted to zero ops (silently dropped, which
+// also corrupted the RSP chain). Validated for real against Unicorn.
+// -----------------------------------------------------------------------
+
+TEST_CASE("Semantic round-trip - popfq loads flags from the stack",
+          "[semantic][x86_64]") {
+  // push rbp ; mov rbp, rsp ; mov eax, 0xCD5 ; push rax ; popfq ; pop rbp ; ret
+  //   0xCD5 sets, at their RFLAGS bit positions, CF(0) PF(2) AF(4) ZF(6)
+  //   SF(7) DF(10) OF(11) - so popfq must scatter those bits into the flag
+  //   registers. push rax/popfq keep the stack balanced.
+  const std::vector<std::uint8_t> code = {
+          0x55,                         // push rbp
+          0x48, 0x89, 0xe5,             // mov rbp, rsp
+          0xb8, 0xd5, 0x0c, 0x00, 0x00, // mov eax, 0xCD5
+          0x50,                         // push rax
+          0x9d,                         // popfq
+          0x5d,                         // pop rbp
+          0xc3,                         // ret
+  };
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem);
+  auto actual = runLifted(code, initialRegs, initialMem);
+
+  // The modeled, non-masked flags all came from the popped 0xCD5.
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  REQUIRE(actual.regs[x86off::ZF] == 1);
+  REQUIRE(actual.regs[x86off::SF] == 1);
+  REQUIRE(actual.regs[x86off::OF] == 1);
+  requireStatesMatch(expected, actual, initialRegs);
+}
+
+TEST_CASE("Semantic round-trip - pushfq then popfq preserves the flags",
+          "[semantic][x86_64]") {
+  // push rbp ; mov rbp, rsp ; mov eax, 3 ; mov ebx, 7 ; cmp eax, ebx ;
+  // pushfq ; popfq ; pop rbp ; ret
+  //   cmp 3,7 borrows: CF=1, SF=1, ZF=0, OF=0. pushfq must gather those into
+  //   an RFLAGS word on the stack that popfq reads back unchanged.
+  const std::vector<std::uint8_t> code = {
+          0x55,                         // push rbp
+          0x48, 0x89, 0xe5,             // mov rbp, rsp
+          0xb8, 0x03, 0x00, 0x00, 0x00, // mov eax, 3
+          0xbb, 0x07, 0x00, 0x00, 0x00, // mov ebx, 7
+          0x39, 0xd8,                   // cmp eax, ebx
+          0x9c,                         // pushfq
+          0x9d,                         // popfq
+          0x5d,                         // pop rbp
+          0xc3,                         // ret
+  };
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem);
+  auto actual = runLifted(code, initialRegs, initialMem);
+
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  REQUIRE(actual.regs[x86off::SF] == 1);
+  REQUIRE(actual.regs[x86off::ZF] == 0);
+  REQUIRE(actual.regs[x86off::OF] == 0);
+
+  // Registers only: the pushfq'd word left on the stack legitimately differs
+  // between the two sides (Unicorn stores the real RFLAGS incl. unmodeled
+  // system bits like IF; the lifter stores only the modeled subset + the
+  // reserved bit 1), so a full memory compare would flag a known, documented
+  // modeling gap rather than a bug. The flags round-tripping correctly is the
+  // property under test.
+  maskUnmodeledFlags(expected.regs);
+  maskUnmodeledFlags(actual.regs);
+  REQUIRE(expected.regs == actual.regs);
+}
