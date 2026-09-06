@@ -39,6 +39,36 @@ target_link_libraries(dragon_tests
         Catch2::Catch2WithMain
 )
 
+# The test sources call LLVM APIs directly (raw_ostream, Module, verifyFunction,
+# etc.) and are compiled regardless of the optional features. libdragon links
+# LLVM PRIVATEly, so on Windows those symbols are not re-exported through
+# dragon::libdragon and the test binary must link the LLVM components itself.
+# (On Linux the shared libdragon re-exports them, so this was never needed.)
+# Mirror libdragon's component set.
+llvm_map_components_to_libnames(TEST_LLVM_LIBS
+        Core
+        MC
+        MCDisassembler
+        MCParser
+        Object
+        Support
+        Passes
+        TransformUtils
+        X86
+        X86Desc
+        X86Info
+        ARM
+        ARMDesc
+        ARMInfo
+        AArch64
+        AArch64Desc
+        AArch64Info
+        RISCV
+        RISCVDesc
+        RISCVInfo
+)
+target_link_libraries(dragon_tests PRIVATE ${TEST_LLVM_LIBS})
+
 if(DRAGON_USE_Z3)
     target_link_libraries(dragon_tests PRIVATE z3::libz3)
 endif()

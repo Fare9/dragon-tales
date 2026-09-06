@@ -39,6 +39,26 @@ REG("R13D", 104, 32)
 REG("R14D", 112, 32)
 REG("R15D", 120, 32)
 
+// R8-R15 word (16-bit) sub-registers
+REG("R8W",  64,  16)
+REG("R9W",  72,  16)
+REG("R10W", 80,  16)
+REG("R11W", 88,  16)
+REG("R12W", 96,  16)
+REG("R13W", 104, 16)
+REG("R14W", 112, 16)
+REG("R15W", 120, 16)
+
+// R8-R15 byte (8-bit) sub-registers
+REG("R8B",  64,  8)
+REG("R9B",  72,  8)
+REG("R10B", 80,  8)
+REG("R11B", 88,  8)
+REG("R12B", 96,  8)
+REG("R13B", 104, 8)
+REG("R14B", 112, 8)
+REG("R15B", 120, 8)
+
 // 16-bit
 REG("AX",   0,   16)
 REG("CX",   8,   16)

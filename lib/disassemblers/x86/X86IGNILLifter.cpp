@@ -67,6 +67,14 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   regESP_ = findGprReg("ESP");
   regRBP_ = findGprReg("RBP");
   regEBP_ = findGprReg("EBP");
+  regCL_ = findGprReg("CL");
+  regAL_ = findGprReg("AL");
+  regAX_ = findGprReg("AX");
+  regEAX_ = findGprReg("EAX");
+  regRAX_ = findGprReg("RAX");
+  regDX_ = findGprReg("DX");
+  regEDX_ = findGprReg("EDX");
+  regRDX_ = findGprReg("RDX");
 
   // Scan opcodes by name: map LLVM mnemonic string -> pointer-to-member field.
   using OpcField = unsigned X86IGNILLifter::*;
@@ -78,8 +86,12 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"MOV64ri32", &X86IGNILLifter::opMov64ri32_},
           {"MOV64rm", &X86IGNILLifter::opMov64rm_},
           {"MOV32rm", &X86IGNILLifter::opMov32rm_},
+          {"MOV16rm", &X86IGNILLifter::opMov16rm_},
+          {"MOV8rm", &X86IGNILLifter::opMov8rm_},
           {"MOV64mr", &X86IGNILLifter::opMov64mr_},
           {"MOV32mr", &X86IGNILLifter::opMov32mr_},
+          {"MOV16mr", &X86IGNILLifter::opMov16mr_},
+          {"MOV8mr", &X86IGNILLifter::opMov8mr_},
           {"MOV64mi32", &X86IGNILLifter::opMov64mi_},
           {"MOV32mi", &X86IGNILLifter::opMov32mi_},
           {"LEA64r", &X86IGNILLifter::opLea64r_},
@@ -194,6 +206,45 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"SHL64r1", &X86IGNILLifter::opShl64r1_},
           {"SHR32r1", &X86IGNILLifter::opShr32r1_},
           {"SHR64r1", &X86IGNILLifter::opShr64r1_},
+          {"NOT8r", &X86IGNILLifter::opNot8r_},
+          {"NOT16r", &X86IGNILLifter::opNot16r_},
+          {"NOT32r", &X86IGNILLifter::opNot32r_},
+          {"NOT64r", &X86IGNILLifter::opNot64r_},
+          {"NEG8r", &X86IGNILLifter::opNeg8r_},
+          {"NEG16r", &X86IGNILLifter::opNeg16r_},
+          {"SHL8ri", &X86IGNILLifter::opShl8ri_},
+          {"SHL8r1", &X86IGNILLifter::opShl8r1_},
+          {"SHL16ri", &X86IGNILLifter::opShl16ri_},
+          {"SHL16r1", &X86IGNILLifter::opShl16r1_},
+          {"SHL8rCL", &X86IGNILLifter::opShl8rCL_},
+          {"SHL16rCL", &X86IGNILLifter::opShl16rCL_},
+          {"SHL32rCL", &X86IGNILLifter::opShl32rCL_},
+          {"SHL64rCL", &X86IGNILLifter::opShl64rCL_},
+          {"SHR8ri", &X86IGNILLifter::opShr8ri_},
+          {"SHR8r1", &X86IGNILLifter::opShr8r1_},
+          {"SHR16ri", &X86IGNILLifter::opShr16ri_},
+          {"SHR16r1", &X86IGNILLifter::opShr16r1_},
+          {"SHR8rCL", &X86IGNILLifter::opShr8rCL_},
+          {"SHR16rCL", &X86IGNILLifter::opShr16rCL_},
+          {"SHR32rCL", &X86IGNILLifter::opShr32rCL_},
+          {"SHR64rCL", &X86IGNILLifter::opShr64rCL_},
+          {"SAR8ri", &X86IGNILLifter::opSar8ri_},
+          {"SAR8r1", &X86IGNILLifter::opSar8r1_},
+          {"SAR16ri", &X86IGNILLifter::opSar16ri_},
+          {"SAR16r1", &X86IGNILLifter::opSar16r1_},
+          {"SAR8rCL", &X86IGNILLifter::opSar8rCL_},
+          {"SAR16rCL", &X86IGNILLifter::opSar16rCL_},
+          {"SAR32rCL", &X86IGNILLifter::opSar32rCL_},
+          {"SAR64rCL", &X86IGNILLifter::opSar64rCL_},
+          {"CBW", &X86IGNILLifter::opCbw_},
+          {"CWDE", &X86IGNILLifter::opCwde_},
+          {"CDQE", &X86IGNILLifter::opCdqe_},
+          {"CWD", &X86IGNILLifter::opCwd_},
+          {"CDQ", &X86IGNILLifter::opCdq_},
+          {"CQO", &X86IGNILLifter::opCqo_},
+          {"STC", &X86IGNILLifter::opStc_},
+          {"CLC", &X86IGNILLifter::opClc_},
+          {"CMC", &X86IGNILLifter::opCmc_},
           {"PXORrr", &X86IGNILLifter::opPxorRR_},
           {"CVTSI2SDrr_Int", &X86IGNILLifter::opCvtsi2sd32_},
           {"CVTSI642SDrr_Int", &X86IGNILLifter::opCvtsi2sd64_},
@@ -257,8 +308,23 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   const auto movzxByName = indexSpellings(kMovzxSpellings);
   const auto movsxByName = indexSpellings(kMovsxSpellings);
 
+  // *_REV load-direction encodings mapped to their base form (see header).
+  // Only the widths whose base rr handler exists (32/64) are listed; an
+  // unmapped base would just leave the *_REV as-is (still UNDEF, no harm).
+  static const std::pair<std::string_view, std::string_view> kRevAliases[] = {
+          {"MOV32rr_REV", "MOV32rr"}, {"MOV64rr_REV", "MOV64rr"},
+          {"ADD32rr_REV", "ADD32rr"}, {"ADD64rr_REV", "ADD64rr"},
+          {"SUB32rr_REV", "SUB32rr"}, {"SUB64rr_REV", "SUB64rr"},
+          {"XOR32rr_REV", "XOR32rr"}, {"XOR64rr_REV", "XOR64rr"},
+          {"AND32rr_REV", "AND32rr"}, {"AND64rr_REV", "AND64rr"},
+          {"OR32rr_REV", "OR32rr"},   {"OR64rr_REV", "OR64rr"},
+          {"CMP32rr_REV", "CMP32rr"}, {"CMP64rr_REV", "CMP64rr"},
+  };
+
+  std::unordered_map<std::string_view, unsigned> nameToOpc;
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
     const std::string_view name = instrInfo.getName(i);
+    nameToOpc.emplace(name, i);
 
     if (auto it = kOpcodeFields.find(name); it != kOpcodeFields.end())
       this->*(it->second) = i;
@@ -266,6 +332,12 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
       movzxForms_.emplace(i, zx->second);
     else if (auto sx = movsxByName.find(name); sx != movsxByName.end())
       movsxForms_.emplace(i, sx->second);
+  }
+
+  for (const auto &[rev, base]: kRevAliases) {
+    auto r = nameToOpc.find(rev), b = nameToOpc.find(base);
+    if (r != nameToOpc.end() && b != nameToOpc.end())
+      revToBase_.emplace(r->second, b->second);
   }
 }
 
@@ -329,13 +401,19 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   unsigned opc = mc->getOpcode();
   std::uint64_t addr = insn.address();
 
+  // Normalize load-direction *_REV reg-reg encodings to their base opcode;
+  // they share MCInst operand order, so the base handler lifts them correctly.
+  if (auto it = revToBase_.find(opc); it != revToBase_.end())
+    opc = it->second;
+
   if (opc == opMov64rr_ || opc == opMov32rr_ || opc == opMov64ri_ ||
       opc == opMov32ri_ || opc == opMov64ri32_)
     liftMov(*mc, addr, out, tempId);
-  else if (opc == opMov64rm_ || opc == opMov32rm_)
+  else if (opc == opMov64rm_ || opc == opMov32rm_ || opc == opMov16rm_ ||
+           opc == opMov8rm_)
     liftMovLoad(*mc, addr, out, tempId);
-  else if (opc == opMov64mr_ || opc == opMov32mr_ || opc == opMov64mi_ ||
-           opc == opMov32mi_)
+  else if (opc == opMov64mr_ || opc == opMov32mr_ || opc == opMov16mr_ ||
+           opc == opMov8mr_ || opc == opMov64mi_ || opc == opMov32mi_)
     liftMovStore(*mc, addr, out, tempId);
   else if (opc == opAdd64rr_ || opc == opAdd32rr_ || opc == opAdd64ri_ ||
            opc == opAdd32ri_ || opc == opAdd64ri8_ || opc == opAdd32ri8_)
@@ -423,6 +501,51 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftShlR1(*mc, addr, out, tempId);
   else if (opc == opShr32r1_ || opc == opShr64r1_)
     liftShrR1(*mc, addr, out, tempId);
+  // LifterGaps.md #7 - VMProtect handler forms.
+  else if (opc == opNot8r_ || opc == opNot16r_ || opc == opNot32r_ ||
+           opc == opNot64r_)
+    liftNot(*mc, addr, out, tempId);
+  else if (opc == opNeg8r_ || opc == opNeg16r_)
+    liftNeg(*mc, addr, out, tempId);
+  else if (opc == opShl8ri_ || opc == opShl16ri_)
+    liftShlImm(*mc, addr, out, tempId);
+  else if (opc == opShr8ri_ || opc == opShr16ri_)
+    liftShrImm(*mc, addr, out, tempId);
+  else if (opc == opSar8ri_ || opc == opSar16ri_)
+    liftSarImm(*mc, addr, out, tempId);
+  else if (opc == opShl8r1_ || opc == opShl16r1_)
+    liftShlR1(*mc, addr, out, tempId);
+  else if (opc == opShr8r1_ || opc == opShr16r1_)
+    liftShrR1(*mc, addr, out, tempId);
+  else if (opc == opSar8r1_ || opc == opSar16r1_)
+    liftSarR1(*mc, addr, out, tempId);
+  else if (opc == opShl8rCL_ || opc == opShl16rCL_ || opc == opShl32rCL_ ||
+           opc == opShl64rCL_)
+    liftShiftCL(*mc, addr, out, tempId, ignil::Opcode::SHL);
+  else if (opc == opShr8rCL_ || opc == opShr16rCL_ || opc == opShr32rCL_ ||
+           opc == opShr64rCL_)
+    liftShiftCL(*mc, addr, out, tempId, ignil::Opcode::SHR);
+  else if (opc == opSar8rCL_ || opc == opSar16rCL_ || opc == opSar32rCL_ ||
+           opc == opSar64rCL_)
+    liftShiftCL(*mc, addr, out, tempId, ignil::Opcode::SAR);
+  else if (opc == opCbw_)
+    liftAccExtend(addr, out, tempId, AccExtend::CBW);
+  else if (opc == opCwde_)
+    liftAccExtend(addr, out, tempId, AccExtend::CWDE);
+  else if (opc == opCdqe_)
+    liftAccExtend(addr, out, tempId, AccExtend::CDQE);
+  else if (opc == opCwd_)
+    liftAccExtend(addr, out, tempId, AccExtend::CWD);
+  else if (opc == opCdq_)
+    liftAccExtend(addr, out, tempId, AccExtend::CDQ);
+  else if (opc == opCqo_)
+    liftAccExtend(addr, out, tempId, AccExtend::CQO);
+  else if (opc == opStc_)
+    liftCarryOp(addr, out, tempId, CarryOp::STC);
+  else if (opc == opClc_)
+    liftCarryOp(addr, out, tempId, CarryOp::CLC);
+  else if (opc == opCmc_)
+    liftCarryOp(addr, out, tempId, CarryOp::CMC);
   else if (opc == opPxorRR_)
     liftXor(*mc, addr, out, tempId);
   else if (opc == opCvtsi2sd32_ || opc == opCvtsi2sd64_)
@@ -2233,4 +2356,213 @@ dragon::x86::X86IGNILLifter::ofSubOverflow(ignil::Value lhs, ignil::Value rhs,
     out.append({ignil::Opcode::AND, of, {diffAB, diffRA}, addr});
     out.append({ignil::Opcode::COPY, regOF_, {of}, addr});
   };
+}
+
+// -----------------------------------------------------------------------
+// LifterGaps.md #7 - forms VMProtect handlers lean on: NOT, shifts by CL,
+// 8/16-bit shifts (via the existing imm/r1 lifters), NEG8/16 (existing
+// liftNeg), accumulator sign-extends, STC/CLC/CMC.
+// -----------------------------------------------------------------------
+
+void dragon::x86::X86IGNILLifter::liftNot(const llvm::MCInst &mc,
+                                          std::uint64_t addr,
+                                          ignil::Block &out,
+                                          std::uint32_t &tmp) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftNot in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(1).getReg());
+  if (!src) {
+    logger_.log("Error liftNot in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  auto lhs = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::COPY, lhs, {*src}, addr});
+  auto result = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::NOT, result, {ignil::Value{lhs}}, addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftShiftCL(const llvm::MCInst &mc,
+                                              std::uint64_t addr,
+                                              ignil::Block &out,
+                                              std::uint32_t &tmp,
+                                              ignil::Opcode shift) const {
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftShiftCL in addr {:#x} no dst", addr);
+    return;
+  }
+  auto src = toReg(mc.getOperand(1).getReg());
+  if (!src) {
+    logger_.log("Error liftShiftCL in addr {:#x} no src", addr);
+    emitUndef(*dst, addr, out);
+    return;
+  }
+  const ignil::Width w = dst->width;
+  const std::uint64_t W = w;
+  const std::uint64_t countMask = (w == 64) ? 63 : 31;
+
+  auto lhs = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, lhs, {*src}, addr});
+  auto cnt8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND,
+              cnt8,
+              {regCL_, ignil::Const{countMask, 8}},
+              addr});
+  auto cnt = newTemp(tmp, w);
+  if (w == 8)
+    out.append({ignil::Opcode::COPY, cnt, {ignil::Value{cnt8}}, addr});
+  else
+    out.append({ignil::Opcode::ZEXT, cnt, {ignil::Value{cnt8}}, addr});
+  auto result = newTemp(tmp, w);
+  out.append({shift, result, {ignil::Value{lhs}, ignil::Value{cnt}}, addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+
+  // A zero count leaves every flag untouched. IGNIL has no select, so each
+  // new flag value is merged with the old one under 8-bit masks:
+  //   flag = (old & isZero8) | (new & notZero8)
+  auto isZero = newTemp(tmp, 1);
+  out.append({ignil::Opcode::EQ,
+              isZero,
+              {ignil::Value{cnt}, ignil::Const{0, w}},
+              addr});
+  auto z8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::ZEXT, z8, {ignil::Value{isZero}}, addr});
+  auto nz8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::XOR,
+              nz8,
+              {ignil::Value{z8}, ignil::Const{1, 8}},
+              addr});
+  auto gate = [&](ignil::Reg flag, ignil::Temp newBit) {
+    auto new8 = newTemp(tmp, 8);
+    out.append({ignil::Opcode::ZEXT, new8, {ignil::Value{newBit}}, addr});
+    auto keep = newTemp(tmp, 8);
+    out.append({ignil::Opcode::AND, keep, {flag, ignil::Value{z8}}, addr});
+    auto take = newTemp(tmp, 8);
+    out.append({ignil::Opcode::AND,
+                take,
+                {ignil::Value{new8}, ignil::Value{nz8}},
+                addr});
+    auto merged = newTemp(tmp, 8);
+    out.append({ignil::Opcode::OR,
+                merged,
+                {ignil::Value{keep}, ignil::Value{take}},
+                addr});
+    out.append({ignil::Opcode::COPY, flag, {ignil::Value{merged}}, addr});
+  };
+
+  // CF = the last bit shifted out: bit (count-1) of the original value for
+  // SHR/SAR, bit (width-count) for SHL. The index is masked to width-1 so a
+  // zero count (whose CF the gate discards anyway) never produces an
+  // out-of-range shift.
+  auto rawIdx = newTemp(tmp, w);
+  if (shift == ignil::Opcode::SHL)
+    out.append({ignil::Opcode::SUB,
+                rawIdx,
+                {ignil::Const{W, w}, ignil::Value{cnt}},
+                addr});
+  else
+    out.append({ignil::Opcode::SUB,
+                rawIdx,
+                {ignil::Value{cnt}, ignil::Const{1, w}},
+                addr});
+  auto idx = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND,
+              idx,
+              {ignil::Value{rawIdx}, ignil::Const{W - 1, w}},
+              addr});
+  auto shifted = newTemp(tmp, w);
+  out.append({ignil::Opcode::SHR,
+              shifted,
+              {ignil::Value{lhs}, ignil::Value{idx}},
+              addr});
+  auto bit = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND,
+              bit,
+              {ignil::Value{shifted}, ignil::Const{1, w}},
+              addr});
+  auto cf = newTemp(tmp, 1);
+  out.append({ignil::Opcode::NEQ,
+              cf,
+              {ignil::Value{bit}, ignil::Const{0, w}},
+              addr});
+  gate(regCF_, cf);
+  auto zf = newTemp(tmp, 1);
+  out.append({ignil::Opcode::EQ,
+              zf,
+              {ignil::Value{result}, ignil::Const{0, w}},
+              addr});
+  gate(regZF_, zf);
+  auto sf = newTemp(tmp, 1);
+  out.append({ignil::Opcode::SLT,
+              sf,
+              {ignil::Value{result}, ignil::Const{0, w}},
+              addr});
+  gate(regSF_, sf);
+  // OF is architecturally defined only for a count of 1, PF/AF are not
+  // modeled: honestly UNDEF (a zero count would keep them, which the gate
+  // cannot express for an undefined value).
+  emitUndef(regOF_, addr, out);
+  emitUndef(regPF_, addr, out);
+  emitUndef(regAF_, addr, out);
+}
+
+void dragon::x86::X86IGNILLifter::liftAccExtend(std::uint64_t addr,
+                                                ignil::Block &out,
+                                                std::uint32_t &tmp,
+                                                AccExtend kind) const {
+  auto signFill = [&](ignil::Reg from, ignil::Reg to, std::uint64_t bits) {
+    auto t = newTemp(tmp, from.width);
+    out.append({ignil::Opcode::COPY, t, {from}, addr});
+    auto r = newTemp(tmp, from.width);
+    out.append({ignil::Opcode::SAR,
+                r,
+                {ignil::Value{t}, ignil::Const{bits, from.width}},
+                addr});
+    out.append({ignil::Opcode::COPY, to, {ignil::Value{r}}, addr});
+  };
+  switch (kind) {
+    case AccExtend::CBW:
+      out.append({ignil::Opcode::SEXT, regAX_, {regAL_}, addr});
+      return;
+    case AccExtend::CWDE:
+      out.append({ignil::Opcode::SEXT, regEAX_, {regAX_}, addr});
+      return;
+    case AccExtend::CDQE:
+      out.append({ignil::Opcode::SEXT, regRAX_, {regEAX_}, addr});
+      return;
+    case AccExtend::CWD:
+      signFill(regAX_, regDX_, 15);
+      return;
+    case AccExtend::CDQ:
+      signFill(regEAX_, regEDX_, 31);
+      return;
+    case AccExtend::CQO:
+      signFill(regRAX_, regRDX_, 63);
+      return;
+  }
+}
+
+void dragon::x86::X86IGNILLifter::liftCarryOp(std::uint64_t addr,
+                                              ignil::Block &out,
+                                              std::uint32_t &tmp,
+                                              CarryOp kind) const {
+  switch (kind) {
+    case CarryOp::STC:
+      out.append({ignil::Opcode::COPY, regCF_, {ignil::Const{1, 1}}, addr});
+      return;
+    case CarryOp::CLC:
+      out.append({ignil::Opcode::COPY, regCF_, {ignil::Const{0, 1}}, addr});
+      return;
+    case CarryOp::CMC: {
+      auto t = newTemp(tmp, 8);
+      out.append({ignil::Opcode::XOR, t, {regCF_, ignil::Const{1, 8}}, addr});
+      out.append({ignil::Opcode::COPY, regCF_, {ignil::Value{t}}, addr});
+      return;
+    }
+  }
 }

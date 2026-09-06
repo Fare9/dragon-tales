@@ -1141,3 +1141,182 @@ TEST_CASE("IGNIL lifting - movzx/movsx load at the width the mnemonic names",
             std::get<dragon::ignil::Temp>(load->dst.value()).id);
   }
 }
+
+// -----------------------------------------------------------------------
+// Regression: load-direction reg-reg encodings (0x8B/0x03/0x33, the LLVM
+// *_REV opcodes) must lift like their store-direction (0x89/0x01/0x31) base
+// forms, not fall through to UNDEF. Compilers emit these constantly; the gap
+// was found via symbolic-execution differential testing on a VMProtect target
+// whose accumulator lived in r8d and went entirely UNDEF.
+// -----------------------------------------------------------------------
+TEST_CASE("IGNIL lifting - load-direction reg-reg (_REV) encodings",
+          "[ignil][x86_64][rev]") {
+  using dragon::ignil::Opcode;
+
+  auto liftOne = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;  // keep graphs alive for the block
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);  // ret
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+
+  SECTION("mov r9, rcx  [4c 8b c9]") {
+    const auto *ib = liftOne({0x4c, 0x8b, 0xc9});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::COPY));
+    REQUIRE(countUndef(*ib) == 0);  // plain 64-bit mov touches no flags
+  }
+  SECTION("mov edx, r8d  [41 8b d0]") {
+    const auto *ib = liftOne({0x41, 0x8b, 0xd0});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::COPY));
+    REQUIRE(countUndef(*ib) == 0);
+  }
+  SECTION("xor r8d, ecx  [44 33 c1]") {
+    const auto *ib = liftOne({0x44, 0x33, 0xc1});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::XOR));
+  }
+  SECTION("add r8d, ecx  [44 03 c1]") {
+    const auto *ib = liftOne({0x44, 0x03, 0xc1});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::ADD));
+  }
+}
+
+// -----------------------------------------------------------------------
+// Regression: 8/16-bit memory MOV (MOV8mr/MOV16mr stores, MOV8rm/MOV16rm
+// loads). Only 32/64 were dispatched, so byte/word stores/loads silently
+// produced no op. Found devirtualizing a VMProtect 16-bit PUSH handler
+// (mov word ptr [rbp], cx). (Extended-reg byte/word sources like r9w are a
+// separate register-mapping gap, tracked in LifterGaps.md.)
+// -----------------------------------------------------------------------
+TEST_CASE("IGNIL lifting - 8/16-bit memory MOV", "[ignil][x86_64][movsz]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+  SECTION("mov word ptr [rbp], cx  [66 89 4d 00]") {
+    const auto *ib = lift({0x66, 0x89, 0x4d, 0x00});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
+  }
+  SECTION("mov byte ptr [rbp], cl  [88 4d 00]") {
+    const auto *ib = lift({0x88, 0x4d, 0x00});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
+  }
+  SECTION("mov cx, word ptr [rbp]  [66 8b 4d 00]") {
+    const auto *ib = lift({0x66, 0x8b, 0x4d, 0x00});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::LOAD));
+  }
+  // extended byte/word register sources (R8W..R15W, R8B..R15B) must map too.
+  SECTION("mov word ptr [rbp], r9w  [66 44 89 4d 00]") {
+    const auto *ib = lift({0x66, 0x44, 0x89, 0x4d, 0x00});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
+  }
+  SECTION("mov byte ptr [rbp], r9b  [44 88 4d 00]") {
+    const auto *ib = lift({0x44, 0x88, 0x4d, 0x00});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
+  }
+}
+
+static std::size_t countOpcode(const dragon::ignil::Block &ib,
+                               dragon::ignil::Opcode opcode) {
+  const auto &ops = ib.ops();
+  return static_cast<std::size_t>(std::count_if(
+          ops.begin(), ops.end(),
+          [&](const auto &op) { return op.opcode == opcode; }));
+}
+
+// LifterGaps.md #7: the instruction forms VMProtect's x64 handlers are built
+// from (found by lifting all 256 handlers of a protected binary): NOT at every
+// width, shifts by CL, 8/16-bit shifts, NEG8/16, CBW..CQO, STC/CLC/CMC. Each
+// used to lift to UNDEF (or to nothing at all), which hid the handler's real
+// operation.
+TEST_CASE("IGNIL lifting - VMProtect handler forms (NOT, shift by CL, 8/16-bit "
+          "shifts, accumulator extends, STC/CLC/CMC)",
+          "[ignil][x86_64][vmp]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+  SECTION("not edi / not rdx / not dil / not cx") {
+    for (auto bytes: {std::vector<uint8_t>{0xf7, 0xd7}, {0x48, 0xf7, 0xd2},
+                      {0x40, 0xf6, 0xd7}, {0x66, 0xf7, 0xd1}}) {
+      const auto *ib = lift(bytes);
+      REQUIRE(ib != nullptr);
+      REQUIRE(hasOpcode(*ib, Opcode::NOT));
+      REQUIRE(countOpcode(*ib, Opcode::UNDEF) == 0);   // NOT touches no flag
+    }
+  }
+  SECTION("shr edi, cl [d3 ef]") {
+    const auto *ib = lift({0xd3, 0xef});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::SHR));
+    REQUIRE(countOpcode(*ib, Opcode::UNDEF) == 3);     // OF, PF, AF only
+  }
+  SECTION("shl r9w, cl [66 41 d3 e1] / shl rax, cl [48 d3 e0]") {
+    for (auto bytes: {std::vector<uint8_t>{0x66, 0x41, 0xd3, 0xe1}, {0x48, 0xd3, 0xe0}}) {
+      const auto *ib = lift(bytes);
+      REQUIRE(ib != nullptr);
+      REQUIRE(hasOpcode(*ib, Opcode::SHL));
+    }
+  }
+  SECTION("sar dil, cl [40 d2 ff] / shr dh, cl [d2 ee]") {
+    const auto *ib = lift({0x40, 0xd2, 0xff});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::SAR));
+    const auto *ib2 = lift({0xd2, 0xee});
+    REQUIRE(ib2 != nullptr);
+    REQUIRE(hasOpcode(*ib2, Opcode::SHR));
+  }
+  SECTION("shr bh, 3 [c0 ef 03] / shl ax, 2 [66 c1 e0 02]") {
+    const auto *ib = lift({0xc0, 0xef, 0x03});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::SHR));
+    const auto *ib2 = lift({0x66, 0xc1, 0xe0, 0x02});
+    REQUIRE(ib2 != nullptr);
+    REQUIRE(hasOpcode(*ib2, Opcode::SHL));
+  }
+  SECTION("neg dil [40 f6 df] / neg cx [66 f7 d9]") {
+    for (auto bytes: {std::vector<uint8_t>{0x40, 0xf6, 0xdf}, {0x66, 0xf7, 0xd9}}) {
+      const auto *ib = lift(bytes);
+      REQUIRE(ib != nullptr);
+      REQUIRE(hasOpcode(*ib, Opcode::NEG));
+    }
+  }
+  SECTION("cwde [98] / cdqe [48 98] sign-extend; cwd [66 99] / cqo [48 99] sign-fill") {
+    REQUIRE(hasOpcode(*lift({0x98}), Opcode::SEXT));
+    REQUIRE(hasOpcode(*lift({0x48, 0x98}), Opcode::SEXT));
+    REQUIRE(hasOpcode(*lift({0x66, 0x99}), Opcode::SAR));
+    REQUIRE(hasOpcode(*lift({0x48, 0x99}), Opcode::SAR));
+  }
+  SECTION("stc [f9] / clc [f8] write CF, cmc [f5] flips it") {
+    const auto *stc = lift({0xf9});
+    REQUIRE(countOpcode(*stc, Opcode::COPY) >= 1);
+    REQUIRE(countOpcode(*stc, Opcode::UNDEF) == 0);
+    const auto *clc = lift({0xf8});
+    REQUIRE(countOpcode(*clc, Opcode::COPY) >= 1);
+    const auto *cmc = lift({0xf5});
+    REQUIRE(hasOpcode(*cmc, Opcode::XOR));
+  }
+}

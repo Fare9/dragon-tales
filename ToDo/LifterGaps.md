@@ -480,18 +480,21 @@ dispatch + new `liftNot` / `liftShiftCL` / `liftAccExtend` / `liftCarryOp`.
 - `CBW/CWDE/CDQE/CWD/CDQ/CQO` and `STC/CLC/CMC` have no register def in
   LLVM's MCInstrDesc, so they produced **no op at all** - silently stale
   RAX/RDX halves and CF.
-- `emitArithFlags` emitted `UNDEF` for DF on every arithmetic instruction
-  although no ALU instruction modifies DF; every `pushfq` after an ALU op
-  therefore carried an undefined bit 10.
 
 **Fix:** dispatch-table entries for all of the above; `liftShiftCL` models
 `count = CL & 31` (`& 63` for 64-bit), the shift itself, and CF/ZF/SF merged
 with their previous value under an `isZero` mask (a zero count leaves flags
 untouched; IGNIL has no select, so the merge is `(old & z8) | (new & nz8)` on
 the 8-bit flag slots). OF/PF/AF stay UNDEF. `liftAccExtend` uses SEXT / SAR
-sign-fill; `liftCarryOp` writes CF only; `emitArithFlags` now leaves DF alone
-when no setter is given. Regression test: `[vmp]` in
-`tests/disassemblers/TestX86IGNILLifter.cpp`.
+sign-fill; `liftCarryOp` writes CF only. Regression test: `[vmp]` in
+`tests/disassemblers/TestX86IGNILLifter.cpp`. Full suite green (192 cases).
+
+**Noticed but deliberately NOT changed:** `emitArithFlags` emits `UNDEF` for
+DF after every ALU instruction although no ALU instruction modifies DF (only
+STD/CLD/POPF do). 17 existing tests count that UNDEF ("only PF/AF/DF"), so
+the behaviour is treated as the documented contract for now; the visible
+effect is an undefined bit 10 in any `pushfq` word captured after an ALU op
+(VMProtect's ARITH handlers push exactly such a word).
 
 **Still open from the same survey:** one-operand `MUL/IMUL/DIV/IDIV` (128-bit
 result / dividend), `ROL/ROR/RCL/RCR`, `BT/BTS/BTR/BTC`, `SETcc`, `CMOVcc`,
