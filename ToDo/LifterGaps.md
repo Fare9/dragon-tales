@@ -410,3 +410,92 @@ Salwan VMProtect case in `tests/analysis/TestDeadStoreElimination.cpp`.
 these are on `scripts/audit_x86_lifter_coverage.py --allow-missing` and are the
 reason the Salwan test drives DSE with the sound live-out model rather than
 relying on those instructions lifting precisely.
+
+## 5. x86 IGNIL lifter drops load-direction reg-reg encodings (*_REV) — FIXED
+
+**Status:** fixed (2026-09-05). Found via symbolic-execution differential
+testing while analysing a VMProtect-virtualised `check_serial` whose 32-bit
+accumulator lived in `r8d`: dragon's symbolic result disagreed with the real
+function because the whole accumulator chain lifted to `UNDEF`.
+
+**Where:** `lib/disassemblers/x86/X86IGNILLifter.cpp`, `liftInstruction()`.
+
+**What's wrong:** LLVM decodes the *load-direction* reg-reg encodings
+(`8B` mov, `03` add, `33` xor, and the `2B`/`23`/`0B`/`3B` siblings) with a
+`mod=11` register operand to distinct `*_REV` opcodes — `MOV32rr_REV`,
+`ADD32rr_REV`, `XOR32rr_REV`, ... — separate from the store-direction base
+opcodes (`89`/`01`/`31` -> `MOV32rr`/`ADD32rr`/`XOR32rr`). The dispatch only
+listed the base opcodes, so every `*_REV` fell through to the default case and
+emitted `UNDEF`. Compilers emit the `8B`/`03`/`33` forms constantly (e.g.
+`mov edx, r8d` = `41 8b d0`, `xor r8d, ecx` = `44 33 c1`), so this hit real
+optimised code immediately, not just an edge case.
+
+**Fix:** the `*_REV` variants carry the SAME MCInst operand order as their base
+form, so a `revToBase_` map (built in the constructor for MOV/ADD/SUB/XOR/AND/
+OR/CMP at 32/64) normalizes the opcode at the top of `liftInstruction()` before
+dispatch. Regression test: `tests/disassemblers/TestX86IGNILLifter.cpp`,
+"load-direction reg-reg (_REV) encodings". Full suite green (190 cases).
+
+## 6. x86 IGNIL lifter drops 8/16-bit memory MOV (MOV8/16 mr/rm) — FIXED (partial)
+
+**Status:** fixed for the common case (2026-09-06). Found while
+devirtualizing VMProtect handlers: a 16-bit VM-stack PUSH
+(`mov word ptr [rbp], cx`) produced no STORE, so the handler vanished.
+
+**Where:** `lib/disassemblers/x86/X86IGNILLifter.cpp`, `liftInstruction()`.
+
+**What was wrong:** the MOV dispatch only listed `MOV64mr`/`MOV32mr` (stores)
+and `MOV64rm`/`MOV32rm` (loads). Byte/word memory MOVs (`MOV8mr`/`MOV16mr`/
+`MOV8rm`/`MOV16rm`) fell through and emitted nothing (a silent gap: no ops,
+and no UNDEF because the default UNDEF is only for register-def opcodes).
+
+**Fix:** `liftMovStore`/`liftMovLoad` are already width-generic (they take the
+register operand's own width), so the four opcodes were added to the dispatch
+and the opcode table. Regression test: `[movsz]` in
+`tests/disassemblers/TestX86IGNILLifter.cpp`. Suite green (190 cases).
+
+**Also fixed (2026-09-06):** extended byte/word register sub-registers
+(R8W..R15W, R8B..R15B) were missing from `x86registers.def`, so
+`mov word ptr [rbp], r9w` produced no STORE (`toReg` returned nullopt). Added
+the 16 entries at the parent offsets. `[movsz]` test now also covers r9w/r9b.
+
+## 7. x86 IGNIL lifter: NOT, shift-by-CL, 8/16-bit shifts, NEG8/16, CBW..CQO, STC/CLC/CMC — FIXED
+
+**Status:** fixed (2026-09-06). Found by lifting all 256 handlers of a
+VMProtect-protected `check_serial` and listing every instruction whose
+non-flag destination came out as `UNDEF` *and survived dead-store elimination*
+(i.e. sat on the handler's data path). The biggest unexplained handler bucket
+(40 "ARITH_FLAGS?" handlers) turned out to be VMProtect's SHR/SHL/SAR
+primitives (`shr edi, cl`, `shl r9w, cl`, ...) and its NOR/NAND primitives
+(`not a; not b; and/or`), none of which the lifter could express.
+
+**Where:** `lib/disassemblers/x86/X86IGNILLifter.cpp`, `liftInstruction()`
+dispatch + new `liftNot` / `liftShiftCL` / `liftAccExtend` / `liftCarryOp`.
+
+**What was wrong:**
+- `NOT{8,16,32,64}r` were not dispatched at all -> `UNDEF` destination.
+- Shifts were only lifted for `{SHL,SHR,SAR}{32,64}{ri,r1}`; the CL-count
+  forms at every width and the 8/16-bit imm/r1 forms fell through -> `UNDEF`.
+- `NEG{8,16}r` fell through (liftNeg is width-generic; just not dispatched).
+- `CBW/CWDE/CDQE/CWD/CDQ/CQO` and `STC/CLC/CMC` have no register def in
+  LLVM's MCInstrDesc, so they produced **no op at all** - silently stale
+  RAX/RDX halves and CF.
+- `emitArithFlags` emitted `UNDEF` for DF on every arithmetic instruction
+  although no ALU instruction modifies DF; every `pushfq` after an ALU op
+  therefore carried an undefined bit 10.
+
+**Fix:** dispatch-table entries for all of the above; `liftShiftCL` models
+`count = CL & 31` (`& 63` for 64-bit), the shift itself, and CF/ZF/SF merged
+with their previous value under an `isZero` mask (a zero count leaves flags
+untouched; IGNIL has no select, so the merge is `(old & z8) | (new & nz8)` on
+the 8-bit flag slots). OF/PF/AF stay UNDEF. `liftAccExtend` uses SEXT / SAR
+sign-fill; `liftCarryOp` writes CF only; `emitArithFlags` now leaves DF alone
+when no setter is given. Regression test: `[vmp]` in
+`tests/disassemblers/TestX86IGNILLifter.cpp`.
+
+**Still open from the same survey:** one-operand `MUL/IMUL/DIV/IDIV` (128-bit
+result / dividend), `ROL/ROR/RCL/RCR`, `BT/BTS/BTR/BTC`, `SETcc`, `CMOVcc`,
+`BSWAP`, `SHLD/SHRD`, `XADD`, `ADC/SBB` on 8/16-bit registers - all present
+in VMProtect handlers, mostly as junk, but `mul`/`div` are the data path of
+the MULDIV handler group. Also: LLVM refuses the undocumented `sal` encoding
+(shift group `/6`); callers must rewrite it to `/4` before lifting.
