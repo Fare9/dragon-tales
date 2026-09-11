@@ -25,6 +25,11 @@ namespace x86 {
 /// x86 EFLAGS register identifiers, used as keys in the emitArithFlags map.
 enum class X86Flag : std::uint8_t { CF, PF, AF, ZF, SF, OF, DF };
 
+/// Accumulator sign-extension forms (no explicit operands, no flags).
+enum class AccExtend : std::uint8_t { CBW, CWDE, CDQE, CWD, CDQ, CQO };
+/// Carry-flag-only instructions.
+enum class CarryOp : std::uint8_t { STC, CLC, CMC };
+
 /// Callable that appends IGNIL ops for a single flag into a Block.
 /// Receives the block and the running temp-id counter by reference.
 using FlagSetter = std::function<void(ignil::Block &, std::uint32_t &)>;
@@ -254,6 +259,50 @@ class X86IGNILLifter {
   void liftShrR1(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                  std::uint32_t &tmp) const;
 
+  // LifterGaps.md #7 - forms VMProtect handlers are built from.
+  // NOT: op[0]=dst(out), op[1]=src(tied=dst). Affects no flags.
+  void liftNot(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+               std::uint32_t &tmp) const;
+  // Shift by CL (SHL/SHR/SAR at 8/16/32/64): op[0]=dst(out),
+  // op[1]=src(tied=dst); the count is CL masked to 5 bits (6 for 64-bit).
+  // A zero count leaves every flag untouched, so CF/ZF/SF are merged with
+  // their old value under an isZero mask; OF (count==1 only), PF and AF are
+  // UNDEF.
+  void liftShiftCL(const llvm::MCInst &mc, std::uint64_t addr,
+                   ignil::Block &out, std::uint32_t &tmp,
+                   ignil::Opcode shift) const;
+  // CBW/CWDE/CDQE sign-extend within RAX; CWD/CDQ/CQO sign-fill (R/E)DX
+  // from the top bit of (R/E)AX. No operands, no flags.
+  void liftAccExtend(std::uint64_t addr, ignil::Block &out,
+                     std::uint32_t &tmp, AccExtend kind) const;
+  // STC/CLC/CMC: set / clear / complement CF only.
+  void liftCarryOp(std::uint64_t addr, ignil::Block &out, std::uint32_t &tmp,
+                   CarryOp kind) const;
+  // PUSH imm8/imm32: the immediate is sign-extended to the stack width.
+  void liftPushImm(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                   std::uint32_t &tmp) const;
+  // XCHG r, r: swap two registers (no flags). op[0]/op[1] are the two
+  // registers (LLVM lists both as defs, the tied uses follow).
+  void liftXchg(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                std::uint32_t &tmp) const;
+  // BSWAP r32/r64: reverse the byte order (no flags). Built from
+  // shift/and/or since IGNIL has no byte-swap primitive.
+  void liftBswap(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                 std::uint32_t &tmp) const;
+  // SHLD/SHRD by CL or imm8: op[0]=dst(out), op[1]=src1(tied=dst),
+  // op[2]=src2, [op[3]=imm]. A zero count leaves dst and every flag alone,
+  // expressed with all-ones/all-zero masks (IGNIL has no select).
+  void liftShiftDouble(const llvm::MCInst &mc, std::uint64_t addr,
+                       ignil::Block &out, std::uint32_t &tmp, bool left,
+                       bool byCL) const;
+  // Shared by the variable-count shifts: CF = last bit shifted out, ZF/SF
+  // from the result, each merged with its old value when the count is zero;
+  // OF/PF/AF UNDEF.
+  void emitGatedShiftFlags(std::uint64_t addr, ignil::Block &out,
+                           std::uint32_t &tmp, ignil::Temp lhs,
+                           ignil::Temp cnt, ignil::Temp result,
+                           bool leftShift) const;
+
   // SSE2 scalar-double support (real obfusheader.h/CFLOW_BRANCHING target,
   // examples/obfusheader/) - only the low 64 bits of each XMM register are
   // modeled (see x86registers.def), so every form below either reduces to
@@ -340,6 +389,20 @@ class X86IGNILLifter {
   [[nodiscard]] FlagSetter cfAlwaysZero(std::uint64_t addr) const;
   [[nodiscard]] FlagSetter ofAlwaysZero(std::uint64_t addr) const;
 
+  // PF = even parity of the low byte of the result. AF = carry out of bit 3
+  // (bit 4 of lhs ^ rhs ^ result). Logical ops and shifts leave AF clear.
+  // (LifterGaps.md #7 round 4: VMProtect derives branch targets from the
+  // whole RFLAGS word, so PF/AF must be real bits, not UNDEF.)
+  [[nodiscard]] FlagSetter pfParity(ignil::Value result, std::uint64_t addr) const;
+  [[nodiscard]] FlagSetter afNibbleCarry(ignil::Value lhs, ignil::Value rhs,
+                                         ignil::Value result,
+                                         std::uint64_t addr) const;
+  [[nodiscard]] FlagSetter afAlwaysZero(std::uint64_t addr) const;
+  // The i1 parity bit itself (PF value) - shared by pfParity and the gated
+  // shift flags.
+  ignil::Temp parityBit(ignil::Value result, std::uint64_t addr,
+                        ignil::Block &out, std::uint32_t &tmp) const;
+
   // CF for ADD: unsigned overflow  →  ULT(result, addend)
   [[nodiscard]] FlagSetter cfAddOverflow(ignil::Value result,
                                          ignil::Value addend,
@@ -360,8 +423,8 @@ class X86IGNILLifter {
   // Cached opcode integers (same approach as X86Info)
   unsigned opMov64rr_{}, opMov32rr_{};
   unsigned opMov64ri_{}, opMov32ri_{}, opMov64ri32_{};
-  unsigned opMov64rm_{}, opMov32rm_{};
-  unsigned opMov64mr_{}, opMov32mr_{};
+  unsigned opMov64rm_{}, opMov32rm_{}, opMov16rm_{}, opMov8rm_{};
+  unsigned opMov64mr_{}, opMov32mr_{}, opMov16mr_{}, opMov8mr_{};
   unsigned opMov64mi_{}, opMov32mi_{};
   unsigned opLea64r_{}, opLea32r_{};
   unsigned opAdd64rr_{}, opAdd32rr_{};
@@ -408,12 +471,56 @@ class X86IGNILLifter {
   unsigned opShl32ri_{}, opShl64ri_{}, opShr32ri_{}, opShr64ri_{};
   unsigned opSar32r1_{}, opSar64r1_{}, opShl32r1_{}, opShl64r1_{},
           opShr32r1_{}, opShr64r1_{};
+  // LifterGaps.md #7 (VMProtect handler forms).
+  unsigned opNot8r_{}, opNot16r_{}, opNot32r_{}, opNot64r_{};
+  unsigned opNeg8r_{}, opNeg16r_{};
+  unsigned opShl8ri_{}, opShl16ri_{}, opShr8ri_{}, opShr16ri_{}, opSar8ri_{},
+          opSar16ri_{};
+  unsigned opShl8r1_{}, opShl16r1_{}, opShr8r1_{}, opShr16r1_{}, opSar8r1_{},
+          opSar16r1_{};
+  unsigned opShl8rCL_{}, opShl16rCL_{}, opShl32rCL_{}, opShl64rCL_{};
+  unsigned opShr8rCL_{}, opShr16rCL_{}, opShr32rCL_{}, opShr64rCL_{};
+  unsigned opSar8rCL_{}, opSar16rCL_{}, opSar32rCL_{}, opSar64rCL_{};
+  unsigned opCbw_{}, opCwde_{}, opCdqe_{}, opCwd_{}, opCdq_{}, opCqo_{};
+  unsigned opStc_{}, opClc_{}, opCmc_{};
+  // push imm (LifterGaps.md #7 round 3)
+  unsigned opPush32I_{}, opPush32I8_{}, opPush64I32_{}, opPush64I8_{};
+  // LifterGaps.md #7 round 2: 8/16-bit ALU forms, XCHG, BSWAP, SHLD/SHRD.
+  unsigned opMov8rr_{}, opMov16rr_{}, opMov8ri_{}, opMov16ri_{};
+  unsigned opAdd8rr_{}, opAdd16rr_{}, opAdd8ri_{}, opAdd16ri_{}, opAdd8ri8_{},
+          opAdd16ri8_{};
+  unsigned opSub8rr_{}, opSub16rr_{}, opSub8ri_{}, opSub16ri_{}, opSub8ri8_{},
+          opSub16ri8_{};
+  unsigned opAnd8rr_{}, opAnd16rr_{}, opAnd8ri_{}, opAnd16ri_{}, opAnd8ri8_{},
+          opAnd16ri8_{};
+  unsigned opOr8rr_{}, opOr16rr_{}, opOr8ri_{}, opOr16ri_{}, opOr8ri8_{},
+          opOr16ri8_{};
+  unsigned opXor8rr_{}, opXor16rr_{}, opXor8ri_{}, opXor16ri_{}, opXor8ri8_{},
+          opXor16ri8_{};
+  unsigned opCmp8rr_{}, opCmp16rr_{}, opCmp8ri_{}, opCmp16ri_{}, opCmp8ri8_{},
+          opCmp16ri8_{};
+  unsigned opTest8rr_{}, opTest16rr_{}, opTest8ri_{}, opTest16ri_{};
+  unsigned opInc8r_{}, opInc16r_{}, opDec8r_{}, opDec16r_{};
+  unsigned opXchg8rr_{}, opXchg16rr_{}, opXchg32rr_{}, opXchg64rr_{};
+  unsigned opBswap32r_{}, opBswap64r_{};
+  unsigned opShld16rrCL_{}, opShld32rrCL_{}, opShld64rrCL_{}, opShrd16rrCL_{},
+          opShrd32rrCL_{}, opShrd64rrCL_{};
+  unsigned opShld16rri8_{}, opShld32rri8_{}, opShld64rri8_{}, opShrd16rri8_{},
+          opShrd32rri8_{}, opShrd64rri8_{};
   // MOVZX/MOVSX opcode -> how to lift it. Every variant LLVM decodes is in
   // here, register- and memory-source alike, so a spelling that is not covered
   // fails loud (UNDEF from liftInstruction's default case) rather than being
   // lifted at the wrong width or off the wrong operand.
   std::unordered_map<unsigned, MovExtendForm> movzxForms_;
   std::unordered_map<unsigned, MovExtendForm> movsxForms_;
+
+  // Load-direction reg-reg encodings (0x8B/0x03/0x33/... with mod=11) decode
+  // to distinct LLVM *_REV opcodes (e.g. MOV32rr_REV, ADD32rr_REV) that carry
+  // the SAME MCInst operand order as their base form. Compilers emit these
+  // constantly, so map each *_REV opcode to its base and normalize in
+  // liftInstruction() before dispatch. Without this they hit the default case
+  // and lift to UNDEF (found via symbolic-execution differential testing).
+  std::unordered_map<unsigned, unsigned> revToBase_;
 
   unsigned opPxorRR_{};
   unsigned opCvtsi2sd32_{}, opCvtsi2sd64_{};
@@ -432,6 +539,9 @@ class X86IGNILLifter {
   ignil::Reg regZF_{}, regSF_{}, regOF_{}, regDF_{};
   ignil::Reg regRSP_{}, regESP_{}; // needed for push/pop/leave
   ignil::Reg regRBP_{}, regEBP_{}; // needed for leave decomposition
+  // CL as a shift count; accumulator/data registers for CBW..CQO.
+  ignil::Reg regCL_{}, regAL_{}, regAX_{}, regEAX_{}, regRAX_{}, regDX_{},
+          regEDX_{}, regRDX_{};
 };
 
 } // namespace x86

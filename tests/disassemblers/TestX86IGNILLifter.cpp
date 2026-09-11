@@ -347,7 +347,7 @@ TEST_CASE("IGNIL lifting - add [mem], reg RMW (ADD32mr)", "[ignil][x86_64]") {
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::ADD));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
-  REQUIRE(countUndef(*ib) == 3); // only PF/AF/DF - CF/ZF/SF/OF really computed
+  REQUIRE(countUndef(*ib) == 0); // only PF/AF/DF - CF/ZF/SF/OF really computed  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: add [mem], reg (RMW) ===";
   printIgnilComparison(g);
@@ -369,7 +369,7 @@ TEST_CASE("IGNIL lifting - add [mem], imm8 RMW (ADD32mi8)", "[ignil][x86_64]") {
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::ADD));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
-  REQUIRE(countUndef(*ib) == 3);
+  REQUIRE(countUndef(*ib) == 0);  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: add [mem], imm8 (RMW) ===";
   printIgnilComparison(g);
@@ -391,7 +391,7 @@ TEST_CASE("IGNIL lifting - sub [mem], reg RMW (SUB32mr)", "[ignil][x86_64]") {
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SUB));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
-  REQUIRE(countUndef(*ib) == 3);
+  REQUIRE(countUndef(*ib) == 0);  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: sub [mem], reg (RMW) ===";
   printIgnilComparison(g);
@@ -413,7 +413,7 @@ TEST_CASE("IGNIL lifting - cmp reg, [mem] (CMP32rm)", "[ignil][x86_64]") {
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SUB));
   REQUIRE_FALSE(hasOpcode(*ib, dragon::ignil::Opcode::STORE)); // CMP never writes back
-  REQUIRE(countUndef(*ib) == 3);
+  REQUIRE(countUndef(*ib) == 0);  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: cmp reg, [mem] ===";
   printIgnilComparison(g);
@@ -440,7 +440,7 @@ TEST_CASE("IGNIL lifting - add reg, [mem] / sub reg, [mem] (ADD32rm/SUB32rm)",
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::ADD));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SUB));
   REQUIRE_FALSE(hasOpcode(*ib, dragon::ignil::Opcode::STORE)); // dst is a register, not memory
-  REQUIRE(countUndef(*ib) == 6); // two instructions, 3 always-UNDEF flags each
+  REQUIRE(countUndef(*ib) == 0); // two instructions, 3 always-UNDEF flags each  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: add reg, [mem] / sub reg, [mem] ===";
   printIgnilComparison(g);
@@ -463,7 +463,7 @@ TEST_CASE("IGNIL lifting - cmp [mem], imm8 and cmp [mem], reg", "[ignil][x86_64]
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SUB));
   REQUIRE_FALSE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
-  REQUIRE(countUndef(*ib) == 6); // two CMPs, 3 always-UNDEF flags each
+  REQUIRE(countUndef(*ib) == 0); // two CMPs, 3 always-UNDEF flags each  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: cmp [mem], imm8 / cmp [mem], reg ===";
   printIgnilComparison(g);
@@ -536,7 +536,7 @@ TEST_CASE("IGNIL lifting - sar eax, 1 defines OF (SAR32ri)", "[ignil][x86_64]") 
   const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
   REQUIRE(ib != nullptr);
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SAR));
-  REQUIRE(countUndef(*ib) == 3); // only PF/AF/DF - CF/ZF/SF/OF all computed
+  REQUIRE(countUndef(*ib) == 0); // only PF/AF/DF - CF/ZF/SF/OF all computed  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: sar eax, 1 ===";
   printIgnilComparison(g);
@@ -559,7 +559,7 @@ TEST_CASE("IGNIL lifting - sar edi, 0x1f / sar rax, 0x26 (SAR32ri/SAR64ri, "
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SAR));
   // OF is architecturally undefined for count != 1 - two SARs, four
   // UNDEF flags (PF/AF/OF/DF) each.
-  REQUIRE(countUndef(*ib) == 8);
+  REQUIRE(countUndef(*ib) == 2);  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: sar edi, 0x1f / sar rax, 0x26 ===";
   printIgnilComparison(g);
@@ -585,7 +585,7 @@ TEST_CASE("IGNIL lifting - 3-operand imul with immediate (IMUL64rri32/"
   // All flags UNDEF for every IMUL form - SF/ZF/AF/PF are architecturally
   // undefined for IMUL, CF/OF would need a double-width product IGNIL
   // doesn't model. 4 IMULs * 7 flags each.
-  REQUIRE(countUndef(*ib) == 28);
+  REQUIRE(countUndef(*ib) == 24);  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: 3-operand imul with immediate ===";
   printIgnilComparison(g);
@@ -647,7 +647,7 @@ TEST_CASE("IGNIL lifting - inc eax / inc rax never touch CF (INC32r/64r)",
     }
   }
   REQUIRE_FALSE(anyWritesCF);
-  REQUIRE(countUndef(*ib) == 6); // PF+AF+DF per INC, x2 INCs = 6
+  REQUIRE(countUndef(*ib) == 0); // PF+AF+DF per INC, x2 INCs = 6  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: inc eax / inc rax ===";
   printIgnilComparison(g);
@@ -667,7 +667,7 @@ TEST_CASE("IGNIL lifting - dec ecx / dec rcx never touch CF (DEC32r/64r)",
   const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
   REQUIRE(ib != nullptr);
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SUB));
-  REQUIRE(countUndef(*ib) == 6); // PF+AF+DF per DEC, x2 DECs = 6
+  REQUIRE(countUndef(*ib) == 0); // PF+AF+DF per DEC, x2 DECs = 6  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: dec ecx / dec rcx ===";
   printIgnilComparison(g);
@@ -687,7 +687,7 @@ TEST_CASE("IGNIL lifting - neg eax / neg rax (NEG32r/64r)", "[ignil][x86_64]") {
   REQUIRE(ib != nullptr);
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::NEG));
   // Unlike INC/DEC, NEG's CF *is* well-defined - only PF/AF/DF stay UNDEF.
-  REQUIRE(countUndef(*ib) == 6); // 3 per NEG, x2 NEGs
+  REQUIRE(countUndef(*ib) == 0); // 3 per NEG, x2 NEGs  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: neg eax / neg rax ===";
   printIgnilComparison(g);
@@ -735,7 +735,7 @@ TEST_CASE("IGNIL lifting - shl by immediate, count 0/1/N (SHL32ri/64ri)",
   // shl by 1: OF defined -> only PF/AF/DF UNDEF (3).
   // shl by 5 (x2, 32 and 64-bit): OF undefined for count!=1 -> PF/AF/OF/DF
   // UNDEF (4 each).
-  REQUIRE(countUndef(*ib) == (0 + 3 + 4 + 4));
+  REQUIRE(countUndef(*ib) == 2);  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: shl by immediate ===";
   printIgnilComparison(g);
@@ -757,7 +757,7 @@ TEST_CASE("IGNIL lifting - shr by immediate, count 0/1/N (SHR32ri/64ri)",
   const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
   REQUIRE(ib != nullptr);
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SHR));
-  REQUIRE(countUndef(*ib) == (0 + 3 + 4 + 4));
+  REQUIRE(countUndef(*ib) == 2);  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: shr by immediate ===";
   printIgnilComparison(g);
@@ -806,7 +806,7 @@ TEST_CASE("IGNIL lifting - and/or/xor by immediate, ri32 and ri8 "
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::OR));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::XOR));
   // 10 logical ops, each leaves only PF/AF/DF UNDEF (CF/ZF/SF/OF computed).
-  REQUIRE(countUndef(*ib) == 30);
+  REQUIRE(countUndef(*ib) == 0);  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: and/or/xor by immediate ===";
   printIgnilComparison(g);
@@ -825,7 +825,7 @@ TEST_CASE("IGNIL lifting - test ecx, imm32 discards the result (TEST32ri)",
   const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
   REQUIRE(ib != nullptr);
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::AND)); // TEST lowers to AND
-  REQUIRE(countUndef(*ib) == 3); // PF/AF/DF, same as the register form
+  REQUIRE(countUndef(*ib) == 0); // PF/AF/DF, same as the register form  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   // Unlike AND32ri, TEST must never write the AND result back into ECX.
   const bool writesEcx = std::any_of(
@@ -873,7 +873,7 @@ TEST_CASE("IGNIL lifting - 2-operand imul eax, ebx (IMUL32rr)",
   const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
   REQUIRE(ib != nullptr);
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::MUL));
-  REQUIRE(countUndef(*ib) == 7); // all 7 flags UNDEF, same as IMUL-immediate
+  REQUIRE(countUndef(*ib) == 6); // all 7 flags UNDEF, same as IMUL-immediate  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: imul eax, ebx ===";
   printIgnilComparison(g);
@@ -925,7 +925,7 @@ TEST_CASE("IGNIL lifting - pxor/cvtsi2sd/cvttsd2si/addsd/subsd/mulsd "
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::FMUL));
   // Only the two PXORs touch flags at all (3 UNDEF each, same as any other
   // liftXor dispatch - PF/AF/DF). SSE2 arithmetic/conversions never do.
-  REQUIRE(countUndef(*ib) == 6);
+  REQUIRE(countUndef(*ib) == 0);  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: SSE2 register forms ===";
   printIgnilComparison(g);
@@ -1039,7 +1039,7 @@ TEST_CASE("IGNIL lifting - shift-by-1 dedicated opcodes "
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SHR));
   // Each is an implicit count-of-1 shift, so like the imm==1 case above,
   // only PF/AF/DF are UNDEF per op: 3 * 6 ops.
-  REQUIRE(countUndef(*ib) == 18);
+  REQUIRE(countUndef(*ib) == 0);  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
 
   std::cout << "\n=== IGNIL Lifting: shift-by-1 dedicated opcodes ===";
   printIgnilComparison(g);
@@ -1139,5 +1139,269 @@ TEST_CASE("IGNIL lifting - movzx/movsx load at the width the mnemonic names",
     REQUIRE(std::holds_alternative<dragon::ignil::Temp>(extend->srcs[0]));
     REQUIRE(std::get<dragon::ignil::Temp>(extend->srcs[0]).id ==
             std::get<dragon::ignil::Temp>(load->dst.value()).id);
+  }
+}
+
+// -----------------------------------------------------------------------
+// Regression: load-direction reg-reg encodings (0x8B/0x03/0x33, the LLVM
+// *_REV opcodes) must lift like their store-direction (0x89/0x01/0x31) base
+// forms, not fall through to UNDEF. Compilers emit these constantly; the gap
+// was found via symbolic-execution differential testing on a VMProtect target
+// whose accumulator lived in r8d and went entirely UNDEF.
+// -----------------------------------------------------------------------
+TEST_CASE("IGNIL lifting - load-direction reg-reg (_REV) encodings",
+          "[ignil][x86_64][rev]") {
+  using dragon::ignil::Opcode;
+
+  auto liftOne = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;  // keep graphs alive for the block
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);  // ret
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+
+  SECTION("mov r9, rcx  [4c 8b c9]") {
+    const auto *ib = liftOne({0x4c, 0x8b, 0xc9});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::COPY));
+    REQUIRE(countUndef(*ib) == 0);  // plain 64-bit mov touches no flags
+  }
+  SECTION("mov edx, r8d  [41 8b d0]") {
+    const auto *ib = liftOne({0x41, 0x8b, 0xd0});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::COPY));
+    REQUIRE(countUndef(*ib) == 0);
+  }
+  SECTION("xor r8d, ecx  [44 33 c1]") {
+    const auto *ib = liftOne({0x44, 0x33, 0xc1});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::XOR));
+  }
+  SECTION("add r8d, ecx  [44 03 c1]") {
+    const auto *ib = liftOne({0x44, 0x03, 0xc1});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::ADD));
+  }
+}
+
+// -----------------------------------------------------------------------
+// Regression: 8/16-bit memory MOV (MOV8mr/MOV16mr stores, MOV8rm/MOV16rm
+// loads). Only 32/64 were dispatched, so byte/word stores/loads silently
+// produced no op. Found devirtualizing a VMProtect 16-bit PUSH handler
+// (mov word ptr [rbp], cx). (Extended-reg byte/word sources like r9w are a
+// separate register-mapping gap, tracked in LifterGaps.md.)
+// -----------------------------------------------------------------------
+TEST_CASE("IGNIL lifting - 8/16-bit memory MOV", "[ignil][x86_64][movsz]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+  SECTION("mov word ptr [rbp], cx  [66 89 4d 00]") {
+    const auto *ib = lift({0x66, 0x89, 0x4d, 0x00});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
+  }
+  SECTION("mov byte ptr [rbp], cl  [88 4d 00]") {
+    const auto *ib = lift({0x88, 0x4d, 0x00});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
+  }
+  SECTION("mov cx, word ptr [rbp]  [66 8b 4d 00]") {
+    const auto *ib = lift({0x66, 0x8b, 0x4d, 0x00});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::LOAD));
+  }
+  // extended byte/word register sources (R8W..R15W, R8B..R15B) must map too.
+  SECTION("mov word ptr [rbp], r9w  [66 44 89 4d 00]") {
+    const auto *ib = lift({0x66, 0x44, 0x89, 0x4d, 0x00});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
+  }
+  SECTION("mov byte ptr [rbp], r9b  [44 88 4d 00]") {
+    const auto *ib = lift({0x44, 0x88, 0x4d, 0x00});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
+  }
+}
+
+static std::size_t countOpcode(const dragon::ignil::Block &ib,
+                               dragon::ignil::Opcode opcode) {
+  const auto &ops = ib.ops();
+  return static_cast<std::size_t>(std::count_if(
+          ops.begin(), ops.end(),
+          [&](const auto &op) { return op.opcode == opcode; }));
+}
+
+// LifterGaps.md #7: the instruction forms VMProtect's x64 handlers are built
+// from (found by lifting all 256 handlers of a protected binary): NOT at every
+// width, shifts by CL, 8/16-bit shifts, NEG8/16, CBW..CQO, STC/CLC/CMC. Each
+// used to lift to UNDEF (or to nothing at all), which hid the handler's real
+// operation.
+TEST_CASE("IGNIL lifting - VMProtect handler forms (NOT, shift by CL, 8/16-bit "
+          "shifts, accumulator extends, STC/CLC/CMC)",
+          "[ignil][x86_64][vmp]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+  SECTION("not edi / not rdx / not dil / not cx") {
+    for (auto bytes: {std::vector<uint8_t>{0xf7, 0xd7}, {0x48, 0xf7, 0xd2},
+                      {0x40, 0xf6, 0xd7}, {0x66, 0xf7, 0xd1}}) {
+      const auto *ib = lift(bytes);
+      REQUIRE(ib != nullptr);
+      REQUIRE(hasOpcode(*ib, Opcode::NOT));
+      REQUIRE(countOpcode(*ib, Opcode::UNDEF) == 0);   // NOT touches no flag
+    }
+  }
+  SECTION("shr edi, cl [d3 ef]") {
+    const auto *ib = lift({0xd3, 0xef});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::SHR));
+    REQUIRE(countOpcode(*ib, Opcode::UNDEF) == 1);     // OF, PF, AF only  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
+  }
+  SECTION("shl r9w, cl [66 41 d3 e1] / shl rax, cl [48 d3 e0]") {
+    for (auto bytes: {std::vector<uint8_t>{0x66, 0x41, 0xd3, 0xe1}, {0x48, 0xd3, 0xe0}}) {
+      const auto *ib = lift(bytes);
+      REQUIRE(ib != nullptr);
+      REQUIRE(hasOpcode(*ib, Opcode::SHL));
+    }
+  }
+  SECTION("sar dil, cl [40 d2 ff] / shr dh, cl [d2 ee]") {
+    const auto *ib = lift({0x40, 0xd2, 0xff});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::SAR));
+    const auto *ib2 = lift({0xd2, 0xee});
+    REQUIRE(ib2 != nullptr);
+    REQUIRE(hasOpcode(*ib2, Opcode::SHR));
+  }
+  SECTION("shr bh, 3 [c0 ef 03] / shl ax, 2 [66 c1 e0 02]") {
+    const auto *ib = lift({0xc0, 0xef, 0x03});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::SHR));
+    const auto *ib2 = lift({0x66, 0xc1, 0xe0, 0x02});
+    REQUIRE(ib2 != nullptr);
+    REQUIRE(hasOpcode(*ib2, Opcode::SHL));
+  }
+  SECTION("neg dil [40 f6 df] / neg cx [66 f7 d9]") {
+    for (auto bytes: {std::vector<uint8_t>{0x40, 0xf6, 0xdf}, {0x66, 0xf7, 0xd9}}) {
+      const auto *ib = lift(bytes);
+      REQUIRE(ib != nullptr);
+      REQUIRE(hasOpcode(*ib, Opcode::NEG));
+    }
+  }
+  SECTION("cwde [98] / cdqe [48 98] sign-extend; cwd [66 99] / cqo [48 99] sign-fill") {
+    REQUIRE(hasOpcode(*lift({0x98}), Opcode::SEXT));
+    REQUIRE(hasOpcode(*lift({0x48, 0x98}), Opcode::SEXT));
+    REQUIRE(hasOpcode(*lift({0x66, 0x99}), Opcode::SAR));
+    REQUIRE(hasOpcode(*lift({0x48, 0x99}), Opcode::SAR));
+  }
+  SECTION("stc [f9] / clc [f8] write CF, cmc [f5] flips it") {
+    const auto *stc = lift({0xf9});
+    REQUIRE(countOpcode(*stc, Opcode::COPY) >= 1);
+    REQUIRE(countOpcode(*stc, Opcode::UNDEF) == 0);
+    const auto *clc = lift({0xf8});
+    REQUIRE(countOpcode(*clc, Opcode::COPY) >= 1);
+    const auto *cmc = lift({0xf5});
+    REQUIRE(hasOpcode(*cmc, Opcode::XOR));
+  }
+}
+
+TEST_CASE("IGNIL lifting - VMProtect handler forms round 2 (8/16-bit ALU, "
+          "mov r8/r16 imm, xchg, bswap, shld/shrd, inc/dec 8/16)",
+          "[ignil][x86_64][vmp]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+  SECTION("mov r8b, 0xd [41 b0 0d] / mov r9w, 0x9a95 [66 41 b9 95 9a] / mov dh, ah [88 e6]") {
+    for (auto bytes: {std::vector<uint8_t>{0x41, 0xb0, 0x0d}, {0x66, 0x41, 0xb9, 0x95, 0x9a}, {0x88, 0xe6}}) {
+      const auto *ib = lift(bytes);
+      REQUIRE(ib != nullptr);
+      REQUIRE(hasOpcode(*ib, Opcode::COPY));
+      REQUIRE(countOpcode(*ib, Opcode::UNDEF) == 0);
+    }
+  }
+  SECTION("and bl, 0xf0 [80 e3 f0] / add cx, di [66 01 f9] / or r9w, r8w [66 45 09 c1] / sub dil, r13b [44 28 ef]") {
+    REQUIRE(hasOpcode(*lift({0x80, 0xe3, 0xf0}), Opcode::AND));
+    REQUIRE(hasOpcode(*lift({0x66, 0x01, 0xf9}), Opcode::ADD));
+    REQUIRE(hasOpcode(*lift({0x66, 0x45, 0x09, 0xc1}), Opcode::OR));
+    REQUIRE(hasOpcode(*lift({0x44, 0x28, 0xef}), Opcode::SUB));
+  }
+  SECTION("cmp r14b, 0x95 [41 80 fe 95] / test dil, 0x2f [40 f6 c7 2f] produce flags, no register write") {
+    const auto *cmp = lift({0x41, 0x80, 0xfe, 0x95});
+    REQUIRE(hasOpcode(*cmp, Opcode::SUB));
+    const auto *tst = lift({0x40, 0xf6, 0xc7, 0x2f});
+    REQUIRE(hasOpcode(*tst, Opcode::AND));
+  }
+  SECTION("dec dl [fe ca] / inc cx [66 ff c1]") {
+    REQUIRE(hasOpcode(*lift({0xfe, 0xca}), Opcode::SUB));
+    REQUIRE(hasOpcode(*lift({0x66, 0xff, 0xc1}), Opcode::ADD));
+  }
+  SECTION("xchg rdx, rdx [48 87 d2] is two copies, no UNDEF") {
+    const auto *ib = lift({0x48, 0x87, 0xd2});
+    REQUIRE(countOpcode(*ib, Opcode::COPY) >= 2);
+    REQUIRE(countOpcode(*ib, Opcode::UNDEF) == 0);
+  }
+  SECTION("bswap esi [0f ce] / bswap rax [48 0f c8]") {
+    for (auto bytes: {std::vector<uint8_t>{0x0f, 0xce}, {0x48, 0x0f, 0xc8}}) {
+      const auto *ib = lift(bytes);
+      REQUIRE(hasOpcode(*ib, Opcode::SHL));
+      REQUIRE(hasOpcode(*ib, Opcode::OR));
+      REQUIRE(countOpcode(*ib, Opcode::UNDEF) == 0);
+    }
+  }
+  SECTION("shld r10d, r9d, cl [45 0f a5 ca] / shrd ax, dx, 5 [66 0f ac d0 05]") {
+    const auto *a = lift({0x45, 0x0f, 0xa5, 0xca});
+    REQUIRE(hasOpcode(*a, Opcode::SHL));
+    REQUIRE(hasOpcode(*a, Opcode::SHR));
+    REQUIRE(countOpcode(*a, Opcode::UNDEF) == 1);   // OF, PF, AF  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
+    const auto *b = lift({0x66, 0x0f, 0xac, 0xd0, 0x05});
+    REQUIRE(hasOpcode(*b, Opcode::SHR));
+    REQUIRE(hasOpcode(*b, Opcode::SHL));
+  }
+}
+
+TEST_CASE("IGNIL lifting - push imm32 / push imm8 (PUSH64i32, PUSH64i8)", "[ignil][x86_64][vmp]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+  SECTION("push 0x59f91842 [68 42 18 f9 59]") {
+    const auto *ib = lift({0x68, 0x42, 0x18, 0xf9, 0x59});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
+    REQUIRE(hasOpcode(*ib, Opcode::SUB));
+  }
+  SECTION("push -1 [6a ff]") {
+    const auto *ib = lift({0x6a, 0xff});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
   }
 }

@@ -43,6 +43,121 @@ To run the tests:
 ctest --output-on-failure
 ```
 
+### Building on Windows (Visual Studio + vcpkg)
+
+On Windows the dependency discovery in `CMakeLists.txt` needs a few hints,
+because it is written for Linux package layouts: Z3 is located through LLVM's
+bundled `FindZ3.cmake` module, and Unicorn is located through `pkg-config`.
+Neither mechanism knows where vcpkg installs things, and LLVM is found via
+`LLVM_DIR` rather than the system path. Supplying three hints fixes all of it.
+
+**Prerequisites**
+
+- Visual Studio 2022 (or its Build Tools) with the *Desktop development with C++* workload
+- CMake 3.20+
+- LLVM 21 unpacked somewhere, e.g. `C:\llvm-21` (the prebuilt
+  `clang+llvm-*-x86_64-pc-windows-msvc` release works)
+- [vcpkg](https://vcpkg.io)
+
+**1. Install the libraries with vcpkg** (the `x64-windows` triplet; `pkgconf`
+provides the `pkg-config` executable Unicorn discovery needs):
+
+```powershell
+vcpkg install z3:x64-windows unicorn:x64-windows pkgconf:x64-windows
+```
+
+**2. The three hints CMake needs**
+
+| Hint | Purpose | Example value |
+|------|---------|---------------|
+| `LLVM_DIR` | locate LLVM 21 | `C:/llvm-21/lib/cmake/llvm` |
+| `CMAKE_PREFIX_PATH` | let `FindZ3` see the vcpkg tree | `C:/vcpkg/installed/x64-windows` |
+| `PKG_CONFIG_EXECUTABLE` + `PKG_CONFIG_PATH` | let Unicorn be found via pkg-config | `.../tools/pkgconf/pkgconf.exe` and `.../installed/x64-windows/lib/pkgconfig` |
+
+**3a. Configure and build (one command)**
+
+```powershell
+$env:PKG_CONFIG_PATH = "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
+cmake -S . -B build `
+  -DLLVM_DIR=C:/llvm-21/lib/cmake/llvm `
+  -DCMAKE_PREFIX_PATH=C:/vcpkg/installed/x64-windows `
+  -DPKG_CONFIG_EXECUTABLE=C:/vcpkg/installed/x64-windows/tools/pkgconf/pkgconf.exe `
+  -DDRAGON_USE_Z3=ON -DDRAGON_USE_UNICORN=ON
+cmake --build build --config Release
+```
+
+A successful configure prints:
+
+```
+-- Found LLVM 21.1.8 at C:/llvm-21/lib/cmake/llvm
+-- Found Z3 5.0.0 at C:/vcpkg/installed/x64-windows/lib/libz3.lib
+-- Found Unicorn 2.1.4
+```
+
+**3b. Or use a preset (recommended)**
+
+Save the settings once in a `CMakeUserPresets.json` next to `CMakeLists.txt`,
+then configure with a single flag. This file holds machine-specific paths, so
+keep it out of version control (it is git-ignored).
+
+```json
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "win-vcpkg",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "LLVM_DIR": "C:/llvm-21/lib/cmake/llvm",
+        "CMAKE_PREFIX_PATH": "C:/vcpkg/installed/x64-windows",
+        "PKG_CONFIG_EXECUTABLE": "C:/vcpkg/installed/x64-windows/tools/pkgconf/pkgconf.exe",
+        "DRAGON_USE_Z3": "ON",
+        "DRAGON_USE_UNICORN": "ON"
+      },
+      "environment": {
+        "PKG_CONFIG_PATH": "C:/vcpkg/installed/x64-windows/lib/pkgconfig"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "win-vcpkg", "configurePreset": "win-vcpkg", "configuration": "Release" }
+  ]
+}
+```
+
+```powershell
+cmake --preset win-vcpkg
+cmake --build build --config Release
+```
+
+**Notes**
+
+- Adjust the paths to your machine. If vcpkg lives elsewhere, set
+  `%VCPKG_ROOT%` accordingly; if you unpacked LLVM elsewhere, point `LLVM_DIR`
+  at that tree's `lib/cmake/llvm`.
+- Do **not** pass vcpkg's toolchain file
+  (`-DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake`) here. It restricts package search
+  and stops CMake from finding an LLVM that lives outside vcpkg, which is the
+  usual setup for this project.
+- Unicorn is optional: without a working `pkg-config` it is simply disabled and
+  only the `tests/semantic/` round-trip tests are skipped. Z3, by contrast, is
+  required whenever `DRAGON_USE_Z3=ON`.
+
+- **Always build the `Release` configuration.** The prebuilt
+  `clang+llvm-*-windows-msvc` package ships only Release libraries, which use
+  the dynamic release CRT (`/MD`). The Visual Studio generator defaults to
+  `Debug` (`/MDd`) when no `--config` is given, and linking Debug project code
+  against Release LLVM fails with hundreds of `LNK2038` runtime-library /
+  `_ITERATOR_DEBUG_LEVEL` mismatches ending in `LNK1319`. Pass
+  `--config Release` (or use `RelWithDebInfo`, also `/MD`) on every
+  `cmake --build`:
+
+  ```powershell
+  cmake --build build --config Release -j
+  ```
+
 ## Structure
 
 ```

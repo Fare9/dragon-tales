@@ -8,7 +8,39 @@ _here = os.path.dirname(os.path.abspath(__file__))
 _root = os.path.dirname(_here)
 
 _HEADER = os.path.join(_root, 'c_shim', 'dragon_c.h')
-_LIB = os.path.join(_root, 'build', 'c_shim', 'libdragon_c.so')
+import sys as _sys
+
+def _find_lib():
+    env = os.environ.get('DRAGON_C_LIB')
+    if env and os.path.exists(env):
+        return env
+    if os.name == 'nt':
+        names = ['dragon_c.dll']
+    elif _sys.platform == 'darwin':
+        names = ['libdragon_c.dylib', 'libdragon_c.so']
+    else:
+        names = ['libdragon_c.so']
+    dirs = [
+        os.path.join(_root, 'build', 'c_shim'),
+        os.path.join(_root, 'build', 'bin', 'Release'),
+        os.path.join(_root, 'build', 'bin', 'Debug'),
+        os.path.join(_root, 'build', 'c_shim', 'Release'),
+        os.path.join(_root, 'build', 'c_shim', 'Debug'),
+    ]
+    for d in dirs:
+        for n in names:
+            cand = os.path.join(d, n)
+            if os.path.exists(cand):
+                return cand
+    return os.path.join(_root, 'build', 'c_shim', 'libdragon_c.so')
+
+_LIB = _find_lib()
+if os.name == 'nt':
+    # so the shim's dependency DLLs (dragon.dll, libz3.dll) resolve
+    try:
+        os.add_dll_directory(os.path.dirname(_LIB))
+    except (AttributeError, OSError):
+        pass
 
 ffi = cffi.FFI()
 

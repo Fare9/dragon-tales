@@ -79,3 +79,5 @@ ANALYZE/
 # Python
 __pycache__/
 .venv/
+# personal, machine-specific CMake paths
+CMakeUserPresets.json
