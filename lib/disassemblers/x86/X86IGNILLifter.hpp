@@ -278,6 +278,15 @@ class X86IGNILLifter {
   // STC/CLC/CMC: set / clear / complement CF only.
   void liftCarryOp(std::uint64_t addr, ignil::Block &out, std::uint32_t &tmp,
                    CarryOp kind) const;
+  // CPUID / RDTSC / RDTSCP: instructions whose results x86 defines but IGNIL
+  // cannot express. Emits one OPAQUE op per result register, all sharing the
+  // same (snapshotted) operands, so the value is named rather than unknown -
+  // two CPUIDs with the same leaf agree, while each RDTSC stays its own
+  // reading. Before this they produced no IGNIL op at all: LLVM's MCInstrDesc
+  // gives them no register defs, so even the UNDEF fallback did not fire and
+  // the stale EAX/EDX silently survived the lift.
+  void liftOpaque(std::uint64_t addr, ignil::Block &out, std::uint32_t &tmp,
+                  ignil::OpaqueKind kind) const;
   // PUSH imm8/imm32: the immediate is sign-extended to the stack width.
   void liftPushImm(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                    std::uint32_t &tmp) const;
@@ -483,6 +492,7 @@ class X86IGNILLifter {
   unsigned opSar8rCL_{}, opSar16rCL_{}, opSar32rCL_{}, opSar64rCL_{};
   unsigned opCbw_{}, opCwde_{}, opCdqe_{}, opCwd_{}, opCdq_{}, opCqo_{};
   unsigned opStc_{}, opClc_{}, opCmc_{};
+  unsigned opCpuid_{}, opRdtsc_{}, opRdtscp_{};
   // push imm (LifterGaps.md #7 round 3)
   unsigned opPush32I_{}, opPush32I8_{}, opPush64I32_{}, opPush64I8_{};
   // LifterGaps.md #7 round 2: 8/16-bit ALU forms, XCHG, BSWAP, SHLD/SHRD.
@@ -542,6 +552,8 @@ class X86IGNILLifter {
   // CL as a shift count; accumulator/data registers for CBW..CQO.
   ignil::Reg regCL_{}, regAL_{}, regAX_{}, regEAX_{}, regRAX_{}, regDX_{},
           regEDX_{}, regRDX_{};
+  // CPUID/RDTSCP also define EBX and ECX.
+  ignil::Reg regEBX_{}, regECX_{};
 };
 
 } // namespace x86

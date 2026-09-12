@@ -6,6 +6,7 @@
 #include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
 #include <cstring>
+#include <set>
 
 namespace x86 = dragon::x86;
 using dragon::ignil::Block;
@@ -623,4 +624,248 @@ TEST_CASE("SymbolicExecutor - rejects malformed ops rather than guessing",
     SymbolicExecutor exec;
     REQUIRE(exec.run(block).status == ExecStatus::MalformedOp);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot / restore and state diffing
+// ---------------------------------------------------------------------------
+
+using Delta = dragon::ignil::SymbolicState::Delta;
+
+namespace {
+
+/// The one delta covering `key`, or nullptr.
+const Delta *deltaAt(const std::vector<Delta> &ds, Delta::Kind kind,
+                     std::uint64_t key) {
+  for (const Delta &d : ds)
+    if (d.kind == kind && d.key == key)
+      return &d;
+  return nullptr;
+}
+
+} // namespace
+
+TEST_CASE("SymbolicExecutor - a state snapshot can be restored",
+          "[ignil][symbolic][diff]") {
+  SymbolicExecutor exec;
+  exec.setRegister(x86::RAX, 0x1000);
+  const dragon::ignil::SymbolicState before = exec.state();
+
+  Block block{kAddr};
+  block.append({Opcode::ADD,
+                Value{x86::RAX},
+                {Value{x86::RAX}, Value{Const{0x24, 64}}},
+                kAddr});
+  REQUIRE(exec.run(block).ok());
+  REQUIRE(exec.evaluate(exec.readRegister(x86::RAX)) == 0x1024);
+
+  exec.setState(before);
+  REQUIRE(exec.evaluate(exec.readRegister(x86::RAX)) == 0x1000);
+
+  // ... and the restored state is a starting point again, not a dead end.
+  REQUIRE(exec.run(block).ok());
+  REQUIRE(exec.evaluate(exec.readRegister(x86::RAX)) == 0x1024);
+}
+
+TEST_CASE("SymbolicExecutor - diff reports what a block changed, whole values "
+          "rather than bytes",
+          "[ignil][symbolic][diff]") {
+  SymbolicExecutor exec;
+  exec.setRegister(x86::RBX, 0x4000);
+  const dragon::ignil::SymbolicState before = exec.state();
+
+  SECTION("an unchanged state has no deltas") {
+    REQUIRE(exec.diff(before).empty());
+  }
+
+  SECTION("one 64-bit register write is one 64-bit delta") {
+    Block block{kAddr};
+    block.append({Opcode::COPY, Value{x86::RAX}, {Value{Const{0x1122334455667788, 64}}},
+                  kAddr});
+    REQUIRE(exec.run(block).ok());
+
+    const auto ds = exec.diff(before);
+    REQUIRE(ds.size() == 1);
+    const Delta *d = deltaAt(ds, Delta::Kind::Register, x86::RAX.offset);
+    REQUIRE(d != nullptr);
+    REQUIRE(d->width == 64);
+    REQUIRE(exec.evaluate(d->value) == 0x1122334455667788);
+  }
+
+  SECTION("a store is reported at the address and width it was written") {
+    Block block{kAddr};
+    block.append({Opcode::STORE, std::nullopt,
+                  {Value{x86::RBX}, Value{Const{0xdeadbeef, 32}}}, kAddr});
+    REQUIRE(exec.run(block).ok());
+
+    const auto ds = exec.diff(before);
+    REQUIRE(ds.size() == 1);
+    const Delta *d = deltaAt(ds, Delta::Kind::Memory, 0x4000);
+    REQUIRE(d != nullptr);
+    REQUIRE(d->width == 32);
+    REQUIRE(exec.evaluate(d->value) == 0xdeadbeef);
+  }
+
+  SECTION("a sub-register write is reported at its own width, not the parent's") {
+    Block block{kAddr};
+    block.append({Opcode::COPY, Value{x86::AL}, {Value{Const{0x5a, 8}}}, kAddr});
+    REQUIRE(exec.run(block).ok());
+
+    const auto ds = exec.diff(before);
+    REQUIRE(ds.size() == 1);
+    const Delta *d = deltaAt(ds, Delta::Kind::Register, x86::AL.offset);
+    REQUIRE(d != nullptr);
+    REQUIRE(d->width == 8);
+    REQUIRE(exec.evaluate(d->value) == 0x5a);
+  }
+
+  SECTION("a symbolic value survives the diff as an expression") {
+    const z3::expr in = exec.symbolizeRegister(x86::RCX, "in");
+    const dragon::ignil::SymbolicState seeded = exec.state();
+
+    Block block{kAddr};
+    block.append({Opcode::ADD,
+                  Value{x86::RAX},
+                  {Value{x86::RCX}, Value{Const{7, 64}}},
+                  kAddr});
+    REQUIRE(exec.run(block).ok());
+
+    const auto ds = exec.diff(seeded);
+    REQUIRE(ds.size() == 1);
+    const Delta *d = deltaAt(ds, Delta::Kind::Register, x86::RAX.offset);
+    REQUIRE(d != nullptr);
+    REQUIRE(d->width == 64);
+    REQUIRE(exec.proves(d->value == in + 7).value_or(false));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// OPAQUE: instructions IGNIL names but cannot express
+// ---------------------------------------------------------------------------
+
+using dragon::ignil::makeOpaqueAux;
+using dragon::ignil::OpaqueKind;
+
+TEST_CASE("SymbolicExecutor - a pure OPAQUE is a function of its operands",
+          "[ignil][symbolic][opaque]") {
+  // Two CPUIDs with the same leaf must agree; with different leaves they must
+  // not be forced to. That is the whole difference from UNDEF, which would
+  // make all four of these unrelated unknowns.
+  Block block{kAddr};
+  block.append({Opcode::OPAQUE, Value{x86::EAX}, {Value{Const{1, 32}}}, kAddr,
+                makeOpaqueAux(OpaqueKind::CPUID, 0)});
+  block.append({Opcode::OPAQUE, Value{x86::EBX}, {Value{Const{1, 32}}}, kAddr + 2,
+                makeOpaqueAux(OpaqueKind::CPUID, 0)});
+  block.append({Opcode::OPAQUE, Value{x86::ECX}, {Value{Const{7, 32}}}, kAddr + 4,
+                makeOpaqueAux(OpaqueKind::CPUID, 0)});
+
+  SymbolicExecutor exec;
+  REQUIRE(exec.run(block).ok());
+
+  const z3::expr a = exec.readRegister(x86::EAX);
+  const z3::expr b = exec.readRegister(x86::EBX);
+  const z3::expr c = exec.readRegister(x86::ECX);
+
+  // Same leaf, same result - even though the two ops are at different addresses.
+  REQUIRE(exec.proves(a == b).value_or(false));
+  // Different leaf: the solver must be free to disagree.
+  REQUIRE(exec.isSatisfiable(c != a).value_or(false));
+}
+
+TEST_CASE("SymbolicExecutor - an impure OPAQUE is a fresh reading each time",
+          "[ignil][symbolic][opaque]") {
+  // Two RDTSCs are two separate events: nothing may prove them equal, or a
+  // consumer would fold a timing check away.
+  Block block{kAddr};
+  block.append({Opcode::OPAQUE, Value{x86::EAX}, {}, kAddr,
+                makeOpaqueAux(OpaqueKind::RDTSC, 0)});
+  block.append({Opcode::OPAQUE, Value{x86::EBX}, {}, kAddr + 2,
+                makeOpaqueAux(OpaqueKind::RDTSC, 0)});
+
+  SymbolicExecutor exec;
+  REQUIRE(exec.run(block).ok());
+
+  const z3::expr a = exec.readRegister(x86::EAX);
+  const z3::expr b = exec.readRegister(x86::EBX);
+  REQUIRE_FALSE(exec.proves(a == b).value_or(true));
+  REQUIRE(exec.isSatisfiable(a != b).value_or(false));
+}
+
+TEST_CASE("SymbolicExecutor - OPAQUE rejects a result index the kind has not got",
+          "[ignil][symbolic][opaque]") {
+  Block block{kAddr};
+  // RDTSC defines two results; index 2 does not exist.
+  block.append({Opcode::OPAQUE, Value{x86::EAX}, {}, kAddr,
+                makeOpaqueAux(OpaqueKind::RDTSC, 2)});
+
+  SymbolicExecutor exec;
+  REQUIRE(exec.run(block).status == ExecStatus::MalformedOp);
+}
+
+TEST_CASE("SymbolicExecutor - a restored snapshot is equivalent to a fresh "
+          "executor, not merely similar",
+          "[ignil][symbolic][diff]") {
+  // The property that makes seed-once/restore a safe substitute for building a
+  // fresh executor per block: after restoring, running a block must produce the
+  // *same values* as running it on a freshly seeded machine - even though the
+  // shared executor's Z3 context has already built terms for earlier blocks.
+  //
+  // Equality is asserted through the solver, not by comparing printed strings.
+  // Z3 labels its let-bindings (a!1, a!2, ...) from per-context state, so a
+  // context that has already processed other blocks prints an equal term
+  // differently. That is cosmetic, but it means to_string() comparison is not
+  // a correctness test - it reports false failures.
+  auto seed = [](SymbolicExecutor &ex) {
+    ex.symbolizeRegister(x86::RDI, "in");
+    ex.symbolizeRegister(x86::RSI, "n");
+    ex.setRegister(x86::RAX, 0);
+  };
+  auto work = [](std::uint64_t at) {
+    Block b{at};
+    // Enough structure that the printed form has let-bindings at all.
+    b.append({Opcode::XOR, Value{x86::RAX}, {Value{x86::RDI}, Value{x86::RSI}}, at});
+    b.append({Opcode::SHL, Value{x86::RBX}, {Value{x86::RAX}, Value{Const{4, 64}}}, at});
+    b.append({Opcode::ADD, Value{x86::RCX}, {Value{x86::RBX}, Value{x86::RDI}}, at});
+    return b;
+  };
+
+  const Block earlier = work(0x1000);
+  const Block target = work(0x2000);
+
+  // Shared executor: seed, snapshot, run something else, rewind, run target.
+  SymbolicExecutor shared;
+  seed(shared);
+  const dragon::ignil::SymbolicState snap = shared.state();
+  REQUIRE(shared.run(earlier).ok());
+  shared.setState(snap);
+  REQUIRE(shared.run(target).ok());
+
+  // Fresh executor: seed, run target.
+  SymbolicExecutor fresh;
+  seed(fresh);
+  REQUIRE(fresh.run(target).ok());
+
+  // Compare inside one executor: rebuild the fresh result's defining equation
+  // over the same symbols and let the solver decide.
+  for (const auto &reg: {x86::RAX, x86::RBX, x86::RCX}) {
+    const z3::expr a = shared.readRegister(reg);
+    // in ^ n, shifted and added exactly as the block does.
+    const z3::expr in = shared.state().symbol("in", 64);
+    const z3::expr n = shared.state().symbol("n", 64);
+    const z3::expr x = in ^ n;
+    const z3::expr expected = reg.offset == x86::RAX.offset  ? x
+                              : reg.offset == x86::RBX.offset ? z3::shl(x, 4)
+                                                             : z3::shl(x, 4) + in;
+    REQUIRE(shared.proves(a == expected).value_or(false));
+  }
+
+  // And the diff of the restored run sees exactly the three registers it wrote.
+  const auto ds = shared.diff(snap);
+  std::set<std::uint64_t> keys;
+  for (const auto &d: ds)
+    if (d.kind == dragon::ignil::SymbolicState::Delta::Kind::Register)
+      keys.insert(d.key);
+  REQUIRE(keys.count(x86::RAX.offset) == 1);
+  REQUIRE(keys.count(x86::RBX.offset) == 1);
+  REQUIRE(keys.count(x86::RCX.offset) == 1);
 }

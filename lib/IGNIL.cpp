@@ -60,11 +60,42 @@ std::string dragon::ignil::toString(const Value &v) {
           v);
 }
 
+std::string_view dragon::ignil::opaqueKindName(OpaqueKind kind) {
+  switch (kind) {
+    case OpaqueKind::CPUID: return "cpuid";
+    case OpaqueKind::RDTSC: return "rdtsc";
+    case OpaqueKind::RDTSCP: return "rdtscp";
+  }
+  return "opaque";
+}
+
+bool dragon::ignil::opaqueIsPure(OpaqueKind kind) {
+  switch (kind) {
+    case OpaqueKind::CPUID: return true;
+    // Each execution is its own reading of the clock.
+    case OpaqueKind::RDTSC:
+    case OpaqueKind::RDTSCP: return false;
+  }
+  return false;
+}
+
+unsigned dragon::ignil::opaqueResultCount(OpaqueKind kind) {
+  switch (kind) {
+    case OpaqueKind::CPUID: return 4;
+    case OpaqueKind::RDTSC: return 2;
+    case OpaqueKind::RDTSCP: return 3;
+  }
+  return 0;
+}
+
 std::string dragon::ignil::toString(const Op &op) {
   std::string s;
   if (op.dst)
     s += toString(*op.dst) + " = ";
   s += std::string(opcodeName(op.opcode));
+  if (op.opcode == Opcode::OPAQUE)
+    s += std::format("<{}:{}>", opaqueKindName(opaqueKindOf(op.aux)),
+                     opaqueIndexOf(op.aux));
   s += "(";
   for (std::size_t i = 0; i < op.srcs.size(); ++i) {
     if (i)

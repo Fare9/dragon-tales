@@ -205,6 +205,73 @@ z3::expr SymbolicState::readBytes(const ByteStore &store, std::uint64_t base,
   return zeroCoerce(acc, width).simplify();
 }
 
+// -- diffing ----------------------------------------------------------------
+
+std::vector<SymbolicState::Delta>
+SymbolicState::diff(const SymbolicState &before) const {
+  std::vector<Delta> out;
+
+  // Widest run reported as one value. Width is a uint8_t, so a run can never
+  // describe more than 255 bits; 16 bytes covers every register and vector
+  // write dragon models today, and anything wider falls back to byte runs.
+  constexpr std::uint64_t kMaxRunBytes = 16;
+
+  auto scan = [&](const ByteStore &now, const ByteStore &was, Delta::Kind kind,
+                  std::string_view readKind) {
+    // Keys whose stored byte changed, in address order (ByteStore is ordered).
+    // Z3 hash-conses its AST, so equal ids mean the same expression; a byte is
+    // unchanged when it is the same slice of the same written value.
+    std::vector<std::uint64_t> changed;
+    for (const auto &[key, byte] : now) {
+      const auto old = was.find(key);
+      if (old == was.end() || old->second.index != byte.index ||
+          old->second.source.id() != byte.source.id())
+        changed.push_back(key);
+    }
+
+    std::size_t i = 0;
+    while (i < changed.size()) {
+      // Extent of this run of consecutive changed addresses.
+      std::size_t runEnd = i + 1;
+      while (runEnd < changed.size() &&
+             changed[runEnd] == changed[runEnd - 1] + 1)
+        ++runEnd;
+
+      while (i < runEnd) {
+        const std::uint64_t base = changed[i];
+        const StoredByte &first = now.at(base);
+        const std::uint64_t srcBytes = byteCount(bvWidth(first.source));
+
+        // If this byte starts a value that was written whole, and every one of
+        // its remaining bytes also changed and is still intact, report the
+        // whole value - that is exactly readBytes' fast path, so the delta
+        // carries the original expression rather than a concat of extracts.
+        std::uint64_t n = 1;
+        if (first.index == 0 && srcBytes > 1 && srcBytes <= kMaxRunBytes &&
+            i + srcBytes <= runEnd) {
+          bool intact = true;
+          for (std::uint64_t k = 1; intact && k < srcBytes; ++k) {
+            const auto it = now.find(base + k);
+            intact = it != now.end() && it->second.index == k &&
+                     it->second.source.id() == first.source.id();
+          }
+          if (intact)
+            n = srcBytes;
+        }
+
+        const auto width = static_cast<Width>(n * 8);
+        out.push_back(Delta{kind, base, width,
+                            readBytes(now, base, width, readKind)});
+        i += n;
+      }
+    }
+  };
+
+  scan(regBytes_, before.regBytes_, Delta::Kind::Register, "reg");
+  scan(memBytes_, before.memBytes_, Delta::Kind::Memory, "mem");
+  return out;
+}
+
 // -- registers --------------------------------------------------------------
 
 void SymbolicState::writeRegister(const Reg &r, const z3::expr &value) {
@@ -810,6 +877,31 @@ void SymbolicExecutor::addSuccessors(const z3::expr &target,
   }
 }
 
+z3::expr SymbolicExecutor::opaqueValue(const Op &op, Width dstWidth) {
+  const OpaqueKind kind = opaqueKindOf(op.aux);
+  const unsigned index = opaqueIndexOf(op.aux);
+  const std::string name(opaqueKindName(kind));
+
+  if (!opaqueIsPure(kind)) {
+    // Each execution is its own event, so the symbol is keyed on where it
+    // happened rather than on the operands: two RDTSCs never compare equal.
+    return state_.symbol(
+            name + "@" + hex(op.address) + "_" + std::to_string(index),
+            dstWidth);
+  }
+
+  // Pure: an uninterpreted function of the operands, so two CPUIDs with the
+  // same leaf and subleaf build the identical term and Z3 proves them equal.
+  z3::expr_vector args(*ctx_);
+  z3::sort_vector domain(*ctx_);
+  for (const Value &v: op.srcs) {
+    args.push_back(eval(v));
+    domain.push_back(args.back().get_sort());
+  }
+  const std::string fn = name + "." + std::to_string(index);
+  return ctx_->function(fn.c_str(), domain, ctx_->bv_sort(dstWidth))(args);
+}
+
 ExecStatus SymbolicExecutor::stepBranch(const Op &op, RunResult &result) {
   switch (op.opcode) {
     case Opcode::JMP:
@@ -879,6 +971,15 @@ ExecStatus SymbolicExecutor::step(const Op &op, RunResult &result) {
     case Opcode::CALL:
     case Opcode::RET:
       return stepBranch(op, result);
+
+    case Opcode::OPAQUE: {
+      if (!op.dst || std::holds_alternative<Const>(*op.dst))
+        return ExecStatus::MalformedOp;
+      if (opaqueIndexOf(op.aux) >= opaqueResultCount(opaqueKindOf(op.aux)))
+        return ExecStatus::MalformedOp;
+      writeDst(*op.dst, opaqueValue(op, widthOf(*op.dst)));
+      return ExecStatus::Ok;
+    }
 
     case Opcode::UNDEF: {
       if (!op.dst)

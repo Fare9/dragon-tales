@@ -241,6 +241,7 @@
       DRAGON_IGNIL_FDIV   = 39,
       DRAGON_IGNIL_SITOFP = 40,
       DRAGON_IGNIL_FPTOSI = 41,
+      DRAGON_IGNIL_OPAQUE = 42,
   } dragon_ignil_opcode_t;
 
   // Returns a static string for the opcode mnemonic (e.g. "ADD", "COPY").
@@ -588,6 +589,11 @@
   typedef struct dragon_symrun dragon_symrun_t;
   // Owned handle on a satisfying assignment.
   typedef struct dragon_solution dragon_solution_t;
+  // Owned handle on a snapshot of an executor's register/memory/constraint
+  // state.
+  typedef struct dragon_symstate dragon_symstate_t;
+  // Owned handle on the list of locations two states disagree on.
+  typedef struct dragon_symdiff dragon_symdiff_t;
 
   // Mirror of ignil::ExecStatus.
   typedef enum {
@@ -626,6 +632,17 @@
   // Drop all register/memory/constraint state; keeps the options.
   void              dragon_symexec_reset(dragon_symexec_t* e);
 
+  // -- state snapshots. Copying the state is far cheaper than rebuilding it,
+  // so an analysis that runs many blocks from the same seeded machine should
+  // seed once, snapshot, and restore before each block rather than creating a
+  // fresh executor every time. A snapshot keeps its executor alive by itself,
+  // exactly as an expression handle does.
+  dragon_symstate_t* dragon_symexec_snapshot(const dragon_symexec_t* e);
+  // Replaces the executor's state wholesale. `s` must come from this executor.
+  void               dragon_symexec_restore(dragon_symexec_t* e,
+                                            const dragon_symstate_t* s);
+  void               dragon_symstate_destroy(dragon_symstate_t* s);
+
   // -- machine setup. Registers are named by their IGNIL register-space byte
   // offset and bit width - the values in x86IGNILRegs.hpp / armIGNILRegs.hpp.
   void dragon_symexec_set_register(dragon_symexec_t* e, uint32_t offset,
@@ -652,6 +669,23 @@
                                                  uint32_t offset, uint8_t width);
   dragon_symexpr_t* dragon_symexec_read_memory(const dragon_symexec_t* e,
                                                uint64_t address, uint8_t width);
+
+  // -- state diffing. Everything whose value differs from the snapshot
+  // `before`, coalesced into the widest runs that came from one written value.
+  // This is the batch form of reading every candidate location back and
+  // comparing: one call, plus one expression handle per location that actually
+  // changed, instead of a read per location.
+  dragon_symdiff_t* dragon_symexec_diff(const dragon_symexec_t* e,
+                                        const dragon_symstate_t* before);
+  void              dragon_symdiff_destroy(dragon_symdiff_t* d);
+  size_t            dragon_symdiff_count(const dragon_symdiff_t* d);
+  // Describes entry `index`. `kind` is 0 for a register (`key` is an IGNIL
+  // register-space byte offset) and 1 for memory (`key` is an address);
+  // `width` is the run's width in bits. Returns 0 on a bad index.
+  int               dragon_symdiff_entry(const dragon_symdiff_t* d, size_t index,
+                                         int* kind, uint64_t* key, uint8_t* width);
+  // Owned expression handle for entry `index`, or NULL.
+  dragon_symexpr_t* dragon_symdiff_value(const dragon_symdiff_t* d, size_t index);
 
   void      dragon_symexpr_destroy(dragon_symexpr_t* x);
   // Caller must free with dragon_cstr_free.

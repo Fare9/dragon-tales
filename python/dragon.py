@@ -590,6 +590,10 @@ class IGNILOpcode:
     # they'd read more naturally - matches dragon_c.h's dragon_ignil_opcode_t.
     FADD = 36; FSUB = 37; FMUL = 38; FDIV = 39
     SITOFP = 40; FPTOSI = 41
+    # An instruction whose result IGNIL cannot express but which is still a
+    # determinate value (CPUID, RDTSC): see Op::aux for the kind and which
+    # of the instruction's results the op defines.
+    OPAQUE = 42
 
     @staticmethod
     def name(opcode_int):
@@ -1684,6 +1688,79 @@ class Solution:
         return 'Solution(%d symbols)' % len(self._values)
 
 
+class SymState:
+    """Owned snapshot of an executor's register, memory and constraint state.
+
+    Copying the state is much cheaper than rebuilding it, so an analysis that
+    runs many blocks from the same seeded machine should seed once and rewind:
+
+        exec = SymbolicExecutor()
+        exec.symbolize_memory(0x4000, 16, 'input')
+        exec.set_register(x86.RDI, 0x4000)
+        seeded = exec.snapshot()
+
+        for block in blocks:
+            exec.restore(seeded)
+            exec.run(block)
+
+    The snapshot keeps its executor alive on its own, so it stays valid even
+    if the executor goes out of scope first.
+    """
+
+    def __init__(self, ptr, owner):
+        self._ptr = ptr
+        self._owner = owner   # keeps the executor alive for our z3 handles
+
+    def _release(self):
+        """Free the snapshot. Idempotent."""
+        if getattr(self, '_ptr', None):
+            lib.dragon_symstate_destroy(self._ptr)
+            self._ptr = None
+
+    def __del__(self):
+        self._release()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self._release()
+
+    def _handle(self):
+        if not getattr(self, '_ptr', None):
+            raise RuntimeError('snapshot has been released')
+        return self._ptr
+
+
+class StateDelta:
+    """One location whose value differs between two states.
+
+    `kind` is 'reg' or 'mem'. For a register, `key` is the IGNIL
+    register-space byte offset (the first element of the descriptors in the
+    x86 / arm classes); for memory it is the address. `width` is in bits, and
+    `value` is the SymExpr the location holds now.
+    """
+
+    REGISTER = 0
+    MEMORY = 1
+
+    __slots__ = ('kind', 'key', 'width', 'value')
+
+    def __init__(self, kind, key, width, value):
+        self.kind = kind
+        self.key = key
+        self.width = width
+        self.value = value
+
+    @property
+    def is_register(self):
+        return self.kind == 'reg'
+
+    def __repr__(self):
+        where = f'reg[{self.key:#x}]' if self.is_register else f'mem[{self.key:#x}]'
+        return f'StateDelta({where}:i{self.width} = {self.value})'
+
+
 class SymbolicExecutor:
     """Symbolic execution of IGNIL blocks over Z3 bitvectors.
 
@@ -1755,6 +1832,58 @@ class SymbolicExecutor:
     def reset(self):
         """Drop all register, memory and constraint state; keep the options."""
         lib.dragon_symexec_reset(self._handle())
+
+    # -- snapshots and diffing -------------------------------------------------
+
+    def snapshot(self):
+        """Copy the current register, memory and constraint state.
+
+        Pair with restore() to run many blocks from one seeded machine instead
+        of building a fresh executor per block."""
+        ptr = lib.dragon_symexec_snapshot(self._handle())
+        if ptr == ffi.NULL:
+            raise RuntimeError('could not snapshot the executor state')
+        return SymState(ptr, self)
+
+    def restore(self, state):
+        """Replace the state wholesale with a snapshot taken from this
+        executor."""
+        lib.dragon_symexec_restore(self._handle(), state._handle())
+
+    def diff(self, before):
+        """Every register and memory location whose value differs from the
+        snapshot `before`, as a list of StateDelta.
+
+        This is the batch form of reading every candidate location back and
+        comparing it to what it held: one call plus one expression per location
+        that actually changed, rather than a read_register/read_memory per
+        location. Runs of bytes that came from a single written value are
+        reported as that one value, so a 64-bit store is one 64-bit delta and
+        not eight byte-sized ones::
+
+            seeded = exec.snapshot()
+            exec.run(block)
+            for d in exec.diff(seeded):
+                print(d.kind, hex(d.key), d.width, d.value)
+        """
+        ptr = lib.dragon_symexec_diff(self._handle(), before._handle())
+        if ptr == ffi.NULL:
+            raise RuntimeError('could not diff against that snapshot')
+        try:
+            kind = ffi.new('int*')
+            key = ffi.new('uint64_t*')
+            width = ffi.new('uint8_t*')
+            out = []
+            for i in range(int(lib.dragon_symdiff_count(ptr))):
+                if not lib.dragon_symdiff_entry(ptr, i, kind, key, width):
+                    continue
+                value = SymExpr._own(lib.dragon_symdiff_value(ptr, i), self)
+                out.append(StateDelta(
+                    'reg' if kind[0] == StateDelta.REGISTER else 'mem',
+                    int(key[0]), int(width[0]), value))
+            return out
+        finally:
+            lib.dragon_symdiff_destroy(ptr)
 
     # -- machine setup ---------------------------------------------------------
 

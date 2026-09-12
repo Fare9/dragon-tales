@@ -74,6 +74,8 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   regRAX_ = findGprReg("RAX");
   regDX_ = findGprReg("DX");
   regEDX_ = findGprReg("EDX");
+  regEBX_ = findGprReg("EBX");
+  regECX_ = findGprReg("ECX");
   regRDX_ = findGprReg("RDX");
 
   // Scan opcodes by name: map LLVM mnemonic string -> pointer-to-member field.
@@ -245,6 +247,9 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"STC", &X86IGNILLifter::opStc_},
           {"CLC", &X86IGNILLifter::opClc_},
           {"CMC", &X86IGNILLifter::opCmc_},
+          {"CPUID", &X86IGNILLifter::opCpuid_},
+          {"RDTSC", &X86IGNILLifter::opRdtsc_},
+          {"RDTSCP", &X86IGNILLifter::opRdtscp_},
           {"PUSH32i", &X86IGNILLifter::opPush32I_},
           {"PUSH32i8", &X86IGNILLifter::opPush32I8_},
           {"PUSH64i32", &X86IGNILLifter::opPush64I32_},
@@ -667,6 +672,12 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftCarryOp(addr, out, tempId, CarryOp::CLC);
   else if (opc == opCmc_)
     liftCarryOp(addr, out, tempId, CarryOp::CMC);
+  else if (opc == opCpuid_)
+    liftOpaque(addr, out, tempId, ignil::OpaqueKind::CPUID);
+  else if (opc == opRdtsc_)
+    liftOpaque(addr, out, tempId, ignil::OpaqueKind::RDTSC);
+  else if (opc == opRdtscp_)
+    liftOpaque(addr, out, tempId, ignil::OpaqueKind::RDTSCP);
   else if (opc == opPxorRR_)
     liftXor(*mc, addr, out, tempId);
   else if (opc == opCvtsi2sd32_ || opc == opCvtsi2sd64_)
@@ -2620,6 +2631,40 @@ void dragon::x86::X86IGNILLifter::liftAccExtend(std::uint64_t addr,
       signFill(regRAX_, regRDX_, 63);
       return;
   }
+}
+
+void dragon::x86::X86IGNILLifter::liftOpaque(std::uint64_t addr,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp,
+                                             ignil::OpaqueKind kind) const {
+  // Snapshot the inputs first: CPUID reads EAX/ECX and also defines them, so
+  // every result must be a function of the values on entry rather than of
+  // whatever an earlier result op has just stored.
+  std::vector<ignil::Value> srcs;
+  auto snapshot = [&](const ignil::Reg &r) {
+    auto t = newTemp(tmp, r.width);
+    out.append({ignil::Opcode::COPY, t, {r}, addr});
+    srcs.push_back(ignil::Value{t});
+  };
+
+  std::vector<ignil::Reg> results;
+  switch (kind) {
+    case ignil::OpaqueKind::CPUID:
+      snapshot(regEAX_); // leaf
+      snapshot(regECX_); // subleaf
+      results = {regEAX_, regEBX_, regECX_, regEDX_};
+      break;
+    case ignil::OpaqueKind::RDTSC:
+      results = {regEAX_, regEDX_}; // EDX:EAX
+      break;
+    case ignil::OpaqueKind::RDTSCP:
+      results = {regEAX_, regEDX_, regECX_}; // EDX:EAX, ECX = processor id
+      break;
+  }
+
+  for (unsigned i = 0; i < results.size(); ++i)
+    out.append({ignil::Opcode::OPAQUE, results[i], srcs, addr,
+                ignil::makeOpaqueAux(kind, i)});
 }
 
 void dragon::x86::X86IGNILLifter::liftCarryOp(std::uint64_t addr,

@@ -255,6 +255,33 @@ class SymbolicState {
   z3::expr symbolizeMemory(std::uint64_t addr, std::uint64_t size,
                            std::string_view name);
 
+  // -- diffing ------------------------------------------------------------
+
+  /// One contiguous run of bytes whose value differs between two states.
+  struct Delta {
+    enum class Kind : std::uint8_t { Register, Memory };
+
+    Kind kind;
+    /// Register-space byte offset, or memory address.
+    std::uint64_t key;
+    /// Width of the run, in bits.
+    Width width;
+    /// The value in *this* state, read back at `width`.
+    z3::expr value;
+  };
+
+  /// Every register and memory byte whose stored value differs from `before`,
+  /// coalesced into the widest runs that came from a single written value.
+  ///
+  /// This is the batch form of "read every location back and compare": a
+  /// caller asking what a block changed makes one call instead of one
+  /// readRegister / readMemory per candidate location. Bytes that neither
+  /// state ever wrote are not reported - they are equal by construction, both
+  /// reading back as the same lazily-named placeholder.
+  ///
+  /// `before` must share this state's Z3 context.
+  [[nodiscard]] std::vector<Delta> diff(const SymbolicState &before) const;
+
   // -- path constraints ---------------------------------------------------
 
   void addConstraint(const z3::expr &c);
@@ -365,6 +392,13 @@ class SymbolicExecutor {
   /// branch. The state must belong to this executor's context.
   void setState(SymbolicState state);
 
+  /// Locations whose value changed since the snapshot `before` was taken.
+  /// Convenience forwarder for SymbolicState::diff.
+  [[nodiscard]] std::vector<SymbolicState::Delta>
+  diff(const SymbolicState &before) const {
+    return state_.diff(before);
+  }
+
   // -- convenience builders ----------------------------------------------
 
   /// A concrete bitvector in this executor's context.
@@ -438,6 +472,12 @@ class SymbolicExecutor {
   [[nodiscard]] z3::expr eval(const Value &v) const;
   [[nodiscard]] z3::expr coerce(const z3::expr &e, Width width) const;
   void writeDst(const Value &dst, const z3::expr &value);
+
+  /// The value an OPAQUE op produces: a genuine Z3 uninterpreted function of
+  /// the operands for a pure kind (two CPUIDs with the same leaf are provably
+  /// equal), or a symbol keyed on the op's address for an impure one (two
+  /// RDTSCs are two separate readings and must never compare equal).
+  z3::expr opaqueValue(const Op &op, Width dstWidth);
 
   [[nodiscard]] z3::expr binary(Opcode op, const z3::expr &lhs,
                                 const z3::expr &rhs, Width dstWidth) const;

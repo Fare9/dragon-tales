@@ -458,6 +458,8 @@ static uint64_t *dup_u64_array(const std::vector<std::uint64_t> &v) {
 // order as the C++ enum and dragon_ignil_opcode_t so a missing entry here
 // is easy to spot by eye.
 static_assert(static_cast<int>(dragon::ignil::Opcode::COPY)   == DRAGON_IGNIL_COPY);
+// Last value: guards every opcode above it against a mid-enum insertion.
+static_assert(static_cast<int>(dragon::ignil::Opcode::OPAQUE) == DRAGON_IGNIL_OPAQUE);
 static_assert(static_cast<int>(dragon::ignil::Opcode::LOAD)   == DRAGON_IGNIL_LOAD);
 static_assert(static_cast<int>(dragon::ignil::Opcode::STORE) == DRAGON_IGNIL_STORE);
 static_assert(static_cast<int>(dragon::ignil::Opcode::ADD)   == DRAGON_IGNIL_ADD);
@@ -1024,6 +1026,16 @@ struct SymExprImpl {
   z3::expr e;
 };
 
+struct SymStateImpl {
+  SymExecHandle owner; // the state is full of z3::exprs; same rule as above
+  sym::SymbolicState state;
+};
+
+struct SymDiffImpl {
+  SymExecHandle owner; // ditto, for the values handed out from it
+  std::vector<sym::SymbolicState::Delta> deltas;
+};
+
 struct SymRunImpl {
   SymExecHandle owner; // for the successor conditions handed out from it
   sym::RunResult result;
@@ -1049,6 +1061,12 @@ const SymExprImpl *as_expr(const dragon_symexpr_t *x) {
 }
 const SymRunImpl *as_run(const dragon_symrun_t *r) {
   return reinterpret_cast<const SymRunImpl *>(r);
+}
+const SymStateImpl *as_state(const dragon_symstate_t *s) {
+  return reinterpret_cast<const SymStateImpl *>(s);
+}
+const SymDiffImpl *as_diff(const dragon_symdiff_t *d) {
+  return reinterpret_cast<const SymDiffImpl *>(d);
 }
 const SolutionImpl *as_solution(const dragon_solution_t *s) {
   return reinterpret_cast<const SolutionImpl *>(s);
@@ -1168,6 +1186,64 @@ dragon_symexpr_t *dragon_symexec_read_memory(const dragon_symexec_t *e,
   if (!e || width == 0)
     return nullptr;
   return wrap_sym(*as_handle(e), as_exec(e)->exec.readMemory(address, width));
+}
+
+// -- state snapshots ---------------------------------------------------------
+
+dragon_symstate_t *dragon_symexec_snapshot(const dragon_symexec_t *e) {
+  if (!e)
+    return nullptr;
+  return reinterpret_cast<dragon_symstate_t *>(
+          new SymStateImpl{*as_handle(e), as_exec(e)->exec.state()});
+}
+
+void dragon_symexec_restore(dragon_symexec_t *e, const dragon_symstate_t *s) {
+  if (!e || !s)
+    return;
+  as_exec(e)->exec.setState(as_state(s)->state);
+}
+
+void dragon_symstate_destroy(dragon_symstate_t *s) {
+  delete reinterpret_cast<SymStateImpl *>(s);
+}
+
+// -- state diffing -----------------------------------------------------------
+
+dragon_symdiff_t *dragon_symexec_diff(const dragon_symexec_t *e,
+                                      const dragon_symstate_t *before) {
+  if (!e || !before)
+    return nullptr;
+  return reinterpret_cast<dragon_symdiff_t *>(new SymDiffImpl{
+          *as_handle(e), as_exec(e)->exec.diff(as_state(before)->state)});
+}
+
+void dragon_symdiff_destroy(dragon_symdiff_t *d) {
+  delete reinterpret_cast<SymDiffImpl *>(d);
+}
+
+size_t dragon_symdiff_count(const dragon_symdiff_t *d) {
+  return d ? as_diff(d)->deltas.size() : 0;
+}
+
+int dragon_symdiff_entry(const dragon_symdiff_t *d, size_t index, int *kind,
+                         uint64_t *key, uint8_t *width) {
+  if (!d || index >= as_diff(d)->deltas.size())
+    return 0;
+  const auto &delta = as_diff(d)->deltas[index];
+  if (kind)
+    *kind = delta.kind == sym::SymbolicState::Delta::Kind::Register ? 0 : 1;
+  if (key)
+    *key = delta.key;
+  if (width)
+    *width = delta.width;
+  return 1;
+}
+
+dragon_symexpr_t *dragon_symdiff_value(const dragon_symdiff_t *d, size_t index) {
+  if (!d || index >= as_diff(d)->deltas.size())
+    return nullptr;
+  const auto &diff = *as_diff(d);
+  return wrap_sym(diff.owner, diff.deltas[index].value);
 }
 
 void dragon_symexpr_destroy(dragon_symexpr_t *x) {

@@ -474,6 +474,41 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       if (op.dst)
         emit(llvm::UndefValue::get(dstTy()));
       break;
+
+    // An instruction x86 defines but IGNIL cannot express, lowered the way
+    // every lifter models an intrinsic: a call to a declared-but-never-defined
+    // function. `readnone` lets LLVM CSE two calls that agree, which is
+    // exactly right for CPUID and exactly wrong for RDTSC - so an impure kind
+    // gets a name carrying its own address instead, making each site a
+    // distinct function that nothing can fold together.
+    case ignil::Opcode::OPAQUE: {
+      if (!op.dst)
+        break;
+      const auto kind = ignil::opaqueKindOf(op.aux);
+      std::string name = "dragon.opaque." +
+                         std::string(ignil::opaqueKindName(kind)) + "." +
+                         std::to_string(ignil::opaqueIndexOf(op.aux));
+      if (!ignil::opaqueIsPure(kind))
+        name += std::format(".at{:x}", op.address);
+
+      std::vector<llvm::Value *> args;
+      std::vector<llvm::Type *> argTys;
+      args.reserve(op.srcs.size());
+      argTys.reserve(op.srcs.size());
+      for (const auto &src: op.srcs) {
+        args.push_back(resolve(src, regs, temps, builder));
+        argTys.push_back(args.back()->getType());
+      }
+
+      auto *fty = llvm::FunctionType::get(dstTy(), argTys, /*isVarArg=*/false);
+      auto callee = module_->getOrInsertFunction(name, fty);
+      if (auto *fn = llvm::dyn_cast<llvm::Function>(callee.getCallee())) {
+        fn->setDoesNotAccessMemory();
+        fn->setDoesNotThrow();
+      }
+      emit(builder.CreateCall(callee, args));
+      break;
+    }
   }
 }
 
