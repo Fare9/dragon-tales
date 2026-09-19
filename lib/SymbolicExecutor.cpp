@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <tuple>
 #include <utility>
 
 namespace dragon::ignil {
@@ -157,12 +158,38 @@ z3::expr SymbolicState::readByte(const ByteStore &store, std::uint64_t key,
     const StoredByte &b = it->second;
     return b.source.extract(b.index * 8 + 7, b.index * 8);
   }
+  if (kind == "mem")
+    if (auto concrete = imageByte(key))
+      return bvVal(*ctx_, *concrete, 8);
   if (!opts_.symbolizeUnmappedReads)
     return bvVal(*ctx_, 0, 8);
   // Deterministic name, so two reads of the same never-written location agree
   // without having to write the placeholder back into the store (which would
   // make isRegisterDefined/isMemoryDefined lie).
   return symbol(kind == "reg" ? lazyRegName(key) : lazyMemName(key), 8);
+}
+
+std::optional<std::uint8_t>
+SymbolicState::imageByte(std::uint64_t addr) const {
+  for (auto it = images_.rbegin(); it != images_.rend(); ++it)
+    if (addr >= it->base && addr - it->base < it->bytes->size())
+      return (*it->bytes)[addr - it->base];
+  return std::nullopt;
+}
+
+std::optional<std::uint8_t>
+SymbolicState::concreteByte(const ByteStore &store, std::uint64_t key,
+                            bool images) const {
+  if (auto it = store.find(key); it != store.end()) {
+    const StoredByte &b = it->second;
+    // get_numeral_uint64 only reads 64 bits; a wider literal (a vector
+    // register) goes through the general path instead.
+    if (!b.source.is_numeral() || bvWidth(b.source) > 64)
+      return std::nullopt;
+    return static_cast<std::uint8_t>(
+            (b.source.get_numeral_uint64() >> (b.index * 8)) & 0xFF);
+  }
+  return images ? imageByte(key) : std::nullopt;
 }
 
 void SymbolicState::writeBytes(ByteStore &store, std::uint64_t base,
@@ -195,6 +222,24 @@ z3::expr SymbolicState::readBytes(const ByteStore &store, std::uint64_t base,
     }
     if (intact)
       return zeroCoerce(source, width);
+  }
+
+  // Second fast path: every byte is concrete, so the value is a literal and
+  // there is no need to build a concat of extracts only for simplify() to
+  // fold it straight back. This is what keeps a concrete run - image bytes,
+  // a concrete stack - from paying for Z3 terms it never needed.
+  if (n <= 8) {
+    const bool images = kind == "mem";
+    std::uint64_t literal = 0;
+    bool concrete = true;
+    for (std::uint64_t i = 0; concrete && i < n; ++i) {
+      if (auto b = concreteByte(store, base + i, images))
+        literal |= static_cast<std::uint64_t>(*b) << (i * 8);
+      else
+        concrete = false;
+    }
+    if (concrete)
+      return bvVal(*ctx_, maskTo(literal, width), width);
   }
 
   // Little-endian: byte `base` is the least significant, so it ends up on the
@@ -272,6 +317,124 @@ SymbolicState::diff(const SymbolicState &before) const {
   return out;
 }
 
+// -- merging ----------------------------------------------------------------
+
+std::vector<SymbolicState::Delta>
+SymbolicState::merge(const SymbolicState &incoming, std::string_view tag) {
+  std::vector<Delta> out;
+  const std::string prefix = "top@" + std::string(tag) + "!";
+
+  // Widest run symbolised as one variable. Kept to 64 bits so every variable
+  // a merge makes can be compared against a host integer.
+  constexpr std::uint64_t kMaxRunBytes = 8;
+
+  auto join = [&](ByteStore &mine, const ByteStore &theirs, bool images,
+                  Delta::Kind kind, char letter) {
+    // A byte an earlier merge under this tag already turned into a variable.
+    auto isTop = [&](const StoredByte &b) {
+      return b.source.is_const() && !b.source.is_numeral() &&
+             b.source.decl().name().str().rfind(prefix, 0) == 0;
+    };
+
+    auto same = [&](std::uint64_t key) {
+      const auto a = mine.find(key);
+      const auto b = theirs.find(key);
+      // Z3 hash-conses its AST, so equal ids mean the same expression.
+      if (a != mine.end() && b != theirs.end() &&
+          a->second.index == b->second.index &&
+          a->second.source.id() == b->second.source.id())
+        return true;
+      // Different expressions can still be the same literal - and one side
+      // may hold it in the overlay while the other reads it off an image.
+      const auto ca = concreteByte(mine, key, images);
+      const auto cb = incoming.concreteByte(theirs, key, images);
+      return ca && cb && *ca == *cb;
+    };
+
+    // Walk the union of both key sets, in address order.
+    std::vector<std::uint64_t> differing;
+    auto a = mine.begin();
+    auto b = theirs.begin();
+    while (a != mine.end() || b != theirs.end()) {
+      std::uint64_t key;
+      if (b == theirs.end() || (a != mine.end() && a->first <= b->first))
+        key = a->first;
+      else
+        key = b->first;
+      const bool top = a != mine.end() && a->first == key && isTop(a->second);
+      if (a != mine.end() && a->first == key)
+        ++a;
+      if (b != theirs.end() && b->first == key)
+        ++b;
+      if (!top && !same(key))
+        differing.push_back(key);
+    }
+
+    // The whole written value a byte belongs to, as [start, start + n): the
+    // unit to symbolise. One differing byte of a 64-bit counter means the
+    // counter varies, not that its low byte does - symbolising byte by byte
+    // would leave the rest a literal and take one more merge per byte to
+    // find out otherwise.
+    auto extentOf = [](const ByteStore &store, std::uint64_t key)
+            -> std::pair<std::uint64_t, std::uint64_t> {
+      const auto it = store.find(key);
+      if (it == store.end())
+        return {key, 1};
+      const std::uint64_t n = byteCount(bvWidth(it->second.source));
+      const std::uint64_t start = key - it->second.index;
+      if (n <= 1 || n > kMaxRunBytes)
+        return {key, 1};
+      for (std::uint64_t k = 0; k < n; ++k) {
+        const auto b = store.find(start + k);
+        if (b == store.end() || b->second.index != k ||
+            b->second.source.id() != it->second.source.id())
+          return {key, 1};
+      }
+      return {start, n};
+    };
+
+    // Prefer the shape of the incoming value, then of the one it replaces.
+    // Extents are taken in address order and one that starts inside an
+    // earlier one is dropped, so no byte is symbolised twice.
+    std::uint64_t coveredUntil = 0;
+    bool any = false;
+    for (const std::uint64_t key : differing) {
+      if (any && key < coveredUntil)
+        continue;
+      auto [start, n] = extentOf(theirs, key);
+      if (n == 1)
+        std::tie(start, n) = extentOf(mine, key);
+      if (any && start < coveredUntil) {
+        start = key;
+        n = 1;
+      }
+
+      const auto width = static_cast<Width>(n * 8);
+      const z3::expr top =
+              symbol(prefix + letter + hex(start) + ":" + std::to_string(width),
+                     width);
+      writeBytes(mine, start, top, width);
+      out.push_back(Delta{kind, start, width, top});
+      coveredUntil = start + n;
+      any = true;
+    }
+  };
+
+  join(regBytes_, incoming.regBytes_, /*images=*/false, Delta::Kind::Register,
+       'r');
+  join(memBytes_, incoming.memBytes_, /*images=*/true, Delta::Kind::Memory,
+       'm');
+
+  // Variables the incoming path made are still mentioned by the bytes both
+  // sides agree on, so a model has to be able to report them.
+  for (const auto &[name, sym] : incoming.symbols_)
+    symbols_.emplace(name, sym);
+  for (const auto &[name, size] : incoming.regions_)
+    regions_.emplace(name, size);
+
+  return out;
+}
+
 // -- registers --------------------------------------------------------------
 
 void SymbolicState::writeRegister(const Reg &r, const z3::expr &value) {
@@ -334,6 +497,14 @@ void SymbolicState::writeMemory(std::uint64_t addr, const z3::expr &value) {
 
 void SymbolicState::writeMemory(std::uint64_t addr,
                                 const std::vector<std::uint8_t> &bytes) {
+  if (bytes.size() >= kImageThreshold) {
+    // The image replaces whatever was there, overlay included.
+    memBytes_.erase(memBytes_.lower_bound(addr),
+                    memBytes_.lower_bound(addr + bytes.size()));
+    images_.push_back(
+            {addr, std::make_shared<const std::vector<std::uint8_t>>(bytes)});
+    return;
+  }
   for (std::size_t i = 0; i < bytes.size(); ++i)
     memBytes_.insert_or_assign(addr + i,
                                StoredByte{bvVal(*ctx_, bytes[i], 8), 0});
@@ -346,7 +517,7 @@ z3::expr SymbolicState::readMemory(std::uint64_t addr, Width width) const {
 bool SymbolicState::isMemoryDefined(std::uint64_t addr, Width width) const {
   const std::uint64_t n = byteCount(width);
   for (std::uint64_t i = 0; i < n; ++i)
-    if (memBytes_.find(addr + i) == memBytes_.end())
+    if (memBytes_.find(addr + i) == memBytes_.end() && !imageByte(addr + i))
       return false;
   return true;
 }
@@ -632,6 +803,15 @@ z3::solver &SymbolicExecutor::solver() {
 }
 
 std::optional<bool> SymbolicExecutor::isSatisfiable(const z3::expr &condition) {
+  // A condition that folds to a literal needs no solver: false is false under
+  // any constraints, and true is satisfiable whenever there are none to
+  // contradict it.
+  const z3::expr folded = condition.simplify();
+  if (folded.is_false())
+    return false;
+  if (folded.is_true() && state_.constraints().empty())
+    return true;
+
   z3::solver &s = solver();
   s.push();
   s.add(condition);
@@ -651,6 +831,13 @@ std::optional<bool> SymbolicExecutor::proves(const z3::expr &condition) {
 }
 
 std::optional<std::uint64_t> SymbolicExecutor::evaluate(const z3::expr &e) {
+  // A literal is its own unique value, whatever the constraints say - unless
+  // they are unsatisfiable, and that is rare enough not to pay two solver
+  // calls on every concrete register read to find out.
+  if (const z3::expr folded = e.simplify();
+      folded.is_numeral() && bvWidth(folded) <= 64)
+    return folded.get_numeral_uint64();
+
   z3::solver &s = solver();
 
   s.push();
@@ -797,10 +984,15 @@ ExecStatus SymbolicExecutor::stepMemory(const Op &op, RunResult &result) {
       // Either too symbolic to resolve, or the path is infeasible. Either way
       // the loaded value is unknown; a fresh symbol keeps the run going
       // without inventing a wrong answer.
-      writeDst(*op.dst,
-               state_.symbol("load@" + hex(op.address) + "_" +
-                                     std::to_string(result.stats.opsExecuted),
-                             width));
+      const z3::expr fresh = state_.symbol(
+              "load@" + hex(op.address) + "_" +
+                      std::to_string(result.stats.opsExecuted) +
+                      (freshTag_.empty() ? "" : "#" + freshTag_),
+              width);
+      writeDst(*op.dst, fresh);
+      if (!candidates)
+        result.unresolved.push_back(
+                {/*isStore=*/false, op.address, width, addr, fresh});
       return ExecStatus::Ok;
     }
 
@@ -828,6 +1020,8 @@ ExecStatus SymbolicExecutor::stepMemory(const Op &op, RunResult &result) {
   if (!candidates) {
     // Refusing to guess: the store is dropped and the caller is told, rather
     // than silently corrupting an address that only looked plausible.
+    result.unresolved.push_back(
+            {/*isStore=*/true, op.address, width, addr, value});
     return ExecStatus::Ok;
   }
 
@@ -939,7 +1133,13 @@ ExecStatus SymbolicExecutor::stepBranch(const Op &op, RunResult &result) {
 
   for (int i = 0; i < 2; ++i) {
     const auto &[guard, taken] = sides[i];
-    ++result.stats.solverQueries;
+    // A guard that folded to a literal - the branch of a concrete run - is
+    // decided already; isSatisfiable answers it without the solver, so it is
+    // not counted as a query either.
+    if (guard.is_false())
+      continue;
+    if (!(guard.is_true() && state_.constraints().empty()))
+      ++result.stats.solverQueries;
     const auto feasible = isSatisfiable(guard);
 
     if (!feasible) {
@@ -1010,7 +1210,12 @@ ExecStatus SymbolicExecutor::step(const Op &op, RunResult &result) {
     case Opcode::FPTOSI: {
       if (op.srcs.size() != 1)
         return ExecStatus::MalformedOp;
-      writeDst(*op.dst, unary(op.opcode, eval(op.srcs[0]), dstWidth));
+      const z3::expr src = eval(op.srcs[0]);
+      const z3::expr value = unary(op.opcode, src, dstWidth);
+      // Z3 builds the term it is asked for and folds nothing until told to,
+      // so an op on a literal has to be folded here or a concrete run grows a
+      // term per instruction that some later query then has to take apart.
+      writeDst(*op.dst, src.is_numeral() ? value.simplify() : value);
       return ExecStatus::Ok;
     }
 
@@ -1044,8 +1249,11 @@ ExecStatus SymbolicExecutor::step(const Op &op, RunResult &result) {
     case Opcode::FDIV: {
       if (op.srcs.size() != 2)
         return ExecStatus::MalformedOp;
-      writeDst(*op.dst, binary(op.opcode, eval(op.srcs[0]), eval(op.srcs[1]),
-                               dstWidth));
+      const z3::expr lhs = eval(op.srcs[0]);
+      const z3::expr rhs = eval(op.srcs[1]);
+      const z3::expr value = binary(op.opcode, lhs, rhs, dstWidth);
+      writeDst(*op.dst, lhs.is_numeral() && rhs.is_numeral() ? value.simplify()
+                                                             : value);
       return ExecStatus::Ok;
     }
 

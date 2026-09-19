@@ -305,9 +305,24 @@ source width, then the existing `ZEXT`/`SEXT` to the destination width.
 
 ---
 
-## 5. x86 IGNIL lifter silently emits *nothing* for the accumulator-form immediates
+## 5. x86 IGNIL lifter silently emits *nothing* for the accumulator-form immediates — FIXED
 
-**Status:** open. Found 2026-08-29 while writing the symbolic-execution manual
+**Status:** fixed 2026-09-19, all 36 forms (the ADC/SBB ones once ADC/SBB had a
+lifter - gap #9). Hit a
+second time by `vmprotect_full_analysis.py`: `sub al, 0x22` and `test al, 5` sit
+on the flag path of VMProtect handlers, and the stale flags sent a virtual
+conditional jump to a garbage address.
+
+**The fix:** `liftInstruction()` rebuilds a short form as the generic reg-imm
+`MCInst` it is an encoding of (`SUB8i8` -> `SUB8ri` on AL, `CMP32i32` ->
+`CMP32ri` on EAX, `TEST64i32` -> `TEST64ri32` on RAX) from a table built at
+construction (`accForms_`), then dispatches as usual - no ALU lifter changed.
+The suggested mitigation went in too: the unknown-instruction fallback now
+marks **implicit** register defs `UNDEF` (`MCInstrDesc::implicit_defs()`), so
+an unlifted `mul rbx` no longer leaves RAX/RDX silently stale. Tests:
+`[vmp]` "accumulator short forms" in `TestX86IGNILLifter.cpp`.
+
+**Original report.** Found 2026-08-29 while writing the symbolic-execution manual
 chapter, on the very first real compiled function tried.
 
 **Where:** `lib/disassemblers/x86/X86IGNILLifter.cpp`, `liftInstruction()`'s
@@ -502,3 +517,86 @@ result / dividend), `ROL/ROR/RCL/RCR`, `BT/BTS/BTR/BTC`, `SETcc`, `CMOVcc`,
 in VMProtect handlers, mostly as junk, but `mul`/`div` are the data path of
 the MULDIV handler group. Also: LLVM refuses the undocumented `sal` encoding
 (shift group `/6`); callers must rewrite it to `/4` before lifting.
+
+---
+
+## 8. x86 IGNIL lifter: BT dropped; RIP-relative operands read a stale RIP inside a trace — FIXED
+
+**Status:** fixed 2026-09-19. Both found by `vmprotect_full_analysis.py`
+(Obfuscation-Analysis), which executes a VMProtect VM symbolically end to end.
+
+**BT.** `bt r16/32/64, imm8` and `bt r, r` lifted to zero ops. VMProtect uses
+them as junk, but junk that writes CF ahead of a `pushfq` is not junk. Now
+`liftBt`: `CF = (value >> (index mod width)) & 1`; the other arithmetic flags
+are left as they were (ZF is documented unchanged, the rest undefined).
+BTS/BTR/BTC and the memory forms are still unlifted.
+
+**RIP.** A RIP-relative operand was lifted as a read of the `RIP` register, and
+nothing ever wrote that register: a block lifter got away with it only if the
+caller seeded RIP per instruction, and `liftTrace()` - many instructions in one
+block - could not be right for more than one of them. `liftInstruction()` now
+emits `RIP = COPY(address of the next instruction)` ahead of any instruction
+with RIP among its operands, so `lea r11, [rip + 0x42ed]` means the same thing
+wherever it is lifted from.
+
+Tests: `[vmp]` "BT reg, imm8 / reg, reg writes CF only" and "a RIP-relative
+operand pins RIP to the next instruction".
+
+---
+
+## 9. Silent wrongness, swept: ADC/SBB, one-operand MUL/IMUL/DIV/IDIV, SETcc, four condition codes, and a stale upper half in LLVMLifter — FIXED
+
+**Status:** fixed 2026-09-19. The point of this round was not the individual
+forms but the *class*: an instruction that lifts to nothing leaves its
+destination holding the previous value, and every consumer is confidently
+wrong. Two changes close the class, and a differential test keeps it closed.
+
+**No more silent drops.**
+- The unknown-instruction fallback already marked explicit register defs
+  `UNDEF`; it now does the same for **implicit** defs (`mul`'s RAX/RDX, a string
+  op's RCX/RSI/RDI) and for the **flags**, when `MCInstrDesc` says the
+  instruction defines EFLAGS. EFLAGS is not an IGNIL register, so that case
+  needed spelling out: an unlifted `rol` ahead of a `jc` used to leave the carry
+  of whatever ran before.
+- `ignil::Block::unlifted()` lists the addresses of instructions that had no
+  lifter (C: `dragon_ignil_block_unlifted`, Python: `IGNILBlock.unlifted()`);
+  `simplifyBlock` and the DSE passes carry it over. An `UNDEF` that later dies
+  is invisible, and a memory-only effect leaves no op at all, so a consumer
+  that needs a block to be a complete account of the code checks the list.
+
+**New lifters.**
+- `ADC` / `SBB`, register and immediate forms at 8/16/32/64 bits (plus `_REV`
+  and the accumulator short forms via gap #5's table). All six flags; CF is the
+  carry out of either step, OF/AF the plain add/sub rules on the final result.
+- One-operand `MUL` / `IMUL`: computed at twice the width up to 32 bits; the
+  64-bit forms build the high half from 32-bit partial products, with the
+  signed correction `- (a<0 ? b : 0) - (b<0 ? a : 0)`. CF = OF = "the high half
+  is significant"; SF/ZF/AF/PF are `UNDEF`, as documented.
+- One-operand `DIV` / `IDIV` at 8/16/32 bits, over the double-width dividend.
+  **64-bit `DIV`/`IDIV` stay unlifted on purpose**: RDX:RAX is a 128-bit
+  dividend IGNIL has no width for, and assuming RDX is zero would be right most
+  of the time and silently wrong the rest. Results are `UNDEF` and the
+  instruction is in `unlifted()`.
+- `SETcc r8`, and the four condition codes `emitCondition` sent to `UNDEF`:
+  O, NO, P, NP - so `jo` / `jno` / `jp` / `jnp` have real conditions too.
+
+**A bug the test found that was nobody's new code.** `LLVMLifter` zero-extends a
+32-bit register write into its 64-bit parent (`mergeIntoParent`) - but only into
+a parent slot that exists, and slots were created for the widths the code
+mentions. A function that only ever says `eax` had no RAX slot: nothing was
+zero-extended, only 32 bits were written back, and the caller's upper half of
+RAX survived `xor eax, eax`. `collectRegsFromOps` now gives every 32-bit GPR
+destination its parent on x86-64.
+
+**The test.** `tests/semantic/TestX86SemanticRoundTrip.cpp` gained a table-driven
+sweep: each form runs under Unicorn and through lifter -> `LLVMLifter` -> ORC JIT
+over 288 edge-case input vectors, comparing every GPR and exactly the flags that
+instruction defines (136k assertions in all). `maskUnmodeledFlags` no longer
+masks PF/AF/DF - the lifter has modelled them since #7 round 4 and the mask was
+only hiding bugs - so the older round-trip tests compare full EFLAGS now.
+Adding a form to the sweep is one line; **do that before writing its lifter.**
+
+**Still unlifted** (all reported by `unlifted()`, all `UNDEF`-safe): rotates
+(`ROL`/`ROR`/`RCL`/`RCR`), `BSF`/`BSR`, `BTS`/`BTR`/`BTC` and the `BT` memory
+forms, `CMOVcc` (wants a select op in IGNIL), 64-bit `DIV`/`IDIV`, the memory
+forms of `MUL`/`DIV`/`ADC`/`SBB`, and `rep` string instructions.

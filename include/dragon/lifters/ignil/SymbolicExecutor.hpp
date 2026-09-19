@@ -130,6 +130,22 @@ struct ExecWarning {
   std::string message;
 };
 
+/// A LOAD or STORE whose address had too many satisfying values to expand.
+///
+/// The executor does not guess: such a LOAD yields a fresh symbol and such a
+/// STORE is dropped, each with a warning. That is the right call for solving,
+/// but a caller rebuilding code from the run - rather than asking the solver
+/// about it - needs the access itself, and this is it: the address expression,
+/// plus the value stored (STORE) or the symbol standing in for the value read
+/// (LOAD).
+struct UnresolvedAccess {
+  bool isStore;
+  std::uint64_t opAddress; ///< Machine address of the op.
+  Width width; ///< Bits read or written.
+  z3::expr address;
+  z3::expr value;
+};
+
 /// What a run() did.
 struct RunResult {
   private:
@@ -144,6 +160,7 @@ struct RunResult {
   std::string error; ///< Set when status != Ok.
   std::vector<Successor> successors;
   std::vector<ExecWarning> warnings;
+  std::vector<UnresolvedAccess> unresolved;
 
   struct Stats {
     std::size_t opsExecuted = 0;
@@ -239,7 +256,16 @@ class SymbolicState {
 
   /// Map a concrete blob - the usual way to supply a lookup table, a constant
   /// pool, or a captured stack frame.
+  ///
+  /// A blob of kImageThreshold bytes or more is kept as one immutable image
+  /// shared between every copy of the state, not as one Z3 expression per
+  /// byte, so mapping a whole executable costs a single allocation and a
+  /// snapshot of the state stays cheap. Later writes land in a byte-granular
+  /// overlay on top of it, exactly as they do for a small blob.
   void writeMemory(std::uint64_t addr, const std::vector<std::uint8_t> &bytes);
+
+  /// Size from which a concrete blob is stored as a shared image.
+  static constexpr std::size_t kImageThreshold = 256;
 
   /// Read `width` bits little-endian from `addr`. Unmapped bytes read as
   /// fresh symbols (or zero, per options).
@@ -282,6 +308,34 @@ class SymbolicState {
   /// `before` must share this state's Z3 context.
   [[nodiscard]] std::vector<Delta> diff(const SymbolicState &before) const;
 
+  // -- merging ------------------------------------------------------------
+
+  /// Join `incoming` into this state: every register or memory byte the two
+  /// disagree on is replaced, here, by a fresh free variable ("the value is
+  /// not the same on every path into this point"). Bytes they agree on are
+  /// left alone. Returns the locations that were symbolised, coalesced into
+  /// runs the way diff() does, each with its new variable as `value`; an empty
+  /// result means `incoming` added nothing, which is the fixed-point test of
+  /// a worklist exploration.
+  ///
+  /// This is the join of a control-flow recovery that visits each program
+  /// point once instead of once per path: run a block, merge the state it
+  /// produced into the one stored for its successor, and revisit the
+  /// successor only if the merge changed something. A loop counter that is a
+  /// constant on the way in and a different constant around the back edge
+  /// becomes a variable, and the loop's exit branch - provably not taken
+  /// while the counter was still that constant - becomes reachable.
+  ///
+  /// `tag` names the merge point and goes into the variables' names
+  /// (`top@<tag>!m<addr>` / `top@<tag>!r<offset>`). A byte that already holds
+  /// a variable made by an earlier merge under the same tag is already "any
+  /// value", so it is not symbolised again; that is what makes repeated merges
+  /// into one state converge. Path constraints are not merged - this state
+  /// keeps its own.
+  ///
+  /// `incoming` must share this state's Z3 context.
+  std::vector<Delta> merge(const SymbolicState &incoming, std::string_view tag);
+
   // -- path constraints ---------------------------------------------------
 
   void addConstraint(const z3::expr &c);
@@ -321,6 +375,22 @@ class SymbolicState {
 
   using ByteStore = std::map<std::uint64_t, StoredByte>;
 
+  /// An immutable concrete blob, shared by every copy of the state.
+  struct Image {
+    std::uint64_t base;
+    std::shared_ptr<const std::vector<std::uint8_t>> bytes;
+  };
+
+  /// The image byte at `addr`, if any image covers it. Later images shadow
+  /// earlier ones.
+  [[nodiscard]] std::optional<std::uint8_t> imageByte(std::uint64_t addr) const;
+
+  /// The concrete value of one byte, when it has one: a byte of an image, or a
+  /// stored byte whose source is a literal. `images` says whether the store
+  /// is backed by images_ (memory) or not (registers).
+  [[nodiscard]] std::optional<std::uint8_t>
+  concreteByte(const ByteStore &store, std::uint64_t key, bool images) const;
+
   /// One byte out of a byte store, or the free variable standing in for it if
   /// the location was never written. `kind` is "reg" or "mem" and only picks
   /// the placeholder's name.
@@ -342,6 +412,10 @@ class SymbolicState {
   // addresses respectively.
   ByteStore regBytes_;
   ByteStore memBytes_;
+
+  // Concrete images under memBytes_. A read consults the overlay first, so a
+  // write over an image needs no copy of it.
+  std::vector<Image> images_;
 
   std::map<std::uint32_t, z3::expr> temps_;
   std::vector<z3::expr> constraints_;
@@ -419,6 +493,15 @@ class SymbolicExecutor {
   /// an input ("every input byte is printable ASCII"), or a fact recovered
   /// from a trace.
   void assume(const z3::expr &c);
+
+  /// Suffix for the symbols run() invents for unresolved loads. They are named
+  /// after the op's address and its position in the run, so running the same
+  /// block twice hands out the same names - and the two loads, which may well
+  /// read different memory, become one variable. A caller that runs one block
+  /// in several contexts sets a tag per context to keep them apart. Empty (the
+  /// default) leaves the names as they were.
+  void setFreshTag(std::string tag) { freshTag_ = std::move(tag); }
+  [[nodiscard]] const std::string &freshTag() const { return freshTag_; }
 
   // -- execution ----------------------------------------------------------
 
@@ -517,6 +600,8 @@ class SymbolicExecutor {
   // if the constraint list ever shrinks (reset(), setState()).
   z3::solver solver_;
   std::size_t assertedConstraints_ = 0;
+
+  std::string freshTag_;
 };
 
 } // namespace dragon::ignil

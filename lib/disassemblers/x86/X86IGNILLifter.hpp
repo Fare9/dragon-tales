@@ -276,6 +276,31 @@ class X86IGNILLifter {
   void liftAccExtend(std::uint64_t addr, ignil::Block &out,
                      std::uint32_t &tmp, AccExtend kind) const;
   // STC/CLC/CMC: set / clear / complement CF only.
+  /// Which one-operand multiply / divide an opcode is, and at what width.
+  struct MulDivForm {
+    enum class Kind : std::uint8_t { Mul, Imul, Div, Idiv } kind;
+    ignil::Width width;
+  };
+
+  /// SETcc r8: the register becomes 1 if the condition holds, else 0. Flags
+  /// are read, not written.
+  void liftSetcc(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                 std::uint32_t &tmp) const;
+  /// ADC / SBB reg, reg/imm: `dst = dst +/- src +/- CF`, all six flags real.
+  void liftAdcSbb(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                  std::uint32_t &tmp, bool isSbb) const;
+  /// One-operand MUL / IMUL / DIV / IDIV on the accumulator pair. 8/16/32-bit
+  /// forms are computed at twice the width; 64-bit MUL/IMUL build the high
+  /// half from 32-bit partial products. 64-bit DIV/IDIV have a 128-bit
+  /// dividend IGNIL cannot hold: their results are UNDEF and the instruction
+  /// is recorded in Block::unlifted().
+  void liftMulDiv(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                  std::uint32_t &tmp, MulDivForm form) const;
+  /// BT reg, reg/imm8: CF = bit (index mod width) of the register. The other
+  /// arithmetic flags are left as they were (ZF is documented unchanged, the
+  /// rest undefined - and keeping them is one legal outcome of undefined).
+  void liftBt(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+              std::uint32_t &tmp) const;
   void liftCarryOp(std::uint64_t addr, ignil::Block &out, std::uint32_t &tmp,
                    CarryOp kind) const;
   // CPUID / RDTSC / RDTSCP: instructions whose results x86 defines but IGNIL
@@ -492,6 +517,9 @@ class X86IGNILLifter {
   unsigned opSar8rCL_{}, opSar16rCL_{}, opSar32rCL_{}, opSar64rCL_{};
   unsigned opCbw_{}, opCwde_{}, opCdqe_{}, opCwd_{}, opCdq_{}, opCqo_{};
   unsigned opStc_{}, opClc_{}, opCmc_{};
+  unsigned opSetccr_{};
+  unsigned opBt16ri8_{}, opBt32ri8_{}, opBt64ri8_{};
+  unsigned opBt16rr_{}, opBt32rr_{}, opBt64rr_{};
   unsigned opCpuid_{}, opRdtsc_{}, opRdtscp_{};
   // push imm (LifterGaps.md #7 round 3)
   unsigned opPush32I_{}, opPush32I8_{}, opPush64I32_{}, opPush64I8_{};
@@ -548,6 +576,27 @@ class X86IGNILLifter {
   ignil::Reg regCF_{}, regPF_{}, regAF_{};
   ignil::Reg regZF_{}, regSF_{}, regOF_{}, regDF_{};
   ignil::Reg regRSP_{}, regESP_{}; // needed for push/pop/leave
+  ignil::Reg regRIP_{}; // pinned to the next address for RIP-relative operands
+  ignil::Reg regAH_{}; // remainder of an 8-bit DIV/IDIV
+  unsigned llvmEflags_ = 0; ///< LLVM's number for EFLAGS (not an IGNIL register).
+
+  /// ADC / SBB register forms: opcode -> true for SBB.
+  std::unordered_map<unsigned, bool> adcSbbForms_;
+
+  /// One-operand MUL / IMUL / DIV / IDIV, register forms.
+  std::unordered_map<unsigned, MulDivForm> mulDivForms_;
+
+  /// An accumulator short form (`sub al, imm8`, `cmp eax, imm32`, ...) and the
+  /// generic reg-imm opcode that means the same thing. The short forms carry
+  /// the immediate as their only MCInst operand - the register is implicit -
+  /// so liftInstruction rebuilds them as the generic form and every ALU lifter
+  /// handles them without knowing they exist.
+  struct AccForm {
+    unsigned genericOpcode;
+    unsigned llvmReg; ///< LLVM register number of AL / AX / EAX / RAX.
+    bool tiedDst; ///< Generic form is (dst, src1=dst, imm) rather than (lhs, imm).
+  };
+  std::unordered_map<unsigned, AccForm> accForms_;
   ignil::Reg regRBP_{}, regEBP_{}; // needed for leave decomposition
   // CL as a shift count; accumulator/data registers for CBW..CQO.
   ignil::Reg regCL_{}, regAL_{}, regAX_{}, regEAX_{}, regRAX_{}, regDX_{},

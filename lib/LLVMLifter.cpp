@@ -75,7 +75,7 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
 void dragon::llvmlifter::LLVMLifter::collectRegsFromOps(
         const std::vector<ignil::Op> &ops, RegFile &regFile,
         std::map<std::pair<std::uint32_t, ignil::Width>, std::string_view>
-                &regNames) {
+                &regNames) const {
   // Lambda used to check if a value contains a register.
   // in that case, we will keep it for the alloca instruction
   auto collect = [&](const ignil::Value &v) {
@@ -87,9 +87,28 @@ void dragon::llvmlifter::LLVMLifter::collectRegsFromOps(
     }
   };
 
+  // x86-64: a write to a 32-bit general-purpose register clears the upper half
+  // of its 64-bit parent. mergeIntoParent() does that - but only into a parent
+  // slot that exists, and slots are made for the widths the code mentions. A
+  // function that only ever says `eax` would have no RAX slot, so nothing
+  // would be zero-extended and only 32 bits would be written back on return:
+  // the caller's upper half of RAX would survive `xor eax, eax`. Give every
+  // such destination its parent.
+  constexpr std::uint32_t kX86GprSpaceEnd = 128; // RAX..R15, 8 bytes each
+  auto collectParent = [&](const ignil::Value &v) {
+    if (arch_ != Architecture::X86_64)
+      return;
+    const auto *reg = std::get_if<ignil::Reg>(&v);
+    if (reg && reg->width == 32 && reg->offset < kX86GprSpaceEnd &&
+        reg->offset % 8 == 0)
+      regFile[reg->offset].try_emplace(64, nullptr);
+  };
+
   for (const auto &op: ops) {
-    if (op.dst.has_value())
+    if (op.dst.has_value()) {
       collect(op.dst.value());
+      collectParent(op.dst.value());
+    }
     for (const auto &src: op.srcs)
       collect(src);
   }

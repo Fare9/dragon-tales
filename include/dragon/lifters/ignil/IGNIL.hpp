@@ -250,9 +250,22 @@ class Block {
   [[nodiscard]] std::vector<Op>::const_iterator begin() const;
   [[nodiscard]] std::vector<Op>::const_iterator end() const;
 
+  /// Machine addresses of instructions the lifter had no semantics for.
+  ///
+  /// Such an instruction is not dropped silently: every register it defines
+  /// (explicitly or implicitly) and, if it writes them, the flags are marked
+  /// UNDEF. But an UNDEF that later dies is invisible, and an instruction whose
+  /// only effect is a memory write leaves no op at all - so a consumer that
+  /// needs the block to be a complete account of the code (a symbolic
+  /// executor rebuilding a function, say) checks this list rather than trusting
+  /// the ops alone. The optimisation passes carry it over to their result.
+  void noteUnlifted(std::uint64_t address);
+  [[nodiscard]] const std::vector<std::uint64_t> &unlifted() const;
+
   private:
   std::uint64_t startAddress_;
   std::vector<Op> ops_;
+  std::vector<std::uint64_t> unlifted_;
 };
 
 /// Utility functions that can be used for debugging purposes

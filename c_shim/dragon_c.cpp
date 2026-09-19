@@ -543,6 +543,16 @@ char *dragon_ignil_block_op_to_string(const dragon_ignil_block_t *b,
   return dup_string(dragon::ignil::toString(ops[index]));
 }
 
+size_t dragon_ignil_block_unlifted(const dragon_ignil_block_t *b,
+                                   uint64_t *out, size_t cap) {
+  if (!b)
+    return 0;
+  const auto &unlifted = as_ignil_block(b)->unlifted();
+  for (size_t i = 0; out && i < cap && i < unlifted.size(); ++i)
+    out[i] = unlifted[i];
+  return unlifted.size();
+}
+
 void dragon_ignil_block_each_op(
     const dragon_ignil_block_t *b,
     void (*cb)(uint64_t, dragon_ignil_opcode_t, size_t, void *), void *user) {
@@ -1166,6 +1176,53 @@ void dragon_symexec_assume(dragon_symexec_t *e, const dragon_symexpr_t *c) {
   as_exec(e)->exec.assume(as_expr(c)->e);
 }
 
+void dragon_symexec_write_register(dragon_symexec_t *e, uint32_t offset,
+                                   uint8_t width, const dragon_symexpr_t *x) {
+  if (!e || !x || width == 0 || !as_expr(x)->e.is_bv())
+    return;
+  as_exec(e)->exec.setRegister(make_reg(offset, width), as_expr(x)->e);
+}
+
+void dragon_symexec_write_memory(dragon_symexec_t *e, uint64_t address,
+                                 const dragon_symexpr_t *x) {
+  if (!e || !x || !as_expr(x)->e.is_bv())
+    return;
+  as_exec(e)->exec.setMemory(address, as_expr(x)->e);
+}
+
+void dragon_symexec_set_fresh_tag(dragon_symexec_t *e, const char *tag) {
+  if (e)
+    as_exec(e)->exec.setFreshTag(tag ? tag : "");
+}
+
+namespace {
+
+int literal_of(const z3::expr &value, uint64_t *out) {
+  const z3::expr folded = value.simplify();
+  if (!folded.is_numeral() || !folded.is_bv() ||
+      folded.get_sort().bv_size() > 64)
+    return 0;
+  if (out)
+    *out = folded.get_numeral_uint64();
+  return 1;
+}
+
+} // namespace
+
+int dragon_symexec_concrete_register(const dragon_symexec_t *e, uint32_t offset,
+                                     uint8_t width, uint64_t *out) {
+  if (!e || width == 0)
+    return 0;
+  return literal_of(as_exec(e)->exec.readRegister(make_reg(offset, width)), out);
+}
+
+int dragon_symexec_concrete_memory(const dragon_symexec_t *e, uint64_t address,
+                                   uint8_t width, uint64_t *out) {
+  if (!e || width == 0)
+    return 0;
+  return literal_of(as_exec(e)->exec.readMemory(address, width), out);
+}
+
 dragon_symexpr_t *dragon_symexec_const(const dragon_symexec_t *e,
                                        uint64_t value, uint8_t width) {
   if (!e || width == 0 || width > 64)
@@ -1205,6 +1262,17 @@ void dragon_symexec_restore(dragon_symexec_t *e, const dragon_symstate_t *s) {
 
 void dragon_symstate_destroy(dragon_symstate_t *s) {
   delete reinterpret_cast<SymStateImpl *>(s);
+}
+
+dragon_symdiff_t *dragon_symstate_merge(dragon_symstate_t *into,
+                                        const dragon_symstate_t *incoming,
+                                        const char *tag) {
+  if (!into || !incoming)
+    return nullptr;
+  auto *target = reinterpret_cast<SymStateImpl *>(into);
+  return reinterpret_cast<dragon_symdiff_t *>(new SymDiffImpl{
+          target->owner,
+          target->state.merge(as_state(incoming)->state, tag ? tag : "")});
 }
 
 // -- state diffing -----------------------------------------------------------
@@ -1254,6 +1322,25 @@ char *dragon_symexpr_to_string(const dragon_symexpr_t *x) {
   if (!x)
     return nullptr;
   return dup_string(as_expr(x)->e.to_string());
+}
+
+char *dragon_symexpr_to_smt2(const dragon_symexpr_t *x) {
+  if (!x)
+    return nullptr;
+  const z3::expr &e = as_expr(x)->e;
+  z3::context &ctx = e.ctx();
+  // The benchmark printer wants a formula, so a bitvector is tied to a result
+  // variable the reader can pick the term back out from.
+  const z3::expr formula =
+          e.is_bool() ? e : (ctx.bv_const("dragon!result", e.get_sort().bv_size()) == e);
+  return dup_string(Z3_benchmark_to_smtlib_string(ctx, "dragon", "", "unknown",
+                                                  "", 0, nullptr, formula));
+}
+
+int dragon_symexpr_as_u64(const dragon_symexpr_t *x, uint64_t *out) {
+  if (!x)
+    return 0;
+  return literal_of(as_expr(x)->e, out);
 }
 
 uint8_t dragon_symexpr_width(const dragon_symexpr_t *x) {
@@ -1391,6 +1478,39 @@ dragon_symexpr_t *dragon_symrun_successor_condition(const dragon_symrun_t *r,
 
 size_t dragon_symrun_warning_count(const dragon_symrun_t *r) {
   return r ? as_run(r)->result.warnings.size() : 0;
+}
+
+size_t dragon_symrun_unresolved_count(const dragon_symrun_t *r) {
+  return r ? as_run(r)->result.unresolved.size() : 0;
+}
+
+int dragon_symrun_unresolved(const dragon_symrun_t *r, size_t index,
+                             int *out_is_store, uint64_t *out_op_address,
+                             uint8_t *out_width) {
+  if (!r || index >= as_run(r)->result.unresolved.size())
+    return 0;
+  const auto &access = as_run(r)->result.unresolved[index];
+  if (out_is_store)
+    *out_is_store = access.isStore ? 1 : 0;
+  if (out_op_address)
+    *out_op_address = access.opAddress;
+  if (out_width)
+    *out_width = access.width;
+  return 1;
+}
+
+dragon_symexpr_t *dragon_symrun_unresolved_address(const dragon_symrun_t *r,
+                                                   size_t index) {
+  if (!r || index >= as_run(r)->result.unresolved.size())
+    return nullptr;
+  return wrap_sym(as_run(r)->owner, as_run(r)->result.unresolved[index].address);
+}
+
+dragon_symexpr_t *dragon_symrun_unresolved_value(const dragon_symrun_t *r,
+                                                 size_t index) {
+  if (!r || index >= as_run(r)->result.unresolved.size())
+    return nullptr;
+  return wrap_sym(as_run(r)->owner, as_run(r)->result.unresolved[index].value);
 }
 
 char *dragon_symrun_warning(const dragon_symrun_t *r, size_t index,

@@ -417,6 +417,8 @@ bool hasSideEffect(Opcode op) {
 
 Block passForward(const Block &in, SimplifyStats &stats) {
   Block out{in.startAddress()};
+  for (std::uint64_t address : in.unlifted())
+    out.noteUnlifted(address);
   // Records `t = COPY(v)` so later uses of `t` substitute `v` directly -
   // general copy propagation, not just constant propagation: `v` may be a
   // Const, a Reg, or another (already-resolved) Temp. Temp-only, since Temps
@@ -583,6 +585,8 @@ Block passBackwardDCE(const Block &in, SimplifyStats &stats) {
   }
 
   Block out{in.startAddress()};
+  for (std::uint64_t address : in.unlifted())
+    out.noteUnlifted(address);
   for (std::size_t i = 0; i < ops.size(); ++i)
     if (keep[i])
       out.append(ops[i]);
@@ -724,6 +728,8 @@ Block passRegDSE(const Block &in,
   }
 
   Block out{in.startAddress()};
+  for (std::uint64_t address : in.unlifted())
+    out.noteUnlifted(address);
   for (std::size_t i = 0; i < ops.size(); ++i)
     if (keep[i])
       out.append(ops[i]);

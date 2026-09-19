@@ -74,10 +74,12 @@ class LLVMLifter {
   // Shared by buildRegFile() and liftBlock(): scan `ops`, recording every
   // (offset, width) Reg pair referenced (as dst or src) into `regFile`
   // (value left null - allocateRegFile fills it in) and any name seen.
-  static void collectRegsFromOps(
+  // Not static: on x86-64 a 32-bit destination also needs its 64-bit parent
+  // slot, which depends on the architecture being lifted.
+  void collectRegsFromOps(
           const std::vector<ignil::Op> &ops, RegFile &regFile,
           std::map<std::pair<std::uint32_t, ignil::Width>, std::string_view>
-                  &regNames);
+                  &regNames) const;
 
   // Shared by buildRegFile() and liftBlock(): given a regFile whose
   // (offset, width) keys are already collected, create one alloca per pair

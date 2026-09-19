@@ -21,6 +21,15 @@ dragon::ignil::Block::Block(std::uint64_t startAddress) :
 
 void dragon::ignil::Block::append(Op op) { ops_.push_back(std::move(op)); }
 
+void dragon::ignil::Block::noteUnlifted(std::uint64_t address) {
+  if (unlifted_.empty() || unlifted_.back() != address)
+    unlifted_.push_back(address);
+}
+
+const std::vector<std::uint64_t> &dragon::ignil::Block::unlifted() const {
+  return unlifted_;
+}
+
 const std::vector<dragon::ignil::Op> &dragon::ignil::Block::ops() const {
   return ops_;
 }

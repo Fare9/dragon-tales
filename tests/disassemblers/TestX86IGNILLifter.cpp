@@ -3,6 +3,8 @@
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
+#include <dragon/lifters/ignil/IGNILSimplify.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 
 #include <llvm/IR/Verifier.h>
@@ -10,6 +12,8 @@
 
 #include <algorithm>
 #include <iostream>
+#include <set>
+#include <variant>
 #include <vector>
 
 // -----------------------------------------------------------------------
@@ -1403,5 +1407,197 @@ TEST_CASE("IGNIL lifting - push imm32 / push imm8 (PUSH64i32, PUSH64i8)", "[igni
     const auto *ib = lift({0x6a, 0xff});
     REQUIRE(ib != nullptr);
     REQUIRE(hasOpcode(*ib, Opcode::STORE));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Accumulator short forms, BT, and RIP-relative operands inside a trace.
+// Found by symbolically executing a VMProtect VM end to end: each of these
+// lifted to nothing (or, for RIP, to a stale register read) without a word.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("IGNIL lifting - accumulator short forms (SUB8i8, OR8i8, TEST8i8, "
+          "SUB16i16, CMP32i32, ADD64i32)",
+          "[ignil][x86_64][vmp]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+  // True if some op of `kind` writes the register at `offset`, `width` wide.
+  auto writes = [](const dragon::ignil::Block &ib, std::uint32_t offset,
+                   dragon::ignil::Width width) {
+    for (const auto &op: ib.ops())
+      if (op.dst)
+        if (const auto *r = std::get_if<dragon::ignil::Reg>(&*op.dst))
+          if (r->offset == offset && r->width == width)
+            return true;
+    return false;
+  };
+
+  SECTION("sub al, 0x22 [2c 22]") {
+    const auto *ib = lift({0x2c, 0x22});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::SUB));
+    REQUIRE(writes(*ib, dragon::x86::AL.offset, 8));
+    REQUIRE(writes(*ib, dragon::x86::ZF.offset, 8));
+  }
+  SECTION("or al, 2 [0c 02]") {
+    const auto *ib = lift({0x0c, 0x02});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::OR));
+    REQUIRE(writes(*ib, dragon::x86::AL.offset, 8));
+  }
+  SECTION("test al, 5 [a8 05] sets flags and leaves AL alone") {
+    const auto *ib = lift({0xa8, 0x05});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::AND));
+    REQUIRE(writes(*ib, dragon::x86::ZF.offset, 8));
+    REQUIRE_FALSE(writes(*ib, dragon::x86::AL.offset, 8));
+  }
+  SECTION("sub ax, 0xe9ab [66 2d ab e9]") {
+    const auto *ib = lift({0x66, 0x2d, 0xab, 0xe9});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::SUB));
+    REQUIRE(writes(*ib, dragon::x86::AX.offset, 16));
+  }
+  SECTION("cmp eax, 0x12345678 [3d 78 56 34 12] sets flags only") {
+    const auto *ib = lift({0x3d, 0x78, 0x56, 0x34, 0x12});
+    REQUIRE(ib != nullptr);
+    REQUIRE(writes(*ib, dragon::x86::CF.offset, 8));
+    REQUIRE_FALSE(writes(*ib, dragon::x86::EAX.offset, 32));
+  }
+  SECTION("add rax, 0x10 [48 05 10 00 00 00]") {
+    const auto *ib = lift({0x48, 0x05, 0x10, 0x00, 0x00, 0x00});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::ADD));
+    REQUIRE(writes(*ib, dragon::x86::RAX.offset, 64));
+  }
+}
+
+TEST_CASE("IGNIL lifting - BT reg, imm8 / reg, reg writes CF only",
+          "[ignil][x86_64][vmp]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+  auto flagWrites = [](const dragon::ignil::Block &ib) {
+    std::set<std::uint32_t> out;
+    for (const auto &op: ib.ops())
+      if (op.dst)
+        if (const auto *r = std::get_if<dragon::ignil::Reg>(&*op.dst))
+          if (r->offset >= dragon::x86::CF.offset &&
+              r->offset <= dragon::x86::DF.offset)
+            out.insert(r->offset);
+    return out;
+  };
+
+  SECTION("bt r8, 0x31 [49 0f ba e0 31]") {
+    const auto *ib = lift({0x49, 0x0f, 0xba, 0xe0, 0x31});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::SHR));
+    REQUIRE(flagWrites(*ib) == std::set<std::uint32_t>{dragon::x86::CF.offset});
+  }
+  SECTION("bt ax, dx [66 0f a3 d0]") {
+    const auto *ib = lift({0x66, 0x0f, 0xa3, 0xd0});
+    REQUIRE(ib != nullptr);
+    REQUIRE(hasOpcode(*ib, Opcode::SHR));
+    REQUIRE(flagWrites(*ib) == std::set<std::uint32_t>{dragon::x86::CF.offset});
+  }
+}
+
+TEST_CASE("IGNIL lifting - a RIP-relative operand pins RIP to the next "
+          "instruction",
+          "[ignil][x86_64][vmp]") {
+  // nop; lea rax, [rip + 0x10]   - RIP must be 0x1008, not whatever a caller
+  // seeded the register with, and not the block's start.
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  const std::vector<uint8_t> code = {0x90, 0x48, 0x8d, 0x05, 0x10,
+                                     0x00, 0x00, 0x00, 0xc3};
+  dis.disassemble(code, 0x1000, g);
+  const auto *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+
+  bool pinned = false;
+  for (const auto &op: ib->ops()) {
+    if (!op.dst || op.srcs.size() != 1)
+      continue;
+    const auto *dst = std::get_if<dragon::ignil::Reg>(&*op.dst);
+    const auto *src = std::get_if<dragon::ignil::Const>(&op.srcs[0]);
+    if (dst && src && dst->offset == dragon::x86::RIP.offset)
+      pinned = src->value == 0x1008;
+  }
+  REQUIRE(pinned);
+}
+
+// ---------------------------------------------------------------------------
+// An instruction without a lifter is recorded, and leaves nothing stale.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("IGNIL lifting - an unlifted instruction is recorded, and its "
+          "register and flag results are UNDEF",
+          "[ignil][x86_64][vmp]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+  // Registers (by offset) some UNDEF op writes.
+  auto undefined = [](const dragon::ignil::Block &ib) {
+    std::set<std::uint32_t> out;
+    for (const auto &op: ib.ops())
+      if (op.opcode == Opcode::UNDEF && op.dst)
+        if (const auto *r = std::get_if<dragon::ignil::Reg>(&*op.dst))
+          out.insert(r->offset);
+    return out;
+  };
+
+  SECTION("rol eax, 1 [d1 c0] - no lifter: EAX and the flags it writes") {
+    const auto *ib = lift({0xd1, 0xc0});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted() == std::vector<std::uint64_t>{0x1000});
+    const auto regs = undefined(*ib);
+    REQUIRE(regs.count(dragon::x86::EAX.offset) == 1);
+    // ROL defines CF and OF; without this a `jc` after it would read the
+    // carry of whatever ran before.
+    REQUIRE(regs.count(dragon::x86::CF.offset) == 1);
+    REQUIRE(regs.count(dragon::x86::OF.offset) == 1);
+  }
+  SECTION("div rbx [48 f7 f3] - a 128-bit dividend IGNIL cannot hold") {
+    const auto *ib = lift({0x48, 0xf7, 0xf3});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted() == std::vector<std::uint64_t>{0x1000});
+    const auto regs = undefined(*ib);
+    REQUIRE(regs.count(dragon::x86::RAX.offset) == 1);
+    REQUIRE(regs.count(dragon::x86::RDX.offset) == 1);
+  }
+  SECTION("what is lifted is not reported: nop, mul rbx, adc rax, rbx") {
+    const auto *ib = lift({0x90, 0x48, 0xf7, 0xe3, 0x48, 0x11, 0xd8});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::MUL));
+  }
+  SECTION("the optimisation passes carry the record over") {
+    const auto *ib = lift({0xd1, 0xc0});
+    REQUIRE(ib != nullptr);
+    const auto simplified = dragon::ignil::simplifyBlock(*ib);
+    REQUIRE(simplified.unlifted() == ib->unlifted());
   }
 }

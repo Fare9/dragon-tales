@@ -869,3 +869,170 @@ TEST_CASE("SymbolicExecutor - a restored snapshot is equivalent to a fresh "
   REQUIRE(keys.count(x86::RBX.offset) == 1);
   REQUIRE(keys.count(x86::RCX.offset) == 1);
 }
+
+// ---------------------------------------------------------------------------
+// Concrete images, the concrete fast path, merging, unresolved accesses
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SymbolicExecutor - a large concrete blob is a shared image with a "
+          "byte overlay on top",
+          "[ignil][symbolic]") {
+  using dragon::ignil::SymbolicState;
+
+  std::vector<std::uint8_t> blob(4096);
+  for (std::size_t i = 0; i < blob.size(); ++i)
+    blob[i] = static_cast<std::uint8_t>(i);
+  REQUIRE(blob.size() >= SymbolicState::kImageThreshold);
+
+  SymbolicExecutor exec;
+  exec.mapMemory(0x10000, blob);
+
+  // Reads come back as literals, at any width, without touching the solver.
+  REQUIRE(exec.readMemory(0x10010, 8).is_numeral());
+  REQUIRE(exec.evaluate(exec.readMemory(0x10010, 64)) == 0x1716151413121110ull);
+  REQUIRE(exec.state().isMemoryDefined(0x10ff8, 64));
+  REQUIRE_FALSE(exec.state().isMemoryDefined(0x10ffc, 64)); // runs off the end
+
+  // A write lands in the overlay and shadows the image under it...
+  exec.setMemory(0x10012, exec.bv(0xAABB, 16));
+  REQUIRE(exec.evaluate(exec.readMemory(0x10010, 64)) == 0x17161514AABB1110ull);
+
+  // ...and a snapshot taken before it still sees the image's own bytes.
+  SymbolicExecutor other;
+  other.mapMemory(0x10000, blob);
+  const SymbolicState before = other.state();
+  other.setMemory(0x10012, other.bv(0xAABB, 16));
+  REQUIRE(before.readMemory(0x10012, 16).is_numeral());
+  REQUIRE(before.readMemory(0x10012, 16).get_numeral_uint64() == 0x1312);
+
+  // Mapping over an overlay replaces it.
+  exec.mapMemory(0x10000, blob);
+  REQUIRE(exec.evaluate(exec.readMemory(0x10012, 16)) == 0x1312);
+}
+
+TEST_CASE("SymbolicExecutor - ops on literals fold instead of growing a term",
+          "[ignil][symbolic]") {
+  // RAX = ((RAX + 1) ^ RBX) << 3, a thousand times over, all concrete.
+  Block block{kAddr};
+  block.append({Opcode::ADD, Value{x86::RAX},
+                {Value{x86::RAX}, Value{Const{1, 64}}}, kAddr});
+  block.append({Opcode::XOR, Value{x86::RAX},
+                {Value{x86::RAX}, Value{x86::RBX}}, kAddr + 4});
+  block.append({Opcode::SHL, Value{x86::RAX},
+                {Value{x86::RAX}, Value{Const{3, 64}}}, kAddr + 8});
+
+  SymbolicExecutor exec;
+  exec.setRegister(x86::RAX, 7);
+  exec.setRegister(x86::RBX, 0x55);
+
+  std::uint64_t expected = 7;
+  for (int i = 0; i < 1000; ++i) {
+    REQUIRE(exec.run(block).ok());
+    expected = ((expected + 1) ^ 0x55) << 3;
+  }
+
+  const z3::expr rax = exec.readRegister(x86::RAX);
+  REQUIRE(rax.is_numeral()); // a literal, not a 3000-node term
+  REQUIRE(rax.get_numeral_uint64() == expected);
+}
+
+TEST_CASE("SymbolicState - merge turns what two paths disagree on into "
+          "variables, whole values at a time, and converges",
+          "[ignil][symbolic]") {
+  using dragon::ignil::SymbolicState;
+  using Kind = SymbolicState::Delta::Kind;
+
+  SymbolicExecutor exec;
+  exec.setRegister(x86::RAX, 1);            // differs between the paths
+  exec.setRegister(x86::RBX, 7);            // same on both
+  exec.setMemory(0x5000, exec.bv(0, 64));   // differs
+  exec.setMemory(0x6000, exec.bv(9, 64));   // same
+  SymbolicState joined = exec.state();
+
+  exec.setRegister(x86::RAX, 2);
+  exec.setMemory(0x5000, exec.bv(5, 64));
+
+  auto changed = joined.merge(exec.state(), "loop");
+  REQUIRE(changed.size() == 2);
+  // One differing byte of a 64-bit value symbolises the whole value.
+  REQUIRE(changed[0].kind == Kind::Register);
+  REQUIRE(changed[0].key == x86::RAX.offset);
+  REQUIRE(changed[0].width == 64);
+  REQUIRE(changed[1].kind == Kind::Memory);
+  REQUIRE(changed[1].key == 0x5000);
+  REQUIRE(changed[1].width == 64);
+
+  // What they agreed on is untouched; what they did not is a free variable.
+  REQUIRE(joined.readRegister(x86::RBX).is_numeral());
+  REQUIRE(joined.readMemory(0x6000, 64).is_numeral());
+  REQUIRE_FALSE(joined.readRegister(x86::RAX).is_numeral());
+  REQUIRE(joined.readRegister(x86::RAX).id() == changed[0].value.id());
+
+  // The same state again adds nothing: that is the fixed point.
+  REQUIRE(joined.merge(exec.state(), "loop").empty());
+  // A third value for something already symbolised adds nothing either.
+  exec.setRegister(x86::RAX, 3);
+  REQUIRE(joined.merge(exec.state(), "loop").empty());
+
+  // The loop's exit test, provably false while the counter was the literal 1,
+  // is open again: both outcomes are satisfiable.
+  exec.setState(joined);
+  const z3::expr rax = exec.readRegister(x86::RAX);
+  REQUIRE(exec.isSatisfiable(rax == exec.bv(10, 64)) == true);
+  REQUIRE(exec.isSatisfiable(rax != exec.bv(10, 64)) == true);
+}
+
+TEST_CASE("SymbolicState - merge compares an overlay byte with the image "
+          "byte under the other state",
+          "[ignil][symbolic]") {
+  using dragon::ignil::SymbolicState;
+
+  std::vector<std::uint8_t> blob(512, 0x11);
+  SymbolicExecutor exec;
+  exec.mapMemory(0x8000, blob);
+  SymbolicState joined = exec.state();
+
+  // Rewriting the value the image already holds is not a disagreement.
+  exec.setMemory(0x8010, exec.bv(0x1111111111111111ull, 64));
+  REQUIRE(joined.merge(exec.state(), "n").empty());
+
+  exec.setMemory(0x8010, exec.bv(0x2222222222222222ull, 64));
+  auto changed = joined.merge(exec.state(), "n");
+  REQUIRE(changed.size() == 1);
+  REQUIRE(changed[0].key == 0x8010);
+  REQUIRE(changed[0].width == 64);
+}
+
+TEST_CASE("SymbolicExecutor - an access through an unconstrained pointer is "
+          "reported, not just dropped",
+          "[ignil][symbolic]") {
+  // t0 = LOAD(RDI); STORE(RSI, t0)  with RDI and RSI free
+  Block block{kAddr};
+  Temp t0{0, 64};
+  block.append({Opcode::LOAD, Value{t0}, {Value{x86::RDI}}, kAddr});
+  block.append({Opcode::STORE, std::nullopt, {Value{x86::RSI}, Value{t0}},
+                kAddr + 4});
+
+  SymbolicOptions opts;
+  opts.maxAddressSolutions = 4;
+  SymbolicExecutor exec(opts);
+  const z3::expr src = exec.symbolizeRegister(x86::RDI, "src");
+  const z3::expr dst = exec.symbolizeRegister(x86::RSI, "dst");
+  exec.setFreshTag("ctx");
+
+  RunResult r = exec.run(block);
+  REQUIRE(r.ok());
+  REQUIRE_FALSE(r.complete());
+  REQUIRE(r.unresolved.size() == 2);
+
+  REQUIRE_FALSE(r.unresolved[0].isStore);
+  REQUIRE(r.unresolved[0].width == 64);
+  REQUIRE(r.unresolved[0].address.id() == src.id());
+  // The stand-in for the loaded value carries the tag, so the same block run
+  // in another context gets a different variable.
+  REQUIRE(r.unresolved[0].value.to_string().find("#ctx") != std::string::npos);
+
+  REQUIRE(r.unresolved[1].isStore);
+  REQUIRE(r.unresolved[1].address.id() == dst.id());
+  REQUIRE(r.unresolved[1].value.id() == r.unresolved[0].value.id());
+}

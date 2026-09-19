@@ -117,21 +117,14 @@ inline void unpackEflags(std::uint64_t v, RegBuf &regs) {
   regs[x86off::OF] = (v >> 11) & 1;
 }
 
-// PF/AF/DF are never computed by X86IGNILLifter's emitArithFlags (always
-// UNDEF - see the flagMap passed by liftAdd/liftSub/liftCmp/...), so the
-// lifted side's value for them after JIT execution is whatever LLVM's
-// `undef` happened to materialize as, not a real computed flag. Comparing
-// them against Unicorn's real, faithfully-computed values would fail for a
-// known, already-documented simplification rather than an actual lifter
-// bug, so mask them out before comparing. (DF is a further, separate
-// wrinkle: real hardware leaves DF *unchanged* by arithmetic instructions
-// rather than undefined - dragon-tales UNDEFs it too, which is stricter
-// than reality. Worth a follow-up, not fixed here.)
-inline void maskUnmodeledFlags(RegBuf &regs) {
-  regs[x86off::PF] = 0;
-  regs[x86off::AF] = 0;
-  regs[x86off::DF] = 0;
-}
+// Flags the comparison has to ignore. There used to be three - PF, AF and DF
+// were UNDEF after every ALU op - but the lifter has modelled PF and AF since
+// LifterGaps.md #7 round 4 and leaves DF alone as the hardware does, so
+// masking them would only hide bugs. What is left is per instruction (AF
+// after a logical op, everything but CF/OF after MUL), which is the business
+// of the test that knows which instruction it ran - see `sweep()` in
+// TestX86SemanticRoundTrip.cpp. Kept as a hook for the state-wide comparison.
+inline void maskUnmodeledFlags(RegBuf &) {}
 
 struct RoundTripResult {
   RegBuf regs{};
