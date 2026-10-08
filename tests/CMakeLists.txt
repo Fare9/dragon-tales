@@ -11,6 +11,7 @@ add_executable(dragon_tests
         analysis/TestSwitchDetector.cpp
         analysis/TestIGNILSimplify.cpp
         analysis/TestDeadStoreElimination.cpp
+        analysis/TestArgumentRecovery.cpp
         sigs/TestPatternParser.cpp
         sigs/TestSignatureMatcher.cpp
         obfush/TestObfush.cpp

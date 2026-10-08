@@ -1070,15 +1070,33 @@ in "Not started" below, not something that needs building from scratch.
   immediate are all done now (items 15 and 16). Same shape of fix as the
   rest: add dispatch-table entries + `liftXxx` helpers, verify with a
   semantic round-trip test, not just an IGNIL-shape one.
-- **Parameter recognition + function reconstruction** (priority #4,
-  discussed but not begun): analyze live-in registers at a function's
-  entry block (read-before-written = likely argument) plus stack-slot
-  accesses, per-arch calling convention (x86-64 SysV/Win64, AAPCS), and
-  emit a typed `llvm::FunctionType` in `LLVMLifter` instead of the current
-  `(i8* mem, i8* regs) -> void`. Needs new liveness-style analysis on
-  `Graph`/IGNIL (forward, unlike `BackwardSlicer`), plus per-arch calling
-  convention tables. This is the biggest remaining piece from the original
-  discussion.
+- **Parameter recognition + function reconstruction** (priority #4) —
+  **analysis done; typed emission + stack slots remain.** The forward
+  liveness analysis and calling-convention argument/return recovery now
+  exist (`dragon::analysis`, `include/dragon/analysis/ArgumentRecovery.hpp`):
+  `liveInRegisters()` runs an ordinary live-variable fixpoint over the
+  function's IGNIL CFG (the forward counterpart to `BackwardSlicer`), and
+  `recoverSignature()` intersects the entry live-in set with the target's
+  calling convention (x86-64 System V and AArch64 AAPCS64 tables) to produce
+  a `FunctionSignature` - the integer/pointer arguments in convention order,
+  each sized by its widest read, plus a return value when the convention's
+  return register is written in the body. `LLVMLifter` records the recovered
+  prototype on every lifted function as a `"dragon.signature"` attribute and
+  exposes `recoveredSignatureString()`.
+
+  **Still remaining** (the harder half):
+    1. **Emit a real typed `llvm::FunctionType`** from the recovered
+       signature - `iN @sub_x(iN %arg0, ...)` - instead of the current
+       `(i8* mem, i8* regs) -> void`. The blocker is the memory model: the
+       `mem` pointer has to be replaced (stack slots below, a global/opaque
+       for the rest) and arguments seeded from the LLVM parameters rather
+       than from the `regs` blob.
+    2. **Stack-slot promotion** - route frame-relative (`[rbp-N]`/`[rsp+N]`)
+       LOAD/STORE to per-slot `alloca`s instead of `GEP mem`, so mem2reg
+       promotes them to SSA locals (the "variables"). Needs frame-pointer /
+       stack-offset detection on the address expressions.
+    3. **Convention breadth**: Win64, SSE/float and stack-passed arguments,
+       struct classification; sub-register-precise def/use in the liveness.
 - **AND/OR/XOR/TEST/ADC/SBB memory-operand forms** and **8/16-bit ALU
   forms** — real gaps the coverage tool already surfaces; same shape of
   fix as the MOV/ADD/SUB/CMP work, just not done yet for these mnemonics.

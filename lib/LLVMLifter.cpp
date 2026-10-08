@@ -1,5 +1,7 @@
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 
+#include <dragon/analysis/ArgumentRecovery.hpp>
+
 #include <format>
 #include <utility>
 
@@ -50,6 +52,18 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
           FnType, llvm::GlobalValue::ExternalLinkage, name, *module_);
   llfn->getArg(0)->setName("mem");
   llfn->getArg(1)->setName("regs");
+
+  // Record the recovered prototype as a function attribute: non-destructive,
+  // survives the optimisation passes, and is greppable in the printed IR
+  // (`"dragon.signature"="i32 sub_1000(i32 RDI, ...)"`). The body still uses
+  // the (mem, regs) convention; turning this signature into a real typed
+  // FunctionType - with the arguments seeded from LLVM parameters and a
+  // modelled stack replacing the mem pointer - is the next step (see
+  // ToDo/Roadmap.md).
+  llfn->addFnAttr(
+          "dragon.signature",
+          analysis::toString(analysis::recoverSignature(fn, graph, arch_),
+                             fn.startAddress()));
 
   auto *memPtr  = llfn->getArg(0);
   auto *regsPtr = llfn->getArg(1);
@@ -709,3 +723,9 @@ std::string dragon::llvmlifter::LLVMLifter::ir() const {
 }
 
 llvm::Module &dragon::llvmlifter::LLVMLifter::module() { return *module_; }
+
+std::string dragon::llvmlifter::LLVMLifter::recoveredSignatureString(
+        const Function &fn, const Graph &graph) const {
+  return analysis::toString(analysis::recoverSignature(fn, graph, arch_),
+                            fn.startAddress());
+}
