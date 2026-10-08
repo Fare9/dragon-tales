@@ -43,6 +43,17 @@ To run the tests:
 ctest --output-on-failure
 ```
 
+A handful of x86 semantic round-trip tests are *expensive*: they JIT-compile
+the lifted IR and emulate the raw bytes under Unicorn across a large
+cross-product of edge-case inputs (thousands of round-trips each). They are
+tagged `[.][expensive]`, which hides them from the default `ctest` run so it
+stays fast. Run them explicitly — typically on a more powerful machine or in
+CI — with:
+
+```sh
+./build/bin/dragon_tests "[expensive]"
+```
+
 ### Building on Windows (Visual Studio + vcpkg)
 
 On Windows the dependency discovery in `CMakeLists.txt` needs a few hints,

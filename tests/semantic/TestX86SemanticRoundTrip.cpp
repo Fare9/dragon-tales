@@ -311,6 +311,23 @@ TEST_CASE("Semantic round-trip - pushfq then popfq preserves the flags",
 // at all), each run over edge-case inputs under Unicorn and through the
 // lifter + JIT. IGNIL-shape tests can show ops were emitted; only this shows
 // the carries, the high halves and the remainders are the right numbers.
+//
+// These sweeps are the expensive part of the suite: arithmeticInputs() is a
+// 12x12x2 = 288-entry cross product, and a case like ADC/SBB runs it through
+// every one of ~14 instruction forms, so each TEST_CASE is thousands of
+// JIT-compile + emulate round-trips. On a developer laptop the whole group
+// runs for the better part of a minute; on the CI box it is quick.
+//
+// They are therefore tagged [.][expensive]: the leading-dot tag hides them
+// from a default `dragon_tests` run and from CTest discovery (so a normal
+// `ctest` stays fast), while the [expensive] tag selects them explicitly:
+//
+//     ./build/bin/dragon_tests "[expensive]"     # run only the heavy sweeps
+//     ./build/bin/dragon_tests "[semantic]"      # also pulls them in
+//
+// The faster, non-[vmp] semantic round-trip tests above stay in the default
+// run - they are the per-gap regression checks and each takes well under a
+// tenth of a second.
 // -----------------------------------------------------------------------
 
 namespace {
@@ -415,7 +432,7 @@ void sweep(const Form &form) {
 } // namespace
 
 TEST_CASE("Semantic round-trip - ADC / SBB match the hardware, carries and all",
-          "[semantic][x86_64][vmp]") {
+          "[semantic][x86_64][vmp][.][expensive]") {
   const auto &in = arithmeticInputs();
   for (const Form &form: std::vector<Form>{
                {"adc rax, rbx", {0x48, 0x11, 0xd8}, kAll, in},
@@ -437,7 +454,7 @@ TEST_CASE("Semantic round-trip - ADC / SBB match the hardware, carries and all",
 }
 
 TEST_CASE("Semantic round-trip - one-operand MUL / IMUL produce both halves",
-          "[semantic][x86_64][vmp]") {
+          "[semantic][x86_64][vmp][.][expensive]") {
   const auto &in = arithmeticInputs();
   for (const Form &form: std::vector<Form>{
                {"mul rbx", {0x48, 0xf7, 0xe3}, kCF | kOF, in},
@@ -455,7 +472,7 @@ TEST_CASE("Semantic round-trip - one-operand MUL / IMUL produce both halves",
 }
 
 TEST_CASE("Semantic round-trip - one-operand DIV / IDIV at 8, 16 and 32 bits",
-          "[semantic][x86_64][vmp]") {
+          "[semantic][x86_64][vmp][.][expensive]") {
   const auto &in = divisionInputs();
   sweep({"div ebx", {0xf7, 0xf3}, kNone, in});
   sweep({"div bx", {0x66, 0xf7, 0xf3}, kNone, in});
@@ -474,7 +491,7 @@ TEST_CASE("Semantic round-trip - one-operand DIV / IDIV at 8, 16 and 32 bits",
 }
 
 TEST_CASE("Semantic round-trip - accumulator short forms and BT",
-          "[semantic][x86_64][vmp]") {
+          "[semantic][x86_64][vmp][.][expensive]") {
   const auto &in = arithmeticInputs();
   for (const Form &form: std::vector<Form>{
                {"sub al, 0x22 (SUB8i8)", {0x2c, 0x22}, kAll, in},
@@ -494,7 +511,7 @@ TEST_CASE("Semantic round-trip - accumulator short forms and BT",
 
 TEST_CASE("Semantic round-trip - SETcc agrees with the hardware for all sixteen "
           "conditions",
-          "[semantic][x86_64][vmp]") {
+          "[semantic][x86_64][vmp][.][expensive]") {
   // cmp al, bl ; setcc cl   - an 8-bit compare reaches every flag, PF and OF
   // included, with small operands. The condition is the low nibble of the
   // second opcode byte: 0F 90+cc /r.
