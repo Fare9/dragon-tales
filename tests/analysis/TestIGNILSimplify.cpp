@@ -469,3 +469,58 @@ TEST_CASE("IGNILSimplify - block with nothing to simplify is left unchanged",
   REQUIRE_FALSE(stats.changed());
   REQUIRE(out.size() == block.size());
 }
+
+// ---------------------------------------------------------------------------
+// Copy propagation must stop at a redefinition of the copied register
+// ---------------------------------------------------------------------------
+
+TEST_CASE("IGNILSimplify - does not propagate a Reg past a write to it",
+          "[ignil][simplify][aliasing]") {
+  // The xchg shape. A Temp is single-assignment, but the Reg it was copied
+  // from is not: propagating EAX into the last op would turn the swap into
+  // "both registers end up as ECX".
+  SECTION("xchg: t0 = EAX; EAX = ECX; ECX = t0") {
+    Block block{kAddr};
+    block.append({Opcode::COPY, Value{Temp{0, 32}}, {Value{x86::EAX}}, kAddr});
+    block.append({Opcode::COPY, Value{x86::EAX}, {Value{x86::ECX}}, kAddr});
+    block.append({Opcode::COPY, Value{x86::ECX}, {Value{Temp{0, 32}}}, kAddr});
+
+    SimplifyStats stats;
+    const Block out = simplifyBlock(block, stats);
+
+    // The last op must still read the Temp, not EAX.
+    const Op &last = out.ops().back();
+    REQUIRE(last.srcs.size() == 1);
+    REQUIRE(std::holds_alternative<Temp>(last.srcs[0]));
+  }
+
+  SECTION("a sub-register write kills the record too") {
+    // Writing AL overwrites byte 0 of EAX, so t0 may not be replaced by EAX.
+    Block block{kAddr};
+    block.append({Opcode::COPY, Value{Temp{0, 32}}, {Value{x86::EAX}}, kAddr});
+    block.append({Opcode::COPY, Value{x86::AL}, {Value{Const{0, 8}}}, kAddr});
+    block.append({Opcode::COPY, Value{x86::EBX}, {Value{Temp{0, 32}}}, kAddr});
+
+    SimplifyStats stats;
+    const Block out = simplifyBlock(block, stats);
+
+    const Op &last = out.ops().back();
+    REQUIRE(last.srcs.size() == 1);
+    REQUIRE(std::holds_alternative<Temp>(last.srcs[0]));
+  }
+
+  SECTION("an untouched register still propagates") {
+    // The fix must stay precise: nothing writes ECX, so this one still folds.
+    Block block{kAddr};
+    block.append({Opcode::COPY, Value{Temp{0, 32}}, {Value{x86::ECX}}, kAddr});
+    block.append({Opcode::COPY, Value{x86::EBX}, {Value{Temp{0, 32}}}, kAddr});
+
+    SimplifyStats stats;
+    const Block out = simplifyBlock(block, stats);
+
+    const Op &last = out.ops().back();
+    REQUIRE(last.srcs.size() == 1);
+    REQUIRE(std::holds_alternative<dragon::ignil::Reg>(last.srcs[0]));
+    REQUIRE(std::get<dragon::ignil::Reg>(last.srcs[0]).offset == x86::ECX.offset);
+  }
+}

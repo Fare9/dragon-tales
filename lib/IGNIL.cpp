@@ -21,6 +21,15 @@ dragon::ignil::Block::Block(std::uint64_t startAddress) :
 
 void dragon::ignil::Block::append(Op op) { ops_.push_back(std::move(op)); }
 
+void dragon::ignil::Block::noteUnlifted(std::uint64_t address) {
+  if (unlifted_.empty() || unlifted_.back() != address)
+    unlifted_.push_back(address);
+}
+
+const std::vector<std::uint64_t> &dragon::ignil::Block::unlifted() const {
+  return unlifted_;
+}
+
 const std::vector<dragon::ignil::Op> &dragon::ignil::Block::ops() const {
   return ops_;
 }
@@ -60,11 +69,42 @@ std::string dragon::ignil::toString(const Value &v) {
           v);
 }
 
+std::string_view dragon::ignil::opaqueKindName(OpaqueKind kind) {
+  switch (kind) {
+    case OpaqueKind::CPUID: return "cpuid";
+    case OpaqueKind::RDTSC: return "rdtsc";
+    case OpaqueKind::RDTSCP: return "rdtscp";
+  }
+  return "opaque";
+}
+
+bool dragon::ignil::opaqueIsPure(OpaqueKind kind) {
+  switch (kind) {
+    case OpaqueKind::CPUID: return true;
+    // Each execution is its own reading of the clock.
+    case OpaqueKind::RDTSC:
+    case OpaqueKind::RDTSCP: return false;
+  }
+  return false;
+}
+
+unsigned dragon::ignil::opaqueResultCount(OpaqueKind kind) {
+  switch (kind) {
+    case OpaqueKind::CPUID: return 4;
+    case OpaqueKind::RDTSC: return 2;
+    case OpaqueKind::RDTSCP: return 3;
+  }
+  return 0;
+}
+
 std::string dragon::ignil::toString(const Op &op) {
   std::string s;
   if (op.dst)
     s += toString(*op.dst) + " = ";
   s += std::string(opcodeName(op.opcode));
+  if (op.opcode == Opcode::OPAQUE)
+    s += std::format("<{}:{}>", opaqueKindName(opaqueKindOf(op.aux)),
+                     opaqueIndexOf(op.aux));
   s += "(";
   for (std::size_t i = 0; i < op.srcs.size(); ++i) {
     if (i)

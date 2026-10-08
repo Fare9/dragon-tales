@@ -10,6 +10,19 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_DIR}")
 
+# MSVC will not link objects that disagree on the C runtime (/MD vs /MDd) or on
+# _ITERATOR_DEBUG_LEVEL, and LLVM's static libraries carry whichever their own
+# build used. The Debug configuration defaults to /MDd - and `cmake --build
+# build` with no --config means Debug under the Visual Studio generators - so
+# against a non-Debug LLVM that is a wall of LNK2038 errors, one per LLVM
+# object. Use the release runtime in every configuration instead: Debug stays
+# what one wants from it (no optimisation, full symbols) and links.
+if(MSVC AND LLVM_BUILD_TYPE AND NOT LLVM_BUILD_TYPE STREQUAL "Debug")
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+  message(STATUS "LLVM was built ${LLVM_BUILD_TYPE}: every configuration uses the "
+                 "release C runtime (/MD) so that Debug can link it")
+endif()
+
 # Hack for using clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz on windows.
 if(WIN32 AND TARGET LLVMDebugInfoPDB)
   get_target_property(_pdb_libs LLVMDebugInfoPDB INTERFACE_LINK_LIBRARIES)

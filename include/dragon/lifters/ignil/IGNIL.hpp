@@ -160,7 +160,50 @@ enum class Opcode : std::uint8_t {
   // target ever needs it).
   SITOFP, // dst(double, width 64) = (double)(signed)srcs[0]
   FPTOSI, // dst(int) = srcs[0], interpreted as double, truncated toward zero
+
+  // An instruction whose result IGNIL cannot express, but which is still a
+  // determinate value rather than an unknown one: CPUID, RDTSC and friends.
+  //
+  // Distinct from UNDEF, which says "anything at all". OPAQUE says "a value
+  // named by (kind, result index) over these operands", so two CPUIDs with
+  // the same leaf agree, and a consumer that only needs that much can reason
+  // about it. Op::aux carries the kind and which result this op defines,
+  // since an Op has one dst and these instructions define several registers:
+  // CPUID becomes four OPAQUE ops sharing srcs and differing only in aux.
+  OPAQUE,
 };
+
+/// The instructions OPAQUE models. Appended to, never reordered - the value
+/// is packed into Op::aux and crosses the C shim.
+enum class OpaqueKind : std::uint16_t {
+  CPUID,  ///< srcs = (leaf, subleaf); 4 results: EAX, EBX, ECX, EDX
+  RDTSC,  ///< no srcs; 2 results: EAX (low), EDX (high)
+  RDTSCP, ///< no srcs; 3 results: EAX (low), EDX (high), ECX (processor id)
+};
+
+/// Lower-case name used when lowering to Z3 and to LLVM ("cpuid", ...).
+[[nodiscard]] std::string_view opaqueKindName(OpaqueKind kind);
+
+/// True when the result is a function of the operands alone, so two
+/// executions with equal operands must agree (CPUID). False when each
+/// execution is its own event (RDTSC, RDTSCP) and must not be treated as
+/// equal to another one - consumers key those on the op's address instead.
+[[nodiscard]] bool opaqueIsPure(OpaqueKind kind);
+
+/// How many results the kind defines; valid result indices are [0, count).
+[[nodiscard]] unsigned opaqueResultCount(OpaqueKind kind);
+
+/// Pack / unpack Op::aux for an OPAQUE op.
+[[nodiscard]] constexpr std::uint32_t makeOpaqueAux(OpaqueKind kind,
+                                                    unsigned resultIndex) {
+  return (static_cast<std::uint32_t>(kind) << 8) | (resultIndex & 0xffu);
+}
+[[nodiscard]] constexpr OpaqueKind opaqueKindOf(std::uint32_t aux) {
+  return static_cast<OpaqueKind>(aux >> 8);
+}
+[[nodiscard]] constexpr unsigned opaqueIndexOf(std::uint32_t aux) {
+  return aux & 0xffu;
+}
 
 /// Opcode representation, we have a structure
 /// modeled by each one of the operations, this
@@ -180,6 +223,12 @@ struct Op {
   // Multiple Ops from the same machine instruction share
   // this address. Zero for synthetic Ops.
   std::uint64_t address{};
+
+  // Opcode-specific payload; only OPAQUE uses it, as makeOpaqueAux(kind,
+  // resultIndex). Deliberately last: every existing Op is aggregate-built as
+  // {opcode, dst, srcs, address}, and inserting a field before `address`
+  // would silently feed the address into this one instead.
+  std::uint32_t aux{};
 };
 
 /// A block of IGNIL operations, this is a translation of an
@@ -201,9 +250,22 @@ class Block {
   [[nodiscard]] std::vector<Op>::const_iterator begin() const;
   [[nodiscard]] std::vector<Op>::const_iterator end() const;
 
+  /// Machine addresses of instructions the lifter had no semantics for.
+  ///
+  /// Such an instruction is not dropped silently: every register it defines
+  /// (explicitly or implicitly) and, if it writes them, the flags are marked
+  /// UNDEF. But an UNDEF that later dies is invisible, and an instruction whose
+  /// only effect is a memory write leaves no op at all - so a consumer that
+  /// needs the block to be a complete account of the code (a symbolic
+  /// executor rebuilding a function, say) checks this list rather than trusting
+  /// the ops alone. The optimisation passes carry it over to their result.
+  void noteUnlifted(std::uint64_t address);
+  [[nodiscard]] const std::vector<std::uint64_t> &unlifted() const;
+
   private:
   std::uint64_t startAddress_;
   std::vector<Op> ops_;
+  std::vector<std::uint64_t> unlifted_;
 };
 
 /// Utility functions that can be used for debugging purposes

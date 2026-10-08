@@ -417,6 +417,8 @@ bool hasSideEffect(Opcode op) {
 
 Block passForward(const Block &in, SimplifyStats &stats) {
   Block out{in.startAddress()};
+  for (std::uint64_t address : in.unlifted())
+    out.noteUnlifted(address);
   // Records `t = COPY(v)` so later uses of `t` substitute `v` directly -
   // general copy propagation, not just constant propagation: `v` may be a
   // Const, a Reg, or another (already-resolved) Temp. Temp-only, since Temps
@@ -506,6 +508,34 @@ Block passForward(const Block &in, SimplifyStats &stats) {
       }
     }
 
+    // A Reg write invalidates every record that refers to that Reg. The Temp
+    // a record is keyed on is single-assignment, but the Reg it was copied
+    // from is not: once something overwrites that Reg, substituting a later
+    // use of the Temp with it would read the *new* value. `xchg` is the
+    // canonical victim (t0 = COPY(EAX); EAX = COPY(t1); ECX = COPY(t0) would
+    // collapse to ECX = COPY(EAX), i.e. no swap at all), and any lifter that
+    // snapshots a register it then overwrites hits the same thing.
+    // Sub-register aliasing counts, so the test is on overlapping byte ranges.
+    if (newOp.dst) {
+      if (const auto *dr = std::get_if<Reg>(&*newOp.dst)) {
+        const std::uint64_t lo = dr->offset;
+        const std::uint64_t hi = lo + (dr->width + 7u) / 8u;
+        auto overlaps = [&](const Value &v) {
+          const auto *r = std::get_if<Reg>(&v);
+          if (!r)
+            return false;
+          const std::uint64_t rlo = r->offset;
+          const std::uint64_t rhi = rlo + (r->width + 7u) / 8u;
+          return rlo < hi && lo < rhi;
+        };
+        std::erase_if(copyOf, [&](const auto &e) { return overlaps(e.second); });
+        std::erase_if(defOf, [&](const auto &e) {
+          return std::any_of(e.second.srcs.begin(), e.second.srcs.end(),
+                             overlaps);
+        });
+      }
+    }
+
     if (newOp.dst) {
       if (const auto *dt = std::get_if<Temp>(&*newOp.dst)) {
         copyOf.erase(dt->id);
@@ -555,6 +585,8 @@ Block passBackwardDCE(const Block &in, SimplifyStats &stats) {
   }
 
   Block out{in.startAddress()};
+  for (std::uint64_t address : in.unlifted())
+    out.noteUnlifted(address);
   for (std::size_t i = 0; i < ops.size(); ++i)
     if (keep[i])
       out.append(ops[i]);
@@ -696,6 +728,8 @@ Block passRegDSE(const Block &in,
   }
 
   Block out{in.startAddress()};
+  for (std::uint64_t address : in.unlifted())
+    out.noteUnlifted(address);
   for (std::size_t i = 0; i < ops.size(); ++i)
     if (keep[i])
       out.append(ops[i]);

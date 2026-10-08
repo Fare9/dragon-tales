@@ -64,6 +64,11 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   regOF_ = findFlagReg("OF");
   regDF_ = findFlagReg("DF");
   regRSP_ = findGprReg("RSP");
+  regRIP_ = findGprReg("RIP");
+  regAH_ = findGprReg("AH");
+  for (unsigned i = 0; i < regInfo.getNumRegs(); ++i)
+    if (std::string_view(regInfo.getName(i)) == "EFLAGS")
+      llvmEflags_ = i;
   regESP_ = findGprReg("ESP");
   regRBP_ = findGprReg("RBP");
   regEBP_ = findGprReg("EBP");
@@ -74,6 +79,8 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   regRAX_ = findGprReg("RAX");
   regDX_ = findGprReg("DX");
   regEDX_ = findGprReg("EDX");
+  regEBX_ = findGprReg("EBX");
+  regECX_ = findGprReg("ECX");
   regRDX_ = findGprReg("RDX");
 
   // Scan opcodes by name: map LLVM mnemonic string -> pointer-to-member field.
@@ -243,8 +250,18 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"CDQ", &X86IGNILLifter::opCdq_},
           {"CQO", &X86IGNILLifter::opCqo_},
           {"STC", &X86IGNILLifter::opStc_},
+          {"SETCCr", &X86IGNILLifter::opSetccr_},
+          {"BT16ri8", &X86IGNILLifter::opBt16ri8_},
+          {"BT32ri8", &X86IGNILLifter::opBt32ri8_},
+          {"BT64ri8", &X86IGNILLifter::opBt64ri8_},
+          {"BT16rr", &X86IGNILLifter::opBt16rr_},
+          {"BT32rr", &X86IGNILLifter::opBt32rr_},
+          {"BT64rr", &X86IGNILLifter::opBt64rr_},
           {"CLC", &X86IGNILLifter::opClc_},
           {"CMC", &X86IGNILLifter::opCmc_},
+          {"CPUID", &X86IGNILLifter::opCpuid_},
+          {"RDTSC", &X86IGNILLifter::opRdtsc_},
+          {"RDTSCP", &X86IGNILLifter::opRdtscp_},
           {"PUSH32i", &X86IGNILLifter::opPush32I_},
           {"PUSH32i8", &X86IGNILLifter::opPush32I8_},
           {"PUSH64i32", &X86IGNILLifter::opPush64I32_},
@@ -416,6 +433,76 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
     if (r != nameToOpc.end() && b != nameToOpc.end())
       revToBase_.emplace(r->second, b->second);
   }
+
+  // ADC / SBB, and the one-operand multiply / divide family. Looked up by
+  // name, so a spelling this LLVM does not have is simply skipped.
+  {
+    auto opcodeNamed = [&](const std::string &name) -> std::optional<unsigned> {
+      auto it = nameToOpc.find(name);
+      if (it == nameToOpc.end())
+        return std::nullopt;
+      return it->second;
+    };
+    static constexpr std::string_view kAdcSbbSuffixes[] = {
+            "8rr",  "8ri",  "16rr", "16ri",   "16ri8", "32rr",
+            "32ri", "32ri8", "64rr", "64ri32", "64ri8"};
+    for (const bool isSbb: {false, true})
+      for (std::string_view suffix: kAdcSbbSuffixes) {
+        const std::string name = std::string(isSbb ? "SBB" : "ADC") + std::string(suffix);
+        if (auto opc = opcodeNamed(name))
+          adcSbbForms_.emplace(*opc, isSbb);
+        // The load-direction reg-reg spelling shares the operand order.
+        if (suffix.ends_with("rr"))
+          if (auto rev = opcodeNamed(name + "_REV"))
+            adcSbbForms_.emplace(*rev, isSbb);
+      }
+
+    using Kind = MulDivForm::Kind;
+    static constexpr std::pair<std::string_view, Kind> kMulDiv[] = {
+            {"MUL", Kind::Mul}, {"IMUL", Kind::Imul},
+            {"DIV", Kind::Div}, {"IDIV", Kind::Idiv}};
+    for (const auto &[mnemonic, kind]: kMulDiv)
+      for (const unsigned width: {8u, 16u, 32u, 64u})
+        if (auto opc = opcodeNamed(std::string(mnemonic) + std::to_string(width) + "r"))
+          mulDivForms_.emplace(*opc, MulDivForm{kind, static_cast<ignil::Width>(width)});
+  }
+
+  // Accumulator short forms -> generic reg-imm forms. LLVM names them after
+  // the immediate alone (SUB8i8, CMP32i32, TEST64i32); the generic spelling of
+  // the same width is <OP>8ri / 16ri / 32ri / 64ri32.
+  {
+    auto llvmRegNamed = [&](std::string_view name) -> unsigned {
+      for (unsigned i = 0; i < regInfo.getNumRegs(); ++i)
+        if (regInfo.getName(i) == name)
+          return i;
+      return 0;
+    };
+    struct Width {
+      std::string_view shortSuffix, genericSuffix, reg;
+    };
+    static constexpr Width kWidths[] = {{"8i8", "8ri", "AL"},
+                                        {"16i16", "16ri", "AX"},
+                                        {"32i32", "32ri", "EAX"},
+                                        {"64i32", "64ri32", "RAX"}};
+    struct Alu {
+      std::string_view name;
+      bool tiedDst;
+    };
+    static constexpr Alu kAlus[] = {{"ADD", true}, {"SUB", true},  {"AND", true},
+                                    {"OR", true},  {"XOR", true},  {"CMP", false},
+                                    {"TEST", false}, {"ADC", true}, {"SBB", true}};
+    for (const Alu &alu: kAlus)
+      for (const Width &w: kWidths) {
+        const auto shortForm =
+                nameToOpc.find(std::string(alu.name) + std::string(w.shortSuffix));
+        const auto generic =
+                nameToOpc.find(std::string(alu.name) + std::string(w.genericSuffix));
+        const unsigned reg = llvmRegNamed(w.reg);
+        if (shortForm != nameToOpc.end() && generic != nameToOpc.end() && reg != 0)
+          accForms_.emplace(shortForm->second,
+                            AccForm{generic->second, reg, alu.tiedDst});
+      }
+  }
 }
 
 dragon::ignil::Block
@@ -482,6 +569,41 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   // they share MCInst operand order, so the base handler lifts them correctly.
   if (auto it = revToBase_.find(opc); it != revToBase_.end())
     opc = it->second;
+
+  // Accumulator short forms name their register implicitly; rebuild them as
+  // the generic reg-imm instruction so the ALU lifters below apply unchanged.
+  llvm::MCInst accumulatorForm;
+  if (auto it = accForms_.find(opc); it != accForms_.end() &&
+                                     mc->getNumOperands() == 1 &&
+                                     mc->getOperand(0).isImm()) {
+    const AccForm &form = it->second;
+    accumulatorForm.setOpcode(form.genericOpcode);
+    accumulatorForm.addOperand(llvm::MCOperand::createReg(form.llvmReg));
+    if (form.tiedDst)
+      accumulatorForm.addOperand(llvm::MCOperand::createReg(form.llvmReg));
+    accumulatorForm.addOperand(mc->getOperand(0));
+    mc = &accumulatorForm;
+    opc = form.genericOpcode;
+  }
+
+  // A RIP-relative operand means "the address of the next instruction". The
+  // operand lifters read it as the RIP register, so pin that register to the
+  // right constant first - otherwise a trace (many instructions spliced into
+  // one block) would read whatever RIP the caller last seeded, for every
+  // instruction alike.
+  for (unsigned i = 0; i < mc->getNumOperands(); ++i) {
+    const llvm::MCOperand &operand = mc->getOperand(i);
+    if (!operand.isReg())
+      continue;
+    const auto reg = toReg(operand.getReg());
+    if (reg && regRIP_.width != 0 && reg->offset == regRIP_.offset) {
+      out.append({ignil::Opcode::COPY,
+                  regRIP_,
+                  {ignil::Const{addr + insn.size(), 64}},
+                  addr});
+      break;
+    }
+  }
 
   if (opc == opMov64rr_ || opc == opMov32rr_ || opc == opMov64ri_ ||
       opc == opMov32ri_ || opc == opMov64ri32_)
@@ -661,12 +783,27 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftAccExtend(addr, out, tempId, AccExtend::CDQ);
   else if (opc == opCqo_)
     liftAccExtend(addr, out, tempId, AccExtend::CQO);
+  else if (opc == opSetccr_ && opSetccr_ != 0)
+    liftSetcc(*mc, addr, out, tempId);
+  else if (auto adc = adcSbbForms_.find(opc); adc != adcSbbForms_.end())
+    liftAdcSbb(*mc, addr, out, tempId, adc->second);
+  else if (auto md = mulDivForms_.find(opc); md != mulDivForms_.end())
+    liftMulDiv(*mc, addr, out, tempId, md->second);
+  else if (opc == opBt16ri8_ || opc == opBt32ri8_ || opc == opBt64ri8_ ||
+           opc == opBt16rr_ || opc == opBt32rr_ || opc == opBt64rr_)
+    liftBt(*mc, addr, out, tempId);
   else if (opc == opStc_)
     liftCarryOp(addr, out, tempId, CarryOp::STC);
   else if (opc == opClc_)
     liftCarryOp(addr, out, tempId, CarryOp::CLC);
   else if (opc == opCmc_)
     liftCarryOp(addr, out, tempId, CarryOp::CMC);
+  else if (opc == opCpuid_)
+    liftOpaque(addr, out, tempId, ignil::OpaqueKind::CPUID);
+  else if (opc == opRdtsc_)
+    liftOpaque(addr, out, tempId, ignil::OpaqueKind::RDTSC);
+  else if (opc == opRdtscp_)
+    liftOpaque(addr, out, tempId, ignil::OpaqueKind::RDTSCP);
   else if (opc == opPxorRR_)
     liftXor(*mc, addr, out, tempId);
   else if (opc == opCvtsi2sd32_ || opc == opCvtsi2sd64_)
@@ -709,6 +846,31 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
         if (auto dst = toReg(defOp.getReg()))
           emitUndef(*dst, addr, out);
       }
+      // The same goes for registers the instruction defines implicitly - the
+      // accumulator of `mul`, RCX/RSI/RDI of a string op. They are not MCInst
+      // operands, so the loop above never sees them; without this an
+      // unlifted `mul rbx` leaves RAX and RDX holding their old values and
+      // every consumer downstream is confidently wrong (LifterGaps.md #5).
+      bool definesFlags = false;
+      for (const llvm::MCPhysReg implicitDef: desc.implicit_defs()) {
+        if (implicitDef == llvmEflags_)
+          definesFlags = true;
+        else if (auto dst = toReg(implicitDef))
+          emitUndef(*dst, addr, out);
+      }
+      // EFLAGS is not an IGNIL register (the flags are separate ones), so it
+      // needs spelling out: an unlifted flag-writing instruction ahead of a
+      // `pushfq` or a `jcc` must not leave the previous instruction's flags
+      // in place.
+      if (definesFlags && llvmEflags_ != 0)
+        emitArithFlags(addr, out, tempId);
+
+      // Anything that defines something, or has a memory operand it may write
+      // through, was really not lifted - as opposed to a nop or a prefetch.
+      constexpr unsigned kMemoryOperandCount = 5;
+      if (desc.getNumDefs() != 0 || !desc.implicit_defs().empty() ||
+          mc->getNumOperands() >= kMemoryOperandCount)
+        out.noteUnlifted(addr);
     }
   }
 }
@@ -2286,7 +2448,8 @@ dragon::ignil::Temp dragon::x86::X86IGNILLifter::emitCondition(
         unsigned condCode, std::uint64_t addr, ignil::Block &out,
         std::uint32_t &tmp) const {
   // LLVM x86 CondCode enum (X86BaseInfo.h):
-  //   0=O,1=NO,2=B,3=AE,4=E,5=NE,6=BE,7=A,8=S,9=NS,12=L,13=GE,14=LE,15=G
+  //   0=O,1=NO,2=B,3=AE,4=E,5=NE,6=BE,7=A,8=S,9=NS,10=P,11=NP,12=L,13=GE,
+  //   14=LE,15=G
   auto flagSet = [&](ignil::Reg flag) -> ignil::Temp {
     auto t = newTemp(tmp, 8);
     out.append({ignil::Opcode::COPY, t, {flag}, addr});
@@ -2303,6 +2466,14 @@ dragon::ignil::Temp dragon::x86::X86IGNILLifter::emitCondition(
   };
 
   switch (condCode) {
+    case 0:
+      return flagSet(regOF_); // O  / JO  : OF=1
+    case 1:
+      return flagClear(regOF_); // NO / JNO : OF=0
+    case 10:
+      return flagSet(regPF_); // P  / JP  : PF=1
+    case 11:
+      return flagClear(regPF_); // NP / JNP : PF=0
     case 2:
       return flagSet(regCF_); // B  / JB  : CF=1
     case 3:
@@ -2620,6 +2791,324 @@ void dragon::x86::X86IGNILLifter::liftAccExtend(std::uint64_t addr,
       signFill(regRAX_, regRDX_, 63);
       return;
   }
+}
+
+void dragon::x86::X86IGNILLifter::liftOpaque(std::uint64_t addr,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp,
+                                             ignil::OpaqueKind kind) const {
+  // Snapshot the inputs first: CPUID reads EAX/ECX and also defines them, so
+  // every result must be a function of the values on entry rather than of
+  // whatever an earlier result op has just stored.
+  std::vector<ignil::Value> srcs;
+  auto snapshot = [&](const ignil::Reg &r) {
+    auto t = newTemp(tmp, r.width);
+    out.append({ignil::Opcode::COPY, t, {r}, addr});
+    srcs.push_back(ignil::Value{t});
+  };
+
+  std::vector<ignil::Reg> results;
+  switch (kind) {
+    case ignil::OpaqueKind::CPUID:
+      snapshot(regEAX_); // leaf
+      snapshot(regECX_); // subleaf
+      results = {regEAX_, regEBX_, regECX_, regEDX_};
+      break;
+    case ignil::OpaqueKind::RDTSC:
+      results = {regEAX_, regEDX_}; // EDX:EAX
+      break;
+    case ignil::OpaqueKind::RDTSCP:
+      results = {regEAX_, regEDX_, regECX_}; // EDX:EAX, ECX = processor id
+      break;
+  }
+
+  for (unsigned i = 0; i < results.size(); ++i)
+    out.append({ignil::Opcode::OPAQUE, results[i], srcs, addr,
+                ignil::makeOpaqueAux(kind, i)});
+}
+
+void dragon::x86::X86IGNILLifter::liftSetcc(const llvm::MCInst &mc,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  // op[0]=dst(r8), op[1]=condition code
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftSetcc in addr {:#x} no dst", addr);
+    out.noteUnlifted(addr);
+    return;
+  }
+  const auto condCode = static_cast<unsigned>(mc.getOperand(1).getImm());
+  auto cond = emitCondition(condCode, addr, out, tmp);
+  auto value = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::ZEXT, value, {cond}, addr});
+  out.append({ignil::Opcode::COPY, *dst, {value}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftAdcSbb(const llvm::MCInst &mc,
+                                             std::uint64_t addr,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp,
+                                             bool isSbb) const {
+  // op[0]=dst(out), op[1]=src1(tied=dst), op[2]=src2(reg or imm)
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftAdcSbb in addr {:#x} no dst", addr);
+    return;
+  }
+  const ignil::Width w = dst->width;
+
+  ignil::Value src;
+  const auto &srcOp = mc.getOperand(2);
+  if (srcOp.isImm()) {
+    src = ignil::Const{static_cast<std::uint64_t>(srcOp.getImm()), w};
+  } else {
+    auto srcReg = toReg(srcOp.getReg());
+    if (!srcReg) {
+      logger_.log("Error liftAdcSbb in addr {:#x} no src", addr);
+      emitUndef(*dst, addr, out);
+      emitArithFlags(addr, out, tmp);
+      return;
+    }
+    src = *srcReg;
+  }
+
+  // Everything is read before anything is written: `adc rax, rax` and the
+  // carry flag itself are both inputs and outputs.
+  auto lhs = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, lhs, {*dst}, addr});
+  auto rhs = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, rhs, {src}, addr});
+  auto carryIn = newTemp(tmp, w);
+  out.append({w == 8 ? ignil::Opcode::COPY : ignil::Opcode::ZEXT,
+              carryIn,
+              {regCF_},
+              addr});
+
+  const ignil::Opcode step = isSbb ? ignil::Opcode::SUB : ignil::Opcode::ADD;
+  auto partial = newTemp(tmp, w);
+  out.append({step, partial, {lhs, rhs}, addr});
+  auto result = newTemp(tmp, w);
+  out.append({step, result, {partial, carryIn}, addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+
+  // The carry (borrow) out of either of the two steps. At most one of them can
+  // carry, so OR is exact.
+  FlagSetter carryOut = [this, lhs, rhs, carryIn, partial, result, isSbb,
+                         addr](ignil::Block &block, std::uint32_t &t) {
+    auto first = newTemp(t, 1);
+    auto second = newTemp(t, 1);
+    if (isSbb) {
+      block.append({ignil::Opcode::ULT, first, {lhs, rhs}, addr});
+      block.append({ignil::Opcode::ULT, second, {partial, carryIn}, addr});
+    } else {
+      block.append({ignil::Opcode::ULT, first, {partial, lhs}, addr});
+      block.append({ignil::Opcode::ULT, second, {result, partial}, addr});
+    }
+    auto carry = newTemp(t, 1);
+    block.append({ignil::Opcode::OR, carry, {first, second}, addr});
+    block.append({ignil::Opcode::COPY, regCF_, {carry}, addr});
+  };
+
+  // OF and AF are the plain ADD / SUB rules applied to the final result: both
+  // are functions of the operand and result sign (or nibble) bits only, which
+  // is where a carry-in ends up.
+  emitArithFlags(addr, out, tmp,
+                 {
+                         {X86Flag::CF, carryOut},
+                         {X86Flag::PF, pfParity(result, addr)},
+                         {X86Flag::AF, afNibbleCarry(lhs, rhs, result, addr)},
+                         {X86Flag::ZF, zfEqZero(result, addr)},
+                         {X86Flag::SF, sfSignBit(result, addr)},
+                         {X86Flag::OF, isSbb ? ofSubOverflow(lhs, rhs, result, addr)
+                                             : ofAddOverflow(lhs, rhs, result, addr)},
+                 });
+}
+
+void dragon::x86::X86IGNILLifter::liftMulDiv(const llvm::MCInst &mc,
+                                             std::uint64_t addr,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp,
+                                             MulDivForm form) const {
+  using Kind = MulDivForm::Kind;
+  using ignil::Opcode;
+  const ignil::Width w = form.width;
+  const bool isSigned = form.kind == Kind::Imul || form.kind == Kind::Idiv;
+  const bool isDivide = form.kind == Kind::Div || form.kind == Kind::Idiv;
+
+  // The accumulator pair for this width: result low half / quotient, and
+  // result high half / remainder. The 8-bit forms use AX = AH:AL.
+  const ignil::Reg low = w == 8 ? regAL_ : w == 16 ? regAX_ : w == 32 ? regEAX_ : regRAX_;
+  const ignil::Reg high = w == 8 ? regAH_ : w == 16 ? regDX_ : w == 32 ? regEDX_ : regRDX_;
+
+  auto operand = toReg(mc.getOperand(0).getReg());
+  if (!operand || low.width == 0 || high.width == 0) {
+    logger_.log("Error liftMulDiv in addr {:#x} no operand", addr);
+    emitUndef(low, addr, out);
+    emitUndef(high, addr, out);
+    emitArithFlags(addr, out, tmp);
+    out.noteUnlifted(addr);
+    return;
+  }
+
+  auto binary = [&](Opcode op, ignil::Width width, ignil::Value a, ignil::Value b) {
+    auto t = newTemp(tmp, width);
+    out.append({op, t, {a, b}, addr});
+    return t;
+  };
+  auto unary = [&](Opcode op, ignil::Width width, ignil::Value a) {
+    auto t = newTemp(tmp, width);
+    out.append({op, t, {a}, addr});
+    return t;
+  };
+  const Opcode extend = isSigned ? Opcode::SEXT : Opcode::ZEXT;
+
+  // Read every input first: the operand may be the accumulator itself.
+  auto src = unary(Opcode::COPY, w, *operand);
+  auto acc = unary(Opcode::COPY, w, low);
+
+  if (isDivide) {
+    if (w == 64) {
+      // RDX:RAX is a 128-bit dividend, which IGNIL has no width for. Guessing
+      // "RDX is zero" would be right most of the time and silently wrong the
+      // rest, so the results are honestly unknown and the block says so.
+      emitUndef(low, addr, out);
+      emitUndef(high, addr, out);
+      emitArithFlags(addr, out, tmp);
+      out.noteUnlifted(addr);
+      return;
+    }
+    const ignil::Width wide = static_cast<ignil::Width>(2 * w);
+    ignil::Temp dividend = newTemp(tmp, wide);
+    if (w == 8) {
+      out.append({Opcode::COPY, dividend, {regAX_}, addr});
+    } else {
+      auto highWide = unary(Opcode::ZEXT, wide, high);
+      auto shifted = binary(Opcode::SHL, wide, highWide, ignil::Const{w, 8});
+      auto lowWide = unary(Opcode::ZEXT, wide, acc);
+      out.append({Opcode::OR, dividend, {shifted, lowWide}, addr});
+    }
+    auto divisor = unary(extend, wide, src);
+    auto quotient = binary(isSigned ? Opcode::SDIV : Opcode::UDIV, wide, dividend, divisor);
+    auto remainder = binary(isSigned ? Opcode::SMOD : Opcode::UMOD, wide, dividend, divisor);
+    auto quotientLow = unary(Opcode::TRUNC, w, quotient);
+    auto remainderLow = unary(Opcode::TRUNC, w, remainder);
+    out.append({Opcode::COPY, low, {quotientLow}, addr});
+    out.append({Opcode::COPY, high, {remainderLow}, addr});
+    emitArithFlags(addr, out, tmp); // all six are undefined after a divide
+    return;
+  }
+
+  ignil::Temp lowHalf = newTemp(tmp, w);
+  ignil::Temp highHalf = newTemp(tmp, w);
+  if (w < 64) {
+    const ignil::Width wide = static_cast<ignil::Width>(2 * w);
+    auto product = binary(Opcode::MUL, wide, unary(extend, wide, acc), unary(extend, wide, src));
+    out.append({Opcode::TRUNC, lowHalf, {product}, addr});
+    auto shifted = binary(Opcode::SHR, wide, product, ignil::Const{w, 8});
+    out.append({Opcode::TRUNC, highHalf, {shifted}, addr});
+  } else {
+    // 64 x 64 -> 128 from 32-bit partial products.
+    const ignil::Const mask{0xFFFFFFFFull, 64};
+    const ignil::Const thirtyTwo{32, 8};
+    auto aLow = binary(Opcode::AND, 64, acc, mask);
+    auto aHigh = binary(Opcode::SHR, 64, acc, thirtyTwo);
+    auto bLow = binary(Opcode::AND, 64, src, mask);
+    auto bHigh = binary(Opcode::SHR, 64, src, thirtyTwo);
+    auto ll = binary(Opcode::MUL, 64, aLow, bLow);
+    auto lh = binary(Opcode::MUL, 64, aLow, bHigh);
+    auto hl = binary(Opcode::MUL, 64, aHigh, bLow);
+    auto hh = binary(Opcode::MUL, 64, aHigh, bHigh);
+    auto middle = binary(Opcode::ADD, 64,
+                         binary(Opcode::ADD, 64, binary(Opcode::SHR, 64, ll, thirtyTwo),
+                                binary(Opcode::AND, 64, lh, mask)),
+                         binary(Opcode::AND, 64, hl, mask));
+    auto unsignedHigh = binary(
+            Opcode::ADD, 64,
+            binary(Opcode::ADD, 64, hh, binary(Opcode::SHR, 64, lh, thirtyTwo)),
+            binary(Opcode::ADD, 64, binary(Opcode::SHR, 64, hl, thirtyTwo),
+                   binary(Opcode::SHR, 64, middle, thirtyTwo)));
+    out.append({Opcode::MUL, lowHalf, {acc, src}, addr});
+    if (isSigned) {
+      // signed high = unsigned high - (a < 0 ? b : 0) - (b < 0 ? a : 0)
+      const ignil::Const sixtyThree{63, 8};
+      auto aNegative = binary(Opcode::SAR, 64, acc, sixtyThree);
+      auto bNegative = binary(Opcode::SAR, 64, src, sixtyThree);
+      auto corrected = binary(Opcode::SUB, 64,
+                              binary(Opcode::SUB, 64, unsignedHigh,
+                                     binary(Opcode::AND, 64, aNegative, src)),
+                              binary(Opcode::AND, 64, bNegative, acc));
+      out.append({Opcode::COPY, highHalf, {corrected}, addr});
+    } else {
+      out.append({Opcode::COPY, highHalf, {unsignedHigh}, addr});
+    }
+  }
+  out.append({Opcode::COPY, low, {lowHalf}, addr});
+  out.append({Opcode::COPY, high, {highHalf}, addr});
+
+  // CF = OF = "the high half is significant": non-zero for MUL, not the sign
+  // extension of the low half for IMUL. SF, ZF, AF and PF are undefined.
+  FlagSetter significant = [this, lowHalf, highHalf, isSigned, w,
+                            addr](ignil::Block &block, std::uint32_t &t) {
+    ignil::Value expected = ignil::Const{0, w};
+    if (isSigned) {
+      auto sign = newTemp(t, w);
+      block.append({ignil::Opcode::SAR, sign,
+                    {lowHalf, ignil::Const{static_cast<std::uint64_t>(w - 1), 8}}, addr});
+      expected = sign;
+    }
+    auto flag = newTemp(t, 1);
+    block.append({ignil::Opcode::NEQ, flag, {highHalf, expected}, addr});
+    block.append({ignil::Opcode::COPY, regCF_, {flag}, addr});
+    block.append({ignil::Opcode::COPY, regOF_, {flag}, addr});
+  };
+  emitArithFlags(addr, out, tmp,
+                 {{X86Flag::CF, significant},
+                  {X86Flag::OF, [](ignil::Block &, std::uint32_t &) {}}});
+}
+
+void dragon::x86::X86IGNILLifter::liftBt(const llvm::MCInst &mc,
+                                         std::uint64_t addr, ignil::Block &out,
+                                         std::uint32_t &tmp) const {
+  // op[0]=value(reg), op[1]=bit index(reg or imm8)
+  auto value = toReg(mc.getOperand(0).getReg());
+  if (!value) {
+    logger_.log("Error liftBt in addr {:#x} no value", addr);
+    emitUndef(regCF_, addr, out);
+    return;
+  }
+  const ignil::Width w = value->width;
+
+  // The index wraps at the operand width for the register forms.
+  auto index = newTemp(tmp, w);
+  const auto &indexOp = mc.getOperand(1);
+  if (indexOp.isImm()) {
+    out.append({ignil::Opcode::COPY,
+                index,
+                {ignil::Const{static_cast<std::uint64_t>(indexOp.getImm()) %
+                                      w,
+                              w}},
+                addr});
+  } else {
+    auto indexReg = toReg(indexOp.getReg());
+    if (!indexReg) {
+      logger_.log("Error liftBt in addr {:#x} no index", addr);
+      emitUndef(regCF_, addr, out);
+      return;
+    }
+    out.append({ignil::Opcode::AND,
+                index,
+                {*indexReg, ignil::Const{static_cast<std::uint64_t>(w) - 1, w}},
+                addr});
+  }
+
+  auto shifted = newTemp(tmp, w);
+  out.append({ignil::Opcode::SHR, shifted, {*value, index}, addr});
+  auto bit = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND, bit, {shifted, ignil::Const{1, w}}, addr});
+  auto carry = newTemp(tmp, 8);
+  out.append({ignil::Opcode::TRUNC, carry, {bit}, addr});
+  out.append({ignil::Opcode::COPY, regCF_, {ignil::Value{carry}}, addr});
 }
 
 void dragon::x86::X86IGNILLifter::liftCarryOp(std::uint64_t addr,

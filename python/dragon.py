@@ -590,6 +590,10 @@ class IGNILOpcode:
     # they'd read more naturally - matches dragon_c.h's dragon_ignil_opcode_t.
     FADD = 36; FSUB = 37; FMUL = 38; FDIV = 39
     SITOFP = 40; FPTOSI = 41
+    # An instruction whose result IGNIL cannot express but which is still a
+    # determinate value (CPUID, RDTSC): see Op::aux for the kind and which
+    # of the instruction's results the op defines.
+    OPAQUE = 42
 
     @staticmethod
     def name(opcode_int):
@@ -659,6 +663,23 @@ class IGNILBlock:
         )
         lib.dragon_ignil_block_each_op(self._ptr, cb, ffi.NULL)
         return result
+
+    def unlifted(self):
+        """Machine addresses of the instructions the lifter had no semantics
+        for, in order.
+
+        Their register and flag results are UNDEF in the block - so nothing
+        downstream is silently wrong - but an UNDEF that later dies is
+        invisible, and an instruction whose only effect is a memory write
+        leaves no op at all. Check this when the block has to be a complete
+        account of the code, e.g. before trusting a symbolic run of it.
+        simplify() and dead_store_eliminate() carry the list over."""
+        count = int(lib.dragon_ignil_block_unlifted(self._ptr, ffi.NULL, 0))
+        if count == 0:
+            return []
+        buf = ffi.new('uint64_t[]', count)
+        lib.dragon_ignil_block_unlifted(self._ptr, buf, count)
+        return [int(buf[i]) for i in range(count)]
 
     def simplify(self, max_iterations=0):
         """Peephole-simplify this block to a fixed point: constant
@@ -1478,6 +1499,37 @@ class SymExpr:
         finally:
             lib.dragon_cstr_free(raw)
 
+    def to_smt2(self):
+        """A complete SMT-LIB 2 script, declarations included, asserting
+        ``(= |dragon!result| <this>)`` for a bitvector or the expression
+        itself for a boolean. Another Z3 binding can parse it back into a term
+        without being told what the free variables are; see to_z3()."""
+        raw = lib.dragon_symexpr_to_smt2(self._handle())
+        try:
+            return ffi.string(raw).decode()
+        finally:
+            lib.dragon_cstr_free(raw)
+
+    def to_z3(self, ctx=None):
+        """This expression as a z3py term (needs the z3-solver package)."""
+        import z3
+        formula = z3.parse_smt2_string(self.to_smt2(), ctx=ctx)[0]
+        if self.is_bool:
+            return formula
+        # `(= |dragon!result| e)`: take whichever side is not the marker.
+        a, b = formula.arg(0), formula.arg(1)
+        marker = z3.is_const(a) and a.decl().name() == 'dragon!result'
+        return b if marker else a
+
+    def as_int(self):
+        """The value if the expression folds to a literal of at most 64 bits,
+        else None. No solver involved - see SymbolicExecutor.evaluate for the
+        'unique under the path constraints' question."""
+        out = ffi.new('uint64_t*')
+        if not lib.dragon_symexpr_as_u64(self._handle(), out):
+            return None
+        return int(out[0])
+
     def __str__(self):
         return self.to_string()
 
@@ -1577,6 +1629,27 @@ class SymWarning:
         return 'SymWarning(0x%x: %s)' % (self.address, self.message)
 
 
+class UnresolvedAccess:
+    """A LOAD or STORE whose address had too many satisfying values to expand.
+
+    The load produced a fresh variable and the store was dropped, each with a
+    warning. `address` is the address expression; `value` is what was stored,
+    or the variable standing in for what was loaded."""
+
+    __slots__ = ('is_store', 'op_address', 'width', 'address', 'value')
+
+    def __init__(self, is_store, op_address, width, address, value):
+        self.is_store = is_store
+        self.op_address = op_address
+        self.width = width
+        self.address = address
+        self.value = value
+
+    def __repr__(self):
+        return '%s(i%d @0x%x)' % ('UnresolvedStore' if self.is_store
+                                  else 'UnresolvedLoad', self.width, self.op_address)
+
+
 class RunResult:
     """What one SymbolicExecutor.run() did."""
 
@@ -1609,6 +1682,17 @@ class RunResult:
             self.successors.append(Successor(
                 int(addr[0]), bool(taken[0]),
                 SymExpr._own(cond, owner) if cond != ffi.NULL else None))
+
+        self.unresolved = []
+        is_store = ffi.new('int*'); op_addr = ffi.new('uint64_t*')
+        width = ffi.new('uint8_t*')
+        for i in range(int(lib.dragon_symrun_unresolved_count(ptr))):
+            if not lib.dragon_symrun_unresolved(ptr, i, is_store, op_addr, width):
+                continue
+            self.unresolved.append(UnresolvedAccess(
+                bool(is_store[0]), int(op_addr[0]), int(width[0]),
+                SymExpr._own(lib.dragon_symrun_unresolved_address(ptr, i), owner),
+                SymExpr._own(lib.dragon_symrun_unresolved_value(ptr, i), owner)))
 
         self.warnings = []
         for i in range(int(lib.dragon_symrun_warning_count(ptr))):
@@ -1684,6 +1768,117 @@ class Solution:
         return 'Solution(%d symbols)' % len(self._values)
 
 
+class SymState:
+    """Owned snapshot of an executor's register, memory and constraint state.
+
+    Copying the state is much cheaper than rebuilding it, so an analysis that
+    runs many blocks from the same seeded machine should seed once and rewind:
+
+        exec = SymbolicExecutor()
+        exec.symbolize_memory(0x4000, 16, 'input')
+        exec.set_register(x86.RDI, 0x4000)
+        seeded = exec.snapshot()
+
+        for block in blocks:
+            exec.restore(seeded)
+            exec.run(block)
+
+    The snapshot keeps its executor alive on its own, so it stays valid even
+    if the executor goes out of scope first.
+    """
+
+    def __init__(self, ptr, owner):
+        self._ptr = ptr
+        self._owner = owner   # keeps the executor alive for our z3 handles
+
+    def _release(self):
+        """Free the snapshot. Idempotent."""
+        if getattr(self, '_ptr', None):
+            lib.dragon_symstate_destroy(self._ptr)
+            self._ptr = None
+
+    def __del__(self):
+        self._release()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self._release()
+
+    def _handle(self):
+        if not getattr(self, '_ptr', None):
+            raise RuntimeError('snapshot has been released')
+        return self._ptr
+
+    def merge(self, incoming, tag):
+        """Join the snapshot `incoming` into this one: every register or memory
+        byte the two disagree on becomes a fresh variable here, named after
+        `tag`. Returns the symbolised locations as a list of StateDelta whose
+        `value` is the new variable; an empty list means `incoming` added
+        nothing - the fixed-point test of a worklist exploration::
+
+            changed = entry_state[node].merge(exec.snapshot(), tag=node_name)
+            if changed:
+                worklist.append(node)
+
+        Bytes an earlier merge under the same tag already symbolised are left
+        alone, so merging into one snapshot repeatedly converges."""
+        ptr = lib.dragon_symstate_merge(self._handle(), incoming._handle(),
+                                        tag.encode())
+        if ptr == ffi.NULL:
+            raise RuntimeError('could not merge those snapshots')
+        return _read_diff(ptr, self._owner)
+
+
+class StateDelta:
+    """One location whose value differs between two states.
+
+    `kind` is 'reg' or 'mem'. For a register, `key` is the IGNIL
+    register-space byte offset (the first element of the descriptors in the
+    x86 / arm classes); for memory it is the address. `width` is in bits, and
+    `value` is the SymExpr the location holds now.
+    """
+
+    REGISTER = 0
+    MEMORY = 1
+
+    __slots__ = ('kind', 'key', 'width', 'value')
+
+    def __init__(self, kind, key, width, value):
+        self.kind = kind
+        self.key = key
+        self.width = width
+        self.value = value
+
+    @property
+    def is_register(self):
+        return self.kind == 'reg'
+
+    def __repr__(self):
+        where = f'reg[{self.key:#x}]' if self.is_register else f'mem[{self.key:#x}]'
+        return f'StateDelta({where}:i{self.width} = {self.value})'
+
+
+def _read_diff(ptr, owner):
+    """Drain and free a dragon_symdiff_t into a list of StateDelta."""
+    try:
+        kind = ffi.new('int*')
+        key = ffi.new('uint64_t*')
+        width = ffi.new('uint8_t*')
+        out = []
+        for i in range(int(lib.dragon_symdiff_count(ptr))):
+            if not lib.dragon_symdiff_entry(ptr, i, kind, key, width):
+                continue
+            value = SymExpr._own(lib.dragon_symdiff_value(ptr, i), owner)
+            out.append(StateDelta(
+                'reg' if kind[0] == StateDelta.REGISTER else 'mem',
+                int(key[0]), int(width[0]), value))
+        return out
+    finally:
+        lib.dragon_symdiff_destroy(ptr)
+
+
 class SymbolicExecutor:
     """Symbolic execution of IGNIL blocks over Z3 bitvectors.
 
@@ -1756,6 +1951,44 @@ class SymbolicExecutor:
         """Drop all register, memory and constraint state; keep the options."""
         lib.dragon_symexec_reset(self._handle())
 
+    # -- snapshots and diffing -------------------------------------------------
+
+    def snapshot(self):
+        """Copy the current register, memory and constraint state.
+
+        Pair with restore() to run many blocks from one seeded machine instead
+        of building a fresh executor per block."""
+        ptr = lib.dragon_symexec_snapshot(self._handle())
+        if ptr == ffi.NULL:
+            raise RuntimeError('could not snapshot the executor state')
+        return SymState(ptr, self)
+
+    def restore(self, state):
+        """Replace the state wholesale with a snapshot taken from this
+        executor."""
+        lib.dragon_symexec_restore(self._handle(), state._handle())
+
+    def diff(self, before):
+        """Every register and memory location whose value differs from the
+        snapshot `before`, as a list of StateDelta.
+
+        This is the batch form of reading every candidate location back and
+        comparing it to what it held: one call plus one expression per location
+        that actually changed, rather than a read_register/read_memory per
+        location. Runs of bytes that came from a single written value are
+        reported as that one value, so a 64-bit store is one 64-bit delta and
+        not eight byte-sized ones::
+
+            seeded = exec.snapshot()
+            exec.run(block)
+            for d in exec.diff(seeded):
+                print(d.kind, hex(d.key), d.width, d.value)
+        """
+        ptr = lib.dragon_symexec_diff(self._handle(), before._handle())
+        if ptr == ffi.NULL:
+            raise RuntimeError('could not diff against that snapshot')
+        return _read_diff(ptr, self)
+
     # -- machine setup ---------------------------------------------------------
 
     @staticmethod
@@ -1796,6 +2029,45 @@ class SymbolicExecutor:
         """Constrain the rest of the run — a precondition on an input, or a
         fact recovered from a trace."""
         lib.dragon_symexec_assume(self._handle(), condition._handle())
+
+    def write_register(self, reg, expr):
+        """Give a register an expression rather than a host integer."""
+        offset, width = self._reg(reg)
+        lib.dragon_symexec_write_register(self._handle(), offset, width,
+                                          expr._handle())
+
+    def write_memory(self, address, expr):
+        """Store an expression little-endian at `address`, as many bytes as
+        it is wide."""
+        lib.dragon_symexec_write_memory(self._handle(), address, expr._handle())
+
+    def set_fresh_tag(self, tag):
+        """Suffix for the variables run() invents for loads it cannot resolve.
+
+        They are named after the op's address and position in the run, so
+        running one block in two contexts hands out the same names - and two
+        loads that may read different memory become one variable. Set a tag per
+        context to keep them apart; '' restores the untagged names."""
+        lib.dragon_symexec_set_fresh_tag(self._handle(), (tag or '').encode())
+
+    def concrete_register(self, reg):
+        """The register's value if it is a literal, else None. The cheap form
+        of evaluate(read_register(reg)) for a register expected to be
+        concrete: no expression handle and no solver."""
+        offset, width = self._reg(reg)
+        out = ffi.new('uint64_t*')
+        if not lib.dragon_symexec_concrete_register(self._handle(), offset,
+                                                    width, out):
+            return None
+        return int(out[0])
+
+    def concrete_memory(self, address, width):
+        """`width` bits at `address` if they are a literal, else None."""
+        out = ffi.new('uint64_t*')
+        if not lib.dragon_symexec_concrete_memory(self._handle(), address,
+                                                  width, out):
+            return None
+        return int(out[0])
 
     # -- expressions -----------------------------------------------------------
 

@@ -81,3 +81,5 @@ __pycache__/
 .venv/
 # personal, machine-specific CMake paths
 CMakeUserPresets.json
+# Z3 drops this next to whatever ran it when tracing is compiled in
+.z3-trace

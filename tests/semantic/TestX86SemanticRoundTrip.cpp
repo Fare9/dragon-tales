@@ -305,3 +305,211 @@ TEST_CASE("Semantic round-trip - pushfq then popfq preserves the flags",
   maskUnmodeledFlags(actual.regs);
   REQUIRE(expected.regs == actual.regs);
 }
+
+// -----------------------------------------------------------------------
+// Differential sweep: instruction forms that once lifted to nothing (or not
+// at all), each run over edge-case inputs under Unicorn and through the
+// lifter + JIT. IGNIL-shape tests can show ops were emitted; only this shows
+// the carries, the high halves and the remainders are the right numbers.
+// -----------------------------------------------------------------------
+
+namespace {
+
+// Which flags an instruction defines. The rest are documented-undefined (or
+// modelled more strictly than the hardware leaves them) and are not compared.
+enum Flags : unsigned {
+  kCF = 1, kPF = 2, kAF = 4, kZF = 8, kSF = 16, kOF = 32,
+  kNone = 0,
+  kAll = kCF | kPF | kAF | kZF | kSF | kOF,
+  kLogic = kCF | kPF | kZF | kSF | kOF, // AF is undefined after AND/OR/XOR/TEST
+};
+
+struct Inputs {
+  std::uint64_t rax, rbx, rcx, rdx;
+  bool carry;
+};
+
+struct Form {
+  const char *name;
+  std::vector<std::uint8_t> bytes;
+  unsigned flags;
+  std::vector<Inputs> inputs;
+};
+
+const std::vector<Inputs> &arithmeticInputs() {
+  static const std::vector<Inputs> v = [] {
+    const std::uint64_t edge[] = {0,
+                                  1,
+                                  0x7f,
+                                  0x80,
+                                  0xff,
+                                  0x7fffffffull,
+                                  0x80000000ull,
+                                  0xffffffffull,
+                                  0x7fffffffffffffffull,
+                                  0x8000000000000000ull,
+                                  0xffffffffffffffffull,
+                                  0x123456789abcdef0ull};
+    std::vector<Inputs> out;
+    for (std::uint64_t a: edge)
+      for (std::uint64_t b: edge)
+        for (bool c: {false, true})
+          out.push_back({a, b, /*rcx=*/b & 63, /*rdx=*/0x5555aaaa5555aaaaull, c});
+    return out;
+  }();
+  return v;
+}
+
+// Dividends that cannot raise #DE for a divisor in BX/EBX: the high half
+// (DX/EDX) stays well below the divisor.
+const std::vector<Inputs> &divisionInputs() {
+  static const std::vector<Inputs> v = {
+          {100, 7, 0, 0, false},
+          {0xfffffffe, 0xffffffff, 0, 0, false},
+          {0x12345678, 0x1000, 0, 3, false},
+          {0x0305, 0x11, 0, 0, false},
+          {1, 1, 0, 0, true},
+          {0x7ffe, 0x7fff, 0, 0, false},
+          {0, 5, 0, 0, false},
+  };
+  return v;
+}
+
+void sweep(const Form &form) {
+  // push rbp ; mov rbp, rsp ; <instruction> ; pop rbp ; ret
+  std::vector<std::uint8_t> code = {0x55, 0x48, 0x89, 0xe5};
+  code.insert(code.end(), form.bytes.begin(), form.bytes.end());
+  code.push_back(0x5d);
+  code.push_back(0xc3);
+
+  const std::pair<unsigned, std::uint32_t> flagRegs[] = {
+          {kCF, x86off::CF}, {kPF, x86off::PF}, {kAF, x86off::AF},
+          {kZF, x86off::ZF}, {kSF, x86off::SF}, {kOF, x86off::OF}};
+  const std::uint32_t gprs[] = {x86off::RAX, x86off::RCX, x86off::RDX, x86off::RBX,
+                                x86off::RSP, x86off::RBP, x86off::RSI, x86off::RDI};
+
+  for (const Inputs &in: form.inputs) {
+    auto regs = defaultInitialRegs();
+    setReg64(regs, x86off::RAX, in.rax);
+    setReg64(regs, x86off::RBX, in.rbx);
+    setReg64(regs, x86off::RCX, in.rcx);
+    setReg64(regs, x86off::RDX, in.rdx);
+    regs[x86off::CF] = in.carry ? 1 : 0;
+    std::vector<std::uint8_t> mem;
+
+    const auto expected = runUnicorn(code, regs, mem);
+    const auto actual = runLifted(code, regs, mem);
+
+    INFO(form.name << "  rax=0x" << std::hex << in.rax << " rbx=0x" << in.rbx
+                   << " rcx=0x" << in.rcx << " rdx=0x" << in.rdx << " cf=" << in.carry);
+    for (std::uint32_t reg: gprs)
+      REQUIRE(getReg64(actual.regs, reg) == getReg64(expected.regs, reg));
+    for (const auto &[bit, offset]: flagRegs)
+      if (form.flags & bit) {
+        INFO("flag at register offset " << std::dec << offset);
+        REQUIRE(int(actual.regs[offset]) == int(expected.regs[offset]));
+      }
+  }
+}
+
+} // namespace
+
+TEST_CASE("Semantic round-trip - ADC / SBB match the hardware, carries and all",
+          "[semantic][x86_64][vmp]") {
+  const auto &in = arithmeticInputs();
+  for (const Form &form: std::vector<Form>{
+               {"adc rax, rbx", {0x48, 0x11, 0xd8}, kAll, in},
+               {"adc eax, ebx", {0x11, 0xd8}, kAll, in},
+               {"adc ax, bx", {0x66, 0x11, 0xd8}, kAll, in},
+               {"adc al, bl", {0x10, 0xd8}, kAll, in},
+               {"adc rax, rax", {0x48, 0x11, 0xc0}, kAll, in},
+               {"adc rax, 0x7f", {0x48, 0x83, 0xd0, 0x7f}, kAll, in},
+               {"adc eax, 0x80000000 (ADC32i32)", {0x15, 0x00, 0x00, 0x00, 0x80}, kAll, in},
+               {"sbb rax, rbx", {0x48, 0x19, 0xd8}, kAll, in},
+               {"sbb eax, ebx", {0x19, 0xd8}, kAll, in},
+               {"sbb ax, bx", {0x66, 0x19, 0xd8}, kAll, in},
+               {"sbb al, bl", {0x18, 0xd8}, kAll, in},
+               {"sbb rax, rax", {0x48, 0x19, 0xc0}, kAll, in},
+               {"sbb rax, 1", {0x48, 0x83, 0xd8, 0x01}, kAll, in},
+               {"sbb al, 5 (SBB8i8)", {0x1c, 0x05}, kAll, in},
+       })
+    sweep(form);
+}
+
+TEST_CASE("Semantic round-trip - one-operand MUL / IMUL produce both halves",
+          "[semantic][x86_64][vmp]") {
+  const auto &in = arithmeticInputs();
+  for (const Form &form: std::vector<Form>{
+               {"mul rbx", {0x48, 0xf7, 0xe3}, kCF | kOF, in},
+               {"mul ebx", {0xf7, 0xe3}, kCF | kOF, in},
+               {"mul bx", {0x66, 0xf7, 0xe3}, kCF | kOF, in},
+               {"mul bl", {0xf6, 0xe3}, kCF | kOF, in},
+               {"mul rax", {0x48, 0xf7, 0xe0}, kCF | kOF, in},
+               {"mul rdx", {0x48, 0xf7, 0xe2}, kCF | kOF, in},
+               {"imul rbx", {0x48, 0xf7, 0xeb}, kCF | kOF, in},
+               {"imul ebx", {0xf7, 0xeb}, kCF | kOF, in},
+               {"imul bx", {0x66, 0xf7, 0xeb}, kCF | kOF, in},
+               {"imul bl", {0xf6, 0xeb}, kCF | kOF, in},
+       })
+    sweep(form);
+}
+
+TEST_CASE("Semantic round-trip - one-operand DIV / IDIV at 8, 16 and 32 bits",
+          "[semantic][x86_64][vmp]") {
+  const auto &in = divisionInputs();
+  sweep({"div ebx", {0xf7, 0xf3}, kNone, in});
+  sweep({"div bx", {0x66, 0xf7, 0xf3}, kNone, in});
+  sweep({"idiv ebx", {0xf7, 0xfb}, kNone,
+         {{100, 7, 0, 0, false},
+          {0xffffff9c /* -100 */, 7, 0, 0xffffffff, false},
+          {100, 0xfffffff9 /* -7 */, 0, 0, false},
+          {0x12345678, 0x1000, 0, 3, false}}});
+  sweep({"idiv bx", {0x66, 0xf7, 0xfb}, kNone,
+         {{100, 7, 0, 0, false}, {0xff9c /* -100 */, 7, 0, 0xffff, false}}});
+  // AX / BL: the quotient has to fit in AL.
+  sweep({"div bl", {0xf6, 0xf3}, kNone,
+         {{100, 7, 0, 0, false}, {0x0305, 0x11, 0, 0, false}, {0, 5, 0, 0, false}}});
+  sweep({"idiv bl", {0xf6, 0xfb}, kNone,
+         {{100, 7, 0, 0, false}, {0xff9c /* -100 */, 7, 0, 0, false}}});
+}
+
+TEST_CASE("Semantic round-trip - accumulator short forms and BT",
+          "[semantic][x86_64][vmp]") {
+  const auto &in = arithmeticInputs();
+  for (const Form &form: std::vector<Form>{
+               {"sub al, 0x22 (SUB8i8)", {0x2c, 0x22}, kAll, in},
+               {"sub ax, 0xe9ab (SUB16i16)", {0x66, 0x2d, 0xab, 0xe9}, kAll, in},
+               {"add rax, 0x7fffffff (ADD64i32)", {0x48, 0x05, 0xff, 0xff, 0xff, 0x7f}, kAll, in},
+               {"cmp eax, 0x80000000 (CMP32i32)", {0x3d, 0x00, 0x00, 0x00, 0x80}, kAll, in},
+               {"or al, 2 (OR8i8)", {0x0c, 0x02}, kLogic, in},
+               {"xor eax, 0x11223344 (XOR32i32)", {0x35, 0x44, 0x33, 0x22, 0x11}, kLogic, in},
+               {"and rax, -16 (AND64i32)", {0x48, 0x25, 0xf0, 0xff, 0xff, 0xff}, kLogic, in},
+               {"test al, 5 (TEST8i8)", {0xa8, 0x05}, kLogic, in},
+               {"bt rax, 63", {0x48, 0x0f, 0xba, 0xe0, 0x3f}, kCF, in},
+               {"bt eax, ecx", {0x0f, 0xa3, 0xc8}, kCF, in},
+               {"bt ax, cx", {0x66, 0x0f, 0xa3, 0xc8}, kCF, in},
+       })
+    sweep(form);
+}
+
+TEST_CASE("Semantic round-trip - SETcc agrees with the hardware for all sixteen "
+          "conditions",
+          "[semantic][x86_64][vmp]") {
+  // cmp al, bl ; setcc cl   - an 8-bit compare reaches every flag, PF and OF
+  // included, with small operands. The condition is the low nibble of the
+  // second opcode byte: 0F 90+cc /r.
+  const char *names[16] = {"seto", "setno", "setb",  "setae", "sete", "setne",
+                           "setbe", "seta", "sets",  "setns", "setp", "setnp",
+                           "setl",  "setge", "setle", "setg"};
+  std::vector<Inputs> inputs;
+  for (std::uint64_t a: {0x00ull, 0x01ull, 0x03ull, 0x7full, 0x80ull, 0x81ull, 0xffull})
+    for (std::uint64_t b: {0x00ull, 0x01ull, 0x02ull, 0x7full, 0x80ull, 0xffull})
+      inputs.push_back({a, b, /*rcx=*/0xdeadbeefcafef00dull, 0, false});
+
+  for (std::uint8_t cc = 0; cc < 16; ++cc)
+    sweep({names[cc],
+           {0x38, 0xd8,                                       // cmp al, bl
+            0x0f, static_cast<std::uint8_t>(0x90 + cc), 0xc1}, // setcc cl
+           kAll,
+           inputs});
+}

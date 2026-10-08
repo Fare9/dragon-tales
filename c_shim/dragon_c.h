@@ -241,6 +241,7 @@
       DRAGON_IGNIL_FDIV   = 39,
       DRAGON_IGNIL_SITOFP = 40,
       DRAGON_IGNIL_FPTOSI = 41,
+      DRAGON_IGNIL_OPAQUE = 42,
   } dragon_ignil_opcode_t;
 
   // Returns a static string for the opcode mnemonic (e.g. "ADD", "COPY").
@@ -271,6 +272,15 @@
       const dragon_ignil_block_t* b,
       void (*cb)(uint64_t op_addr, dragon_ignil_opcode_t opcode, size_t index, void* user),
       void* user);
+
+  // Machine addresses of the instructions the lifter had no semantics for.
+  // Their register and flag results are UNDEF in the block, but an UNDEF that
+  // later dies is invisible and a memory-only effect leaves no op at all, so a
+  // consumer that needs the block to be a complete account of the code checks
+  // this list. Writes at most `cap` addresses to `out` (which may be NULL when
+  // cap is 0) and returns the full count.
+  size_t dragon_ignil_block_unlifted(const dragon_ignil_block_t* b,
+                                     uint64_t* out, size_t cap);
 
   // -- Disassembler: trace lifting -------------------------------------------------
 
@@ -588,6 +598,11 @@
   typedef struct dragon_symrun dragon_symrun_t;
   // Owned handle on a satisfying assignment.
   typedef struct dragon_solution dragon_solution_t;
+  // Owned handle on a snapshot of an executor's register/memory/constraint
+  // state.
+  typedef struct dragon_symstate dragon_symstate_t;
+  // Owned handle on the list of locations two states disagree on.
+  typedef struct dragon_symdiff dragon_symdiff_t;
 
   // Mirror of ignil::ExecStatus.
   typedef enum {
@@ -626,6 +641,30 @@
   // Drop all register/memory/constraint state; keeps the options.
   void              dragon_symexec_reset(dragon_symexec_t* e);
 
+  // -- state snapshots. Copying the state is far cheaper than rebuilding it,
+  // so an analysis that runs many blocks from the same seeded machine should
+  // seed once, snapshot, and restore before each block rather than creating a
+  // fresh executor every time. A snapshot keeps its executor alive by itself,
+  // exactly as an expression handle does.
+  dragon_symstate_t* dragon_symexec_snapshot(const dragon_symexec_t* e);
+  // Replaces the executor's state wholesale. `s` must come from this executor.
+  void               dragon_symexec_restore(dragon_symexec_t* e,
+                                            const dragon_symstate_t* s);
+  void               dragon_symstate_destroy(dragon_symstate_t* s);
+
+  // Joins `incoming` into the snapshot `into`: every register or memory byte
+  // the two disagree on becomes, in `into`, a fresh variable named after `tag`
+  // (`top@<tag>!m<addr>:<bits>` / `top@<tag>!r<offset>:<bits>`). Returns the
+  // locations that were symbolised, as a diff list whose values are the new
+  // variables; an empty list means `incoming` added nothing, which is the
+  // fixed-point test of a worklist exploration. Bytes an earlier merge under
+  // the same tag already symbolised are left alone, so repeated merges into
+  // one snapshot converge. Both snapshots must come from the same executor.
+  // Returns NULL on a NULL argument.
+  dragon_symdiff_t*  dragon_symstate_merge(dragon_symstate_t* into,
+                                           const dragon_symstate_t* incoming,
+                                           const char* tag);
+
   // -- machine setup. Registers are named by their IGNIL register-space byte
   // offset and bit width - the values in x86IGNILRegs.hpp / armIGNILRegs.hpp.
   void dragon_symexec_set_register(dragon_symexec_t* e, uint32_t offset,
@@ -645,6 +684,30 @@
   // Constrains the rest of the run. `c` must be a boolean expression.
   void dragon_symexec_assume(dragon_symexec_t* e, const dragon_symexpr_t* c);
 
+  // Writes an expression rather than a host integer. The memory form stores
+  // little-endian, as many bytes as the expression is wide. `x` must be a
+  // bitvector.
+  void dragon_symexec_write_register(dragon_symexec_t* e, uint32_t offset,
+                                     uint8_t width, const dragon_symexpr_t* x);
+  void dragon_symexec_write_memory(dragon_symexec_t* e, uint64_t address,
+                                   const dragon_symexpr_t* x);
+
+  // Suffix for the variables a run invents for loads it could not resolve.
+  // They are named after the op's address and position in the run, so running
+  // one block in two contexts hands out the same names; set a tag per context
+  // to keep them apart. NULL or "" restores the untagged names.
+  void dragon_symexec_set_fresh_tag(dragon_symexec_t* e, const char* tag);
+
+  // The register / memory value as a host integer, when it is a literal. These
+  // are the cheap form of read + evaluate for a location expected to be
+  // concrete: no expression handle, no solver. Return 0 (and leave *out alone)
+  // when the value is symbolic or wider than 64 bits.
+  int dragon_symexec_concrete_register(const dragon_symexec_t* e,
+                                       uint32_t offset, uint8_t width,
+                                       uint64_t* out);
+  int dragon_symexec_concrete_memory(const dragon_symexec_t* e, uint64_t address,
+                                     uint8_t width, uint64_t* out);
+
   // -- expressions. Every one of these returns an owned handle.
   dragon_symexpr_t* dragon_symexec_const(const dragon_symexec_t* e,
                                          uint64_t value, uint8_t width);
@@ -653,10 +716,35 @@
   dragon_symexpr_t* dragon_symexec_read_memory(const dragon_symexec_t* e,
                                                uint64_t address, uint8_t width);
 
+  // -- state diffing. Everything whose value differs from the snapshot
+  // `before`, coalesced into the widest runs that came from one written value.
+  // This is the batch form of reading every candidate location back and
+  // comparing: one call, plus one expression handle per location that actually
+  // changed, instead of a read per location.
+  dragon_symdiff_t* dragon_symexec_diff(const dragon_symexec_t* e,
+                                        const dragon_symstate_t* before);
+  void              dragon_symdiff_destroy(dragon_symdiff_t* d);
+  size_t            dragon_symdiff_count(const dragon_symdiff_t* d);
+  // Describes entry `index`. `kind` is 0 for a register (`key` is an IGNIL
+  // register-space byte offset) and 1 for memory (`key` is an address);
+  // `width` is the run's width in bits. Returns 0 on a bad index.
+  int               dragon_symdiff_entry(const dragon_symdiff_t* d, size_t index,
+                                         int* kind, uint64_t* key, uint8_t* width);
+  // Owned expression handle for entry `index`, or NULL.
+  dragon_symexpr_t* dragon_symdiff_value(const dragon_symdiff_t* d, size_t index);
+
   void      dragon_symexpr_destroy(dragon_symexpr_t* x);
   // Caller must free with dragon_cstr_free.
   char*     dragon_symexpr_to_string(const dragon_symexpr_t* x);
   // Bit width of a bitvector expression; 0 for a boolean.
+  // A complete SMT-LIB 2 script - declarations included - asserting
+  // `(= |dragon!result| x)` for a bitvector, or `x` itself for a boolean. This
+  // is the form another Z3 binding can parse back into a term without being
+  // told what the free variables are. Caller must free with dragon_cstr_free.
+  char*     dragon_symexpr_to_smt2(const dragon_symexpr_t* x);
+  // Writes *out and returns 1 if the expression folds to a literal of at most
+  // 64 bits.
+  int       dragon_symexpr_as_u64(const dragon_symexpr_t* x, uint64_t* out);
   uint8_t   dragon_symexpr_width(const dragon_symexpr_t* x);
   int       dragon_symexpr_is_bool(const dragon_symexpr_t* x);
 
@@ -718,6 +806,24 @@
   // The guard under which that successor is reached. Owned handle.
   dragon_symexpr_t* dragon_symrun_successor_condition(const dragon_symrun_t* r,
                                                       size_t index);
+
+  // -- accesses the run could not resolve: a LOAD or STORE whose address had
+  // too many satisfying values to expand. The LOAD produced a fresh variable
+  // and the STORE was dropped (each with a warning); a caller rebuilding code
+  // from the run needs the access itself.
+  size_t dragon_symrun_unresolved_count(const dragon_symrun_t* r);
+  // Describes entry `index`: whether it is a store, the machine address of the
+  // op, and the access width in bits. Returns 0 on a bad index.
+  int    dragon_symrun_unresolved(const dragon_symrun_t* r, size_t index,
+                                  int* out_is_store, uint64_t* out_op_address,
+                                  uint8_t* out_width);
+  // The address expression of entry `index`. Owned handle.
+  dragon_symexpr_t* dragon_symrun_unresolved_address(const dragon_symrun_t* r,
+                                                     size_t index);
+  // The value stored, or the variable standing in for the value loaded. Owned
+  // handle.
+  dragon_symexpr_t* dragon_symrun_unresolved_value(const dragon_symrun_t* r,
+                                                   size_t index);
 
   size_t dragon_symrun_warning_count(const dragon_symrun_t* r);
   // Caller frees the returned string with dragon_cstr_free.
