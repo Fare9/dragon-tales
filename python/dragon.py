@@ -2143,3 +2143,170 @@ class SymbolicExecutor:
         if ptr == ffi.NULL:
             return None
         return Solution(ptr)
+
+
+# -- Loader --------------------------------------------------------------------
+
+class Format:
+    """Container format a LoadedImage was parsed from."""
+    UNKNOWN = 0
+    ELF = 1
+    PE = 2
+
+
+class SymbolKind:
+    """What a loader Symbol names."""
+    UNKNOWN = 0
+    FUNCTION = 1
+    OBJECT = 2
+    SECTION = 3
+    FILE = 4
+
+
+class Section:
+    """A section of a LoadedImage, placed at its virtual address."""
+
+    def __init__(self, name, address, virtual_size, readable, writable,
+                 executable, data):
+        self.name = name
+        self.address = address
+        self.virtual_size = virtual_size
+        self.readable = readable
+        self.writable = writable
+        self.executable = executable
+        self.data = data  # bytes actually present in the file
+
+    def __repr__(self):
+        perms = ''.join(c if f else '-' for c, f in
+                        zip('rwx', (self.readable, self.writable, self.executable)))
+        return (f'<Section {self.name!r} @0x{self.address:x} '
+                f'size=0x{self.virtual_size:x} {perms}>')
+
+
+class Symbol:
+    """A symbol-table entry of a LoadedImage."""
+
+    def __init__(self, name, address, size, kind, imported, exported):
+        self.name = name
+        self.address = address
+        self.size = size
+        self.kind = kind
+        self.imported = imported
+        self.exported = exported
+
+    def __repr__(self):
+        return (f'<Symbol {self.name!r} @0x{self.address:x} '
+                f'kind={self.kind} imported={self.imported} exported={self.exported}>')
+
+
+class LoadedImage:
+    """An ELF or PE image parsed from a file or bytes.
+
+    Use the classmethods to construct::
+
+        img = dragon.LoadedImage.load_file('a.out')
+        print(hex(img.entry), img.architecture)
+        graph = img.disassemble()
+    """
+
+    def __init__(self, ptr):
+        self._ptr = ptr
+
+    @classmethod
+    def load_file(cls, path):
+        """Load an ELF/PE image from a path. Raises ValueError on failure."""
+        err = ffi.new('char[256]')
+        ptr = lib.dragon_load_file(path.encode(), err, 256)
+        if ptr == ffi.NULL:
+            raise ValueError(ffi.string(err).decode() or 'failed to load image')
+        return cls(ptr)
+
+    @classmethod
+    def load_bytes(cls, data):
+        """Load an ELF/PE image from a bytes object. Raises ValueError on failure."""
+        err = ffi.new('char[256]')
+        ptr = lib.dragon_load_bytes(data, len(data), err, 256)
+        if ptr == ffi.NULL:
+            raise ValueError(ffi.string(err).decode() or 'failed to load image')
+        return cls(ptr)
+
+    def __del__(self):
+        if self._ptr:
+            lib.dragon_loader_destroy(self._ptr)
+            self._ptr = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.__del__()
+
+    @property
+    def format(self):
+        return lib.dragon_loader_format(self._ptr)
+
+    @property
+    def architecture(self):
+        return lib.dragon_loader_architecture(self._ptr)
+
+    @property
+    def is_64bit(self):
+        return bool(lib.dragon_loader_is_64bit(self._ptr))
+
+    @property
+    def image_base(self):
+        return lib.dragon_loader_image_base(self._ptr)
+
+    @property
+    def entry(self):
+        """Entry-point virtual address, or None if the image has none."""
+        if not lib.dragon_loader_has_entry(self._ptr):
+            return None
+        return lib.dragon_loader_entry(self._ptr)
+
+    def sections(self):
+        out = []
+        for i in range(lib.dragon_loader_section_count(self._ptr)):
+            addr = ffi.new('uint64_t*')
+            vsize = ffi.new('uint64_t*')
+            r = ffi.new('int*'); w = ffi.new('int*'); x = ffi.new('int*')
+            name = lib.dragon_loader_section(self._ptr, i, addr, vsize, r, w, x)
+            length = ffi.new('size_t*')
+            data_ptr = lib.dragon_loader_section_bytes(self._ptr, i, length)
+            data = (ffi.buffer(data_ptr, length[0])[:] if data_ptr != ffi.NULL
+                    else b'')
+            out.append(Section(ffi.string(name).decode(), addr[0], vsize[0],
+                               bool(r[0]), bool(w[0]), bool(x[0]), data))
+        return out
+
+    def symbols(self):
+        out = []
+        for i in range(lib.dragon_loader_symbol_count(self._ptr)):
+            addr = ffi.new('uint64_t*')
+            size = ffi.new('uint64_t*')
+            kind = ffi.new('dragon_symbol_kind_t*')
+            imp = ffi.new('int*'); exp = ffi.new('int*')
+            name = lib.dragon_loader_symbol(self._ptr, i, addr, size, kind, imp, exp)
+            out.append(Symbol(ffi.string(name).decode(), addr[0], size[0],
+                              int(kind[0]), bool(imp[0]), bool(exp[0])))
+        return out
+
+    def read_virtual(self, address, size):
+        """Read `size` bytes from the virtual address space, or None if the
+        range is not mapped."""
+        buf = ffi.new('uint8_t[]', size)
+        n = lib.dragon_loader_read_virtual(self._ptr, address, buf, size)
+        if n == 0:
+            return None
+        return ffi.buffer(buf, n)[:]
+
+    def disassemble(self, config=None):
+        """Disassemble every executable section into a populated Graph built
+        for the image's detected architecture."""
+        ptr = lib.dragon_loader_disassemble(
+            self._ptr, config._ptr if config is not None else ffi.NULL)
+        return Graph(ptr)
+
+    def __repr__(self):
+        fmt = {Format.ELF: 'ELF', Format.PE: 'PE'}.get(self.format, 'unknown')
+        return f'<LoadedImage {fmt} arch={self.architecture} entry={self.entry}>'

@@ -15,6 +15,8 @@
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Function.hpp>
 #include <dragon/disassembler/Graph.hpp>
+#include <dragon/loader/ImageDisassembler.hpp>
+#include <dragon/loader/Loader.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/lifters/ignil/IGNILSimplify.hpp>
 #include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
@@ -27,6 +29,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <span>
@@ -60,6 +63,25 @@ static dragon::Architecture to_arch(dragon_architecture_t a) {
       return dragon::Architecture::RISCV64;
     default:
       return dragon::Architecture::Unknown;
+  }
+}
+
+static dragon_architecture_t from_arch(dragon::Architecture a) {
+  switch (a) {
+    case dragon::Architecture::X86_32:
+      return DRAGON_ARCH_X86_32;
+    case dragon::Architecture::X86_64:
+      return DRAGON_ARCH_X86_64;
+    case dragon::Architecture::ARM32:
+      return DRAGON_ARCH_ARM32;
+    case dragon::Architecture::ARM64:
+      return DRAGON_ARCH_ARM64;
+    case dragon::Architecture::RISCV32:
+      return DRAGON_ARCH_RISCV32;
+    case dragon::Architecture::RISCV64:
+      return DRAGON_ARCH_RISCV64;
+    default:
+      return DRAGON_ARCH_UNKNOWN;
   }
 }
 
@@ -271,6 +293,189 @@ dragon_graph_t *dragon_disasm_analyze(dragon_disasm_t *d, const uint8_t *bytes,
     return nullptr;
   auto *g = new dragon::Graph(d->arch, d->config);
   d->disassembler.disassemble({bytes, len}, base_address, *g);
+  return reinterpret_cast<dragon_graph_t *>(g);
+}
+
+// -- Loader
+// ---------------------------------------------------------------
+
+static dragon::loader::LoadedImage *as_loader(dragon_loader_t *l) {
+  return reinterpret_cast<dragon::loader::LoadedImage *>(l);
+}
+static const dragon::loader::LoadedImage *as_loader(const dragon_loader_t *l) {
+  return reinterpret_cast<const dragon::loader::LoadedImage *>(l);
+}
+
+static void set_err(char *err, size_t cap, const std::string &msg) {
+  if (!err || cap == 0)
+    return;
+  size_t n = std::min(cap - 1, msg.size());
+  std::memcpy(err, msg.data(), n);
+  err[n] = '\0';
+}
+
+dragon_loader_t *dragon_load_file(const char *path, char *err, size_t cap) {
+  if (!path) {
+    set_err(err, cap, "null path");
+    return nullptr;
+  }
+  std::string e;
+  auto img = dragon::loader::LoadedImage::loadFile(path, &e);
+  if (!img) {
+    set_err(err, cap, e);
+    return nullptr;
+  }
+  return reinterpret_cast<dragon_loader_t *>(
+      new dragon::loader::LoadedImage(std::move(*img)));
+}
+
+dragon_loader_t *dragon_load_bytes(const uint8_t *bytes, size_t len, char *err,
+                                   size_t cap) {
+  if (!bytes) {
+    set_err(err, cap, "null bytes");
+    return nullptr;
+  }
+  std::string e;
+  auto img = dragon::loader::LoadedImage::loadBytes(
+      std::vector<std::uint8_t>(bytes, bytes + len), &e);
+  if (!img) {
+    set_err(err, cap, e);
+    return nullptr;
+  }
+  return reinterpret_cast<dragon_loader_t *>(
+      new dragon::loader::LoadedImage(std::move(*img)));
+}
+
+void dragon_loader_destroy(dragon_loader_t *l) { delete as_loader(l); }
+
+dragon_format_t dragon_loader_format(const dragon_loader_t *l) {
+  switch (as_loader(l)->format()) {
+    case dragon::loader::Format::ELF:
+      return DRAGON_FORMAT_ELF;
+    case dragon::loader::Format::PE:
+      return DRAGON_FORMAT_PE;
+    default:
+      return DRAGON_FORMAT_UNKNOWN;
+  }
+}
+
+dragon_architecture_t dragon_loader_architecture(const dragon_loader_t *l) {
+  return from_arch(as_loader(l)->architecture());
+}
+
+int dragon_loader_is_64bit(const dragon_loader_t *l) {
+  return as_loader(l)->is64Bit() ? 1 : 0;
+}
+
+int dragon_loader_has_entry(const dragon_loader_t *l) {
+  return as_loader(l)->entryPoint().has_value() ? 1 : 0;
+}
+
+uint64_t dragon_loader_entry(const dragon_loader_t *l) {
+  return as_loader(l)->entryPoint().value_or(0);
+}
+
+uint64_t dragon_loader_image_base(const dragon_loader_t *l) {
+  return as_loader(l)->imageBase();
+}
+
+size_t dragon_loader_section_count(const dragon_loader_t *l) {
+  return as_loader(l)->sections().size();
+}
+
+const char *dragon_loader_section(const dragon_loader_t *l, size_t index,
+                                  uint64_t *out_addr, uint64_t *out_vsize,
+                                  int *out_r, int *out_w, int *out_x) {
+  const auto &secs = as_loader(l)->sections();
+  if (index >= secs.size())
+    return nullptr;
+  const auto &s = secs[index];
+  if (out_addr)
+    *out_addr = s.address;
+  if (out_vsize)
+    *out_vsize = s.virtualSize;
+  if (out_r)
+    *out_r = s.readable ? 1 : 0;
+  if (out_w)
+    *out_w = s.writable ? 1 : 0;
+  if (out_x)
+    *out_x = s.executable ? 1 : 0;
+  return s.name.c_str();
+}
+
+const uint8_t *dragon_loader_section_bytes(const dragon_loader_t *l,
+                                           size_t index, size_t *out_len) {
+  const auto &secs = as_loader(l)->sections();
+  if (index >= secs.size()) {
+    if (out_len)
+      *out_len = 0;
+    return nullptr;
+  }
+  const auto &s = secs[index];
+  if (out_len)
+    *out_len = s.bytes.size();
+  return s.bytes.data();
+}
+
+size_t dragon_loader_symbol_count(const dragon_loader_t *l) {
+  return as_loader(l)->symbols().size();
+}
+
+const char *dragon_loader_symbol(const dragon_loader_t *l, size_t index,
+                                 uint64_t *out_addr, uint64_t *out_size,
+                                 dragon_symbol_kind_t *out_kind,
+                                 int *out_imported, int *out_exported) {
+  const auto &syms = as_loader(l)->symbols();
+  if (index >= syms.size())
+    return nullptr;
+  const auto &s = syms[index];
+  if (out_addr)
+    *out_addr = s.address;
+  if (out_size)
+    *out_size = s.size;
+  if (out_kind) {
+    switch (s.kind) {
+      case dragon::loader::SymbolKind::Function:
+        *out_kind = DRAGON_SYMBOL_FUNCTION;
+        break;
+      case dragon::loader::SymbolKind::Object:
+        *out_kind = DRAGON_SYMBOL_OBJECT;
+        break;
+      case dragon::loader::SymbolKind::Section:
+        *out_kind = DRAGON_SYMBOL_SECTION;
+        break;
+      case dragon::loader::SymbolKind::File:
+        *out_kind = DRAGON_SYMBOL_FILE;
+        break;
+      default:
+        *out_kind = DRAGON_SYMBOL_UNKNOWN;
+        break;
+    }
+  }
+  if (out_imported)
+    *out_imported = s.imported ? 1 : 0;
+  if (out_exported)
+    *out_exported = s.exported ? 1 : 0;
+  return s.name.c_str();
+}
+
+size_t dragon_loader_read_virtual(const dragon_loader_t *l, uint64_t addr,
+                                  uint8_t *out, size_t cap) {
+  if (!out || cap == 0)
+    return 0;
+  auto bytes = as_loader(l)->readVirtual(addr, cap);
+  if (!bytes)
+    return 0;
+  std::memcpy(out, bytes->data(), bytes->size());
+  return bytes->size();
+}
+
+dragon_graph_t *dragon_loader_disassemble(const dragon_loader_t *l,
+                                          const dragon_config_t *config) {
+  dragon::Configuration cfg =
+      config ? config->config : dragon::Configuration{};
+  auto *g = new dragon::Graph(
+      dragon::loader::disassembleImage(*as_loader(l), cfg));
   return reinterpret_cast<dragon_graph_t *>(g);
 }
 
