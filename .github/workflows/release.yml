@@ -16,6 +16,11 @@ on:
 permissions:
   contents: write   # create/upload the release
 
+env:
+  # LLVM version used for the Windows MSVC prebuilt. Overridable via the
+  # workflow_dispatch input; a tag push uses this default.
+  LLVM_WIN_VERSION: ${{ github.event.inputs.llvm_windows_version || '21.1.8' }}
+
 jobs:
   build:
     name: ${{ matrix.name }}
@@ -92,12 +97,21 @@ jobs:
       # ------------------------------------------------------------- Windows
       # The MSVC LLVM 21 prebuilt + vcpkg Z3, exactly as README's Windows
       # section documents. Release config only (the prebuilt ships /MD libs).
-      - name: Windows - fetch LLVM 21
+      # The MSVC LLVM prebuilt is a ~900 MB download; cache the extracted tree
+      # keyed on its version so only the first run (per version) fetches it.
+      - name: Windows - cache LLVM
         if: runner.os == 'Windows'
+        id: llvm-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\llvm-21
+          key: llvm-msvc-x64-${{ env.LLVM_WIN_VERSION }}
+
+      - name: Windows - fetch LLVM 21
+        if: runner.os == 'Windows' && steps.llvm-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          $ver = "${{ github.event.inputs.llvm_windows_version }}"
-          if (-not $ver) { $ver = "21.1.8" }
+          $ver = "${{ env.LLVM_WIN_VERSION }}"
           $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/clang+llvm-$ver-x86_64-pc-windows-msvc.tar.xz"
           Write-Host "Downloading $url"
           curl.exe -L --fail -o llvm.tar.xz $url
