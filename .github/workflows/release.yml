@@ -1,0 +1,158 @@
+name: Release
+
+# Cut a release by pushing a version tag:  git tag v0.1.0 && git push origin v0.1.0
+# Each OS job builds a self-contained SDK archive and attaches it to a DRAFT
+# GitHub release (review the assets, then publish). workflow_dispatch runs the
+# same build for testing without creating a release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      llvm_windows_version:
+        description: 'LLVM version for the Windows prebuilt (clang+llvm-<ver>-x86_64-pc-windows-msvc)'
+        default: '21.1.8'
+
+permissions:
+  contents: write   # create/upload the release
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, name: linux-x64 }
+          - { os: macos-14,     name: macos-arm64 }
+          - { os: windows-2022, name: windows-x64 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME:-dev}" >> "$GITHUB_OUTPUT"
+
+      # --------------------------------------------------------------- Linux
+      # LLVM 21 is not in Ubuntu 24.04's repos, so use the LLVM project's own
+      # apt channel (same as ci.yml). LLVM is statically linked into libdragon,
+      # so only libz3 has to be bundled.
+      - name: Linux - dependencies
+        if: runner.os == 'Linux'
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 21
+          sudo apt-get update
+          sudo apt-get install -y libz3-dev ninja-build
+
+      - name: Linux - build & install
+        if: runner.os == 'Linux'
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR=/usr/lib/llvm-21/cmake \
+            -DDRAGON_USE_Z3=ON -DDRAGON_USE_UNICORN=OFF -DDRAGON_BUILD_TESTS=OFF \
+            -DCMAKE_INSTALL_PREFIX=stage
+          cmake --build build --parallel
+          cmake --install build
+          # Bundle libz3 next to libdragon; the installed RUNPATH ($ORIGIN) finds it.
+          cp -L "$(ldconfig -p | awk '/libz3\.so\.4/{print $NF; exit}')" stage/lib/
+
+      # --------------------------------------------------------------- macOS
+      - name: macOS - dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install llvm@21 z3 ninja || brew install llvm z3 ninja
+
+      - name: macOS - build & install
+        if: runner.os == 'macOS'
+        run: |
+          LLVM_PREFIX="$(brew --prefix llvm@21 2>/dev/null || brew --prefix llvm)"
+          Z3_PREFIX="$(brew --prefix z3)"
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" \
+            -DCMAKE_PREFIX_PATH="$Z3_PREFIX" \
+            -DDRAGON_USE_Z3=ON -DDRAGON_USE_UNICORN=OFF -DDRAGON_BUILD_TESTS=OFF \
+            -DCMAKE_INSTALL_PREFIX=stage
+          cmake --build build --parallel
+          cmake --install build
+          # Bundle libz3 and rewrite libdragon's absolute reference to it so the
+          # install RPATH (@loader_path) resolves it inside the SDK.
+          cp -L "$Z3_PREFIX"/lib/libz3.dylib stage/lib/
+          chmod u+w stage/lib/libz3.dylib
+          z3ref="$(otool -L stage/lib/libdragon.dylib | awk '/libz3/{print $1; exit}')"
+          if [ -n "$z3ref" ]; then
+            install_name_tool -change "$z3ref" "@rpath/libz3.dylib" stage/lib/libdragon.dylib
+          fi
+
+      # ------------------------------------------------------------- Windows
+      # The MSVC LLVM 21 prebuilt + vcpkg Z3, exactly as README's Windows
+      # section documents. Release config only (the prebuilt ships /MD libs).
+      - name: Windows - fetch LLVM 21
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ver = "${{ github.event.inputs.llvm_windows_version }}"
+          if (-not $ver) { $ver = "21.1.8" }
+          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/clang+llvm-$ver-x86_64-pc-windows-msvc.tar.xz"
+          Write-Host "Downloading $url"
+          curl.exe -L --fail -o llvm.tar.xz $url
+          New-Item -ItemType Directory -Force -Path C:\llvm-21 | Out-Null
+          tar -xf llvm.tar.xz -C C:\llvm-21 --strip-components=1
+
+      - name: Windows - install Z3 (vcpkg)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: vcpkg install z3:x64-windows
+
+      - name: Windows - build & install
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DLLVM_DIR=C:/llvm-21/lib/cmake/llvm `
+            -DCMAKE_PREFIX_PATH=$vcpkg `
+            -DDRAGON_USE_Z3=ON -DDRAGON_USE_UNICORN=OFF -DDRAGON_BUILD_TESTS=OFF `
+            -DCMAKE_INSTALL_PREFIX=stage
+          cmake --build build --config Release --parallel
+          cmake --install build --config Release
+          # Bundle the Z3 runtime DLL next to the DLLs in bin/.
+          Copy-Item "$vcpkg/bin/libz3.dll" stage/bin/ -ErrorAction SilentlyContinue
+
+      # ------------------------------------------------------------- package
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          pkg="dragon-${{ steps.ver.outputs.version }}-${{ matrix.name }}"
+          mv stage "$pkg"
+          tar czf "$pkg.tar.gz" "$pkg"
+          echo "ASSET=$pkg.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $pkg = "dragon-${{ steps.ver.outputs.version }}-${{ matrix.name }}"
+          Move-Item stage $pkg
+          Compress-Archive -Path $pkg -DestinationPath "$pkg.zip"
+          "ASSET=$pkg.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.ASSET }}
+
+      - name: Attach to draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+          draft: true
+          generate_release_notes: true
