@@ -157,6 +157,6 @@ install(FILES c_shim/dragon_c.h
 # Python API and top-level docs.
 install(FILES python/dragon.py
         DESTINATION ${CMAKE_INSTALL_DATADIR}/dragon/python)
-install(FILES README.md IGNIL.md
+install(FILES README.md IGNIL.md LICENSE
         DESTINATION ${CMAKE_INSTALL_DATADIR}/dragon
         OPTIONAL)

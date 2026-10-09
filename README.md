@@ -318,3 +318,10 @@ for s in img.sections():
 graph = img.disassemble()
 print(len(graph), 'instructions')
 ```
+
+## License
+
+dragon-tales is released under the [MIT License](LICENSE) — free to use, modify
+and redistribute, including in commercial and closed-source work. The only
+condition is that the copyright and license notice be retained in copies, so
+please keep the credit to the project.
