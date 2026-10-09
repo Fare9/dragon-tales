@@ -53,6 +53,15 @@ class LLVMLifter {
   [[nodiscard]] std::string ir() const; // dump textual LLVM IR
   [[nodiscard]] llvm::Module &module();
 
+  /// Recover `fn`'s prototype (arguments + return) for this lifter's
+  /// architecture and render it as a C-like string, e.g.
+  /// `i32 sub_1000(i32 RDI, i32 RSI)`. This is the same recovery lift()
+  /// records on each lifted function as a "dragon.signature" attribute;
+  /// exposed here so a caller can get the prototype without parsing the IR.
+  /// See dragon::analysis::recoverSignature for the method and its limits.
+  [[nodiscard]] std::string recoveredSignatureString(const Function &fn,
+                                                     const Graph &graph) const;
+
   private:
   // All allocas for a lifted function.
   // In this way we keep the registers that have been
