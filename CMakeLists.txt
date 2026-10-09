@@ -116,3 +116,47 @@ if (DRAGON_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif ()
+
+# ---------------------------------------------------------------------------
+# Installation / packaging
+# ---------------------------------------------------------------------------
+# Lays out a self-contained SDK under CMAKE_INSTALL_PREFIX:
+#   lib/      libdragon + libdragon_c (LLVM is statically linked in; only Z3
+#             is an external runtime dependency, bundled by the release CI)
+#   bin/      the `disassembler` CLI (and the import .lib / .dll on Windows)
+#   include/  the C++ headers (dragon/...) and the C-shim header (dragon/dragon_c.h)
+#   share/dragon/python/  the cffi-based Python API (dragon.py)
+# These rules are inert for a normal build - they run only on `cmake --install`.
+include(GNUInstallDirs)
+
+# Make the installed SDK relocatable: libdragon_c must find libdragon and the
+# bundled libz3 next to it, and the CLI in bin/ must find both in ../lib - by
+# relative path, not the build-tree absolutes CMake would otherwise bake in.
+if(APPLE)
+    set(_dragon_origin "@loader_path")
+else()
+    set(_dragon_origin "$ORIGIN")
+endif()
+set_target_properties(libdragon libdragon_c disassembler PROPERTIES
+        INSTALL_RPATH "${_dragon_origin};${_dragon_origin}/../${CMAKE_INSTALL_LIBDIR}")
+
+install(TARGETS libdragon libdragon_c
+        LIBRARY  DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE  DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME  DESTINATION ${CMAKE_INSTALL_BINDIR})   # Windows DLLs land in bin/
+
+install(TARGETS disassembler
+        RUNTIME  DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# C++ public headers (the whole dragon/ tree) and the C-shim header.
+install(DIRECTORY include/dragon
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES c_shim/dragon_c.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dragon)
+
+# Python API and top-level docs.
+install(FILES python/dragon.py
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/dragon/python)
+install(FILES README.md IGNIL.md
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/dragon
+        OPTIONAL)

@@ -30,6 +30,26 @@ Features:
 - ARM (32-bit and 64-bit)
 - RISC-V (32-bit and 64-bit)
 
+## Prebuilt releases
+
+Tagged releases ship a self-contained SDK archive per platform
+(`dragon-<version>-{linux-x64,macos-arm64,windows-x64}.{tar.gz,zip}`) on the
+GitHub [Releases](../../releases) page. LLVM is statically linked into the
+libraries, so **no system LLVM install is required** to use them; Z3 is bundled
+alongside. Each archive contains:
+
+```
+lib/      libdragon + libdragon_c (shared) and the bundled Z3 runtime
+bin/      the `disassembler` CLI (plus the DLLs on Windows)
+include/  the C++ headers (dragon/...) and the C-shim header (dragon/dragon_c.h)
+share/dragon/python/dragon.py   the Python API
+```
+
+Point the Python API at the bundled library with
+`DRAGON_C_LIB=/path/to/lib/libdragon_c.so` (`.dylib`/`.dll` as appropriate).
+
+To build from source instead:
+
 ## Building
 
 ```sh
