@@ -108,6 +108,70 @@
                                          size_t len,
                                          uint64_t base_address);
 
+  // -- Loader --------------------------------------------------------------------
+
+  typedef enum {
+      DRAGON_FORMAT_UNKNOWN = 0,
+      DRAGON_FORMAT_ELF,
+      DRAGON_FORMAT_PE,
+  } dragon_format_t;
+
+  typedef enum {
+      DRAGON_SYMBOL_UNKNOWN = 0,
+      DRAGON_SYMBOL_FUNCTION,
+      DRAGON_SYMBOL_OBJECT,
+      DRAGON_SYMBOL_SECTION,
+      DRAGON_SYMBOL_FILE,
+  } dragon_symbol_kind_t;
+
+  typedef struct dragon_loader dragon_loader_t;
+
+  // Load an ELF or PE/COFF image from a file or from bytes already in memory.
+  // Returns NULL on failure; when `err` is non-NULL a NUL-terminated reason of
+  // at most `err_cap` bytes is written. Caller destroys the loader.
+  dragon_loader_t* dragon_load_file(const char* path, char* err, size_t err_cap);
+  dragon_loader_t* dragon_load_bytes(const uint8_t* bytes, size_t len,
+                                     char* err, size_t err_cap);
+  void             dragon_loader_destroy(dragon_loader_t* l);
+
+  dragon_format_t       dragon_loader_format(const dragon_loader_t* l);
+  dragon_architecture_t dragon_loader_architecture(const dragon_loader_t* l);
+  int      dragon_loader_is_64bit(const dragon_loader_t* l);
+  // 1 if the image has an entry point; dragon_loader_entry is valid only then.
+  int      dragon_loader_has_entry(const dragon_loader_t* l);
+  uint64_t dragon_loader_entry(const dragon_loader_t* l);
+  uint64_t dragon_loader_image_base(const dragon_loader_t* l);
+
+  // Sections. The returned name is borrowed - valid while the loader is alive.
+  // Permissions (0/1) and placement are written to the out-parameters, each of
+  // which may be NULL. Returns NULL for an out-of-range index.
+  size_t      dragon_loader_section_count(const dragon_loader_t* l);
+  const char* dragon_loader_section(const dragon_loader_t* l, size_t index,
+                                    uint64_t* out_addr, uint64_t* out_vsize,
+                                    int* out_r, int* out_w, int* out_x);
+  // Borrowed file bytes of a section; out_len receives the length.
+  const uint8_t* dragon_loader_section_bytes(const dragon_loader_t* l,
+                                             size_t index, size_t* out_len);
+
+  // Symbols. Name borrowed, valid while the loader is alive. Out-parameters may
+  // be NULL. Returns NULL for an out-of-range index.
+  size_t      dragon_loader_symbol_count(const dragon_loader_t* l);
+  const char* dragon_loader_symbol(const dragon_loader_t* l, size_t index,
+                                   uint64_t* out_addr, uint64_t* out_size,
+                                   dragon_symbol_kind_t* out_kind,
+                                   int* out_imported, int* out_exported);
+
+  // Read up to `cap` bytes from the image's virtual address space into `out`.
+  // Returns the number of bytes written, or 0 if [addr, addr+cap) is unmapped.
+  size_t dragon_loader_read_virtual(const dragon_loader_t* l, uint64_t addr,
+                                    uint8_t* out, size_t cap);
+
+  // Disassemble every executable section into a populated graph built for the
+  // image's detected architecture. `config` may be NULL for defaults. Caller
+  // destroys the graph.
+  dragon_graph_t* dragon_loader_disassemble(const dragon_loader_t* l,
+                                            const dragon_config_t* config);
+
   // -- Instruction ---------------------------------------------------------------
 
   uint64_t    dragon_instruction_address(const dragon_instruction_t* i);

@@ -1114,10 +1114,19 @@ in "Not started" below, not something that needs building from scratch.
 - **`LLVMLifter::lift()` segfault on second call** (`LifterGaps.md` #2) —
   still open, not touched this round.
 - **Loader/container-format support (ELF/PE/Mach-O metadata, `.eh_frame`
-  unwind tables)** — the reason function-start detection currently can't
-  use metadata the way NeverD does; raised in discussion, not started.
-  Would also feed debug-info ingestion (another NeverD-comparison item
-  from earlier in this project's history, also not started).
+  unwind tables)** — **ELF and PE/COFF done** (`dragon::loader`,
+  `include/dragon/loader/`): `LoadedImage` parses the container through
+  `llvm::object` and exposes sections (virtual placement + R/W/X),
+  symbols (import/export flags), entry point, image base and the
+  header-detected architecture; `loader::disassembleImage()` goes from a
+  file to a populated `Graph`, seeding entry + function symbols as function
+  starts. Wrapped in the C shim (`dragon_loader_*`) and Python
+  (`dragon.LoadedImage`). **Still not started:** Mach-O (the third
+  `llvm::object` backend — the `LoadedImage` abstraction already allows for
+  it), and the metadata that most helps function-start detection and
+  debug-info ingestion the way NeverD does — `.eh_frame`/unwind tables and
+  DWARF/PDB (the `debuginfodwarf`/`debuginfopdb`/`symbolize` LLVM components
+  are already available when that work begins).
 
 ## Where to look for more detail
 
