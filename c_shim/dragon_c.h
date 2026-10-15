@@ -153,6 +153,16 @@
   const uint8_t* dragon_loader_section_bytes(const dragon_loader_t* l,
                                              size_t index, size_t* out_len);
 
+  // ELF PT_LOAD segments ("LOAD0", "LOAD1", ...): what the system loader maps,
+  // and the only layout left when a protector strips the section headers.
+  // Same conventions as the section accessors above; none for PE.
+  size_t      dragon_loader_segment_count(const dragon_loader_t* l);
+  const char* dragon_loader_segment(const dragon_loader_t* l, size_t index,
+                                    uint64_t* out_addr, uint64_t* out_vsize,
+                                    int* out_r, int* out_w, int* out_x);
+  const uint8_t* dragon_loader_segment_bytes(const dragon_loader_t* l,
+                                             size_t index, size_t* out_len);
+
   // Symbols. Name borrowed, valid while the loader is alive. Out-parameters may
   // be NULL. Returns NULL for an out-of-range index.
   size_t      dragon_loader_symbol_count(const dragon_loader_t* l);
