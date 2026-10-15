@@ -66,6 +66,64 @@ SymbolKind kindOf(SymbolRef::Type t) {
   }
 }
 
+/// Copy the PT_LOAD program headers out as Sections named "LOAD<n>". File
+/// bytes are clamped to what the buffer really holds, so a truncated or
+/// hostile header cannot read past the end.
+template <class ELFT>
+void collectSegments(const ELFFile<ELFT> &file, std::vector<Section> &out) {
+  auto phdrs = file.program_headers();
+  if (!phdrs) {
+    consumeError(phdrs.takeError());
+    return;
+  }
+  const std::uint64_t fileSize = file.getBufSize();
+  for (const auto &ph : *phdrs) {
+    if (ph.p_type != ELF::PT_LOAD || ph.p_memsz == 0)
+      continue;
+    Section s;
+    s.name = "LOAD" + std::to_string(out.size());
+    s.address = ph.p_vaddr;
+    s.virtualSize = ph.p_memsz;
+    s.readable = ph.p_flags & ELF::PF_R;
+    s.writable = ph.p_flags & ELF::PF_W;
+    s.executable = ph.p_flags & ELF::PF_X;
+    if (ph.p_offset < fileSize) {
+      const std::uint64_t n = std::min<std::uint64_t>(
+          {ph.p_filesz, ph.p_memsz, fileSize - ph.p_offset});
+      const std::uint8_t *base = file.base() + ph.p_offset;
+      s.bytes.assign(base, base + n);
+    }
+    out.push_back(std::move(s));
+  }
+}
+
+void collectSegments(const ObjectFile *obj, std::vector<Section> &out) {
+  if (const auto *e = dyn_cast<ELF64LEObjectFile>(obj))
+    collectSegments(e->getELFFile(), out);
+  else if (const auto *e = dyn_cast<ELF64BEObjectFile>(obj))
+    collectSegments(e->getELFFile(), out);
+  else if (const auto *e = dyn_cast<ELF32LEObjectFile>(obj))
+    collectSegments(e->getELFFile(), out);
+  else if (const auto *e = dyn_cast<ELF32BEObjectFile>(obj))
+    collectSegments(e->getELFFile(), out);
+}
+
+/// Read `size` bytes at `addr` from one section/segment, zero-filling past its
+/// file bytes. nullopt if the run does not fit inside it.
+std::optional<std::vector<std::uint8_t>>
+readFrom(const Section &s, std::uint64_t addr, std::size_t size) {
+  if (!s.contains(addr) || addr + size > s.address + s.virtualSize)
+    return std::nullopt;
+  std::vector<std::uint8_t> out(size, 0);
+  const std::uint64_t off = addr - s.address;
+  // Copy whatever file bytes overlap the request; the rest stays zero (BSS).
+  if (off < s.bytes.size()) {
+    const std::size_t n = std::min<std::size_t>(size, s.bytes.size() - off);
+    std::copy_n(s.bytes.begin() + off, n, out.begin());
+  }
+  return out;
+}
+
 } // namespace
 
 std::optional<LoadedImage> LoadedImage::loadFile(const std::string &path,
@@ -114,7 +172,7 @@ LoadedImage::loadBytes(std::vector<std::uint8_t> bytes, std::string *error) {
   // -- image base ---------------------------------------------------------
   if (coff)
     image.imageBase_ = coff->getImageBase();
-  // ELF image base is filled in below as the lowest loadable section address.
+  // ELF image base is filled in below from the PT_LOAD segments.
 
   // -- sections -----------------------------------------------------------
   std::uint64_t lowestAddr = UINT64_MAX;
@@ -155,11 +213,25 @@ LoadedImage::loadBytes(std::vector<std::uint8_t> bytes, std::string *error) {
     image.sections_.push_back(std::move(s));
   }
 
+  // -- segments -----------------------------------------------------------
+  // The program headers are what the system loader maps. They are the only
+  // layout left when a protector strips the section headers, and the lowest
+  // PT_LOAD address is the real ELF image base (0 for a PIE).
+  if (elf)
+    collectSegments(obj, image.segments_);
+
   image.hasVirtualLayout_ =
+      !image.segments_.empty() ||
       std::any_of(image.sections_.begin(), image.sections_.end(),
                   [](const Section &s) { return s.address != 0; });
 
-  if (elf && lowestAddr != UINT64_MAX)
+  if (!image.segments_.empty())
+    image.imageBase_ =
+        std::min_element(image.segments_.begin(), image.segments_.end(),
+                         [](const Section &a, const Section &b) {
+                           return a.address < b.address;
+                         })->address;
+  else if (elf && lowestAddr != UINT64_MAX)
     image.imageBase_ = lowestAddr;
 
   // -- entry point --------------------------------------------------------
@@ -228,6 +300,10 @@ std::vector<const Section *> LoadedImage::executableSections() const {
   for (const Section &s : sections_)
     if (s.executable && !s.bytes.empty())
       out.push_back(&s);
+  if (out.empty())
+    for (const Section &s : segments_)
+      if (s.executable && !s.bytes.empty())
+        out.push_back(&s);
   std::sort(out.begin(), out.end(), [](const Section *a, const Section *b) {
     return a->address < b->address;
   });
@@ -236,19 +312,15 @@ std::vector<const Section *> LoadedImage::executableSections() const {
 
 std::optional<std::vector<std::uint8_t>>
 LoadedImage::readVirtual(std::uint64_t addr, std::size_t size) const {
-  const Section *s = sectionContaining(addr);
-  if (!s || addr + size > s->address + s->virtualSize)
-    return std::nullopt;
-
-  std::vector<std::uint8_t> out(size, 0);
-  const std::uint64_t off = addr - s->address;
-  // Copy whatever file bytes overlap the request; the rest stays zero (BSS).
-  if (off < s->bytes.size()) {
-    const std::size_t n =
-        std::min<std::size_t>(size, s->bytes.size() - off);
-    std::copy_n(s->bytes.begin() + off, n, out.begin());
-  }
-  return out;
+  if (const Section *s = sectionContaining(addr))
+    if (auto out = readFrom(*s, addr, size))
+      return out;
+  // No section covers the run (stripped section headers, or a read spanning
+  // two sections): fall back to the segment the loader would map.
+  for (const Section &s : segments_)
+    if (auto out = readFrom(s, addr, size))
+      return out;
+  return std::nullopt;
 }
 
 std::vector<const Symbol *> LoadedImage::definedSymbols() const {

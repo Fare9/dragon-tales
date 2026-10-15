@@ -18,6 +18,16 @@ std::vector<std::uint8_t> toVec(const unsigned char *p, std::size_t n) {
   return std::vector<std::uint8_t>(p, p + n);
 }
 
+/// The tiny ELF with its section header table removed (e_shoff, e_shnum and
+/// e_shstrndx zeroed), the way VMProtect and similar rewriters emit it: only
+/// the PT_LOAD program headers say what gets mapped.
+std::vector<std::uint8_t> tinyElfWithoutSections() {
+  std::vector<std::uint8_t> v = toVec(kTinyElfX64, sizeof(kTinyElfX64));
+  std::fill(v.begin() + 0x28, v.begin() + 0x30, 0); // e_shoff
+  std::fill(v.begin() + 0x3C, v.begin() + 0x40, 0); // e_shnum, e_shstrndx
+  return v;
+}
+
 const Section *findSection(const LoadedImage &img, const std::string &name) {
   for (const Section &s : img.sections())
     if (s.name == name)
@@ -87,6 +97,64 @@ TEST_CASE("loader - disassembleImage turns an ELF into a populated Graph",
   CHECK(g.size() == 5);
   CHECK(g.get(kTinyElfX64Entry) != nullptr);
   CHECK(g.isValidFunction(kTinyElfX64Entry));
+}
+
+TEST_CASE("loader - ELF image base is the lowest PT_LOAD address",
+          "[loader][elf]") {
+  auto img = LoadedImage::loadBytes(toVec(kTinyElfX64, sizeof(kTinyElfX64)));
+  REQUIRE(img.has_value());
+
+  // The fixture's PT_LOAD maps the file from 0x400000; .text only starts at
+  // 0x400078, so a section-based guess would get the base wrong.
+  CHECK(img->imageBase() == 0x400000ULL);
+
+  REQUIRE(img->segments().size() == 1);
+  const Section &seg = img->segments().front();
+  CHECK(seg.address == 0x400000ULL);
+  CHECK(seg.readable);
+  CHECK(seg.executable);
+  CHECK_FALSE(seg.writable);
+}
+
+TEST_CASE("loader - a section-less ELF is mapped from its PT_LOAD segments",
+          "[loader][elf]") {
+  std::string err;
+  auto img = LoadedImage::loadBytes(tinyElfWithoutSections(), &err);
+  REQUIRE(img.has_value());
+  CHECK(err.empty());
+
+  CHECK(img->format() == Format::ELF);
+  CHECK(img->architecture() == Architecture::X86_64);
+  CHECK(img->sections().empty());
+  CHECK(img->hasVirtualLayout());
+  CHECK(img->imageBase() == 0x400000ULL);
+  REQUIRE(img->entryPoint().has_value());
+  CHECK(*img->entryPoint() == kTinyElfX64Entry);
+
+  SECTION("readVirtual reaches code and headers through the segment") {
+    auto code = img->readVirtual(kTinyElfX64Entry, 8);
+    REQUIRE(code.has_value());
+    CHECK(*code == std::vector<std::uint8_t>{0x55, 0x48, 0x89, 0xE5, 0x31,
+                                             0xC0, 0x5D, 0xC3});
+    auto magic = img->readVirtual(0x400000ULL, 4);
+    REQUIRE(magic.has_value());
+    CHECK(*magic == std::vector<std::uint8_t>{0x7F, 'E', 'L', 'F'});
+    CHECK_FALSE(img->readVirtual(0x500000ULL, 1).has_value());
+  }
+
+  SECTION("the executable segment stands in for the missing .text") {
+    auto exec = img->executableSections();
+    REQUIRE(exec.size() == 1);
+    CHECK(exec.front()->address == 0x400000ULL);
+    CHECK(exec.front()->contains(kTinyElfX64Entry));
+  }
+
+  SECTION("disassembleImage decodes the entry function") {
+    Graph g = disassembleImage(*img);
+    CHECK(g.architecture() == Architecture::X86_64);
+    CHECK(g.get(kTinyElfX64Entry) != nullptr);
+    CHECK(g.isValidFunction(kTinyElfX64Entry));
+  }
 }
 
 // -----------------------------------------------------------------------

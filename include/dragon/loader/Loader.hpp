@@ -115,11 +115,12 @@ class LoadedImage {
   }
 
   /// The address the image is based at (PE ImageBase; for ELF the lowest
-  /// loadable section address). Zero for a relocatable object.
+  /// PT_LOAD address). Zero for a relocatable object.
   [[nodiscard]] std::uint64_t imageBase() const { return imageBase_; }
 
-  /// True when sections carry real virtual addresses (an executable / shared
-  /// object / DLL), false for a relocatable object whose sections sit at 0.
+  /// True when sections or segments carry real virtual addresses (an
+  /// executable / shared object / DLL), false for a relocatable object whose
+  /// sections sit at 0.
   [[nodiscard]] bool hasVirtualLayout() const { return hasVirtualLayout_; }
 
   // -- sections -----------------------------------------------------------
@@ -132,11 +133,24 @@ class LoadedImage {
   [[nodiscard]] const Section *sectionContaining(std::uint64_t addr) const;
 
   /// Executable sections, in address order - the ones worth disassembling.
+  /// When the image has none (an ELF whose section headers were stripped),
+  /// the executable segments are returned instead.
   [[nodiscard]] std::vector<const Section *> executableSections() const;
 
+  // -- segments -----------------------------------------------------------
+  /// ELF PT_LOAD program headers, as Sections named "LOAD0", "LOAD1", ...:
+  /// address/virtualSize are p_vaddr/p_memsz and `bytes` the p_filesz file
+  /// bytes. This is what the system loader really maps, and the only layout
+  /// left when a packer/protector strips the section headers. Empty for PE
+  /// and relocatable objects.
+  [[nodiscard]] const std::vector<Section> &segments() const {
+    return segments_;
+  }
+
   /// Read `size` bytes from the virtual address space, spanning whatever
-  /// section covers `addr` and zero-filling any BSS tail. Returns nullopt if
-  /// `addr` is not mapped or the run would leave the covering section.
+  /// section covers `addr` (or, failing that, segment) and zero-filling any
+  /// BSS tail. Returns nullopt if `addr` is not mapped or the run would leave
+  /// the covering section/segment.
   [[nodiscard]] std::optional<std::vector<std::uint8_t>>
   readVirtual(std::uint64_t addr, std::size_t size) const;
 
@@ -167,6 +181,7 @@ class LoadedImage {
   std::optional<std::uint64_t> entry_;
   std::uint64_t imageBase_{};
   std::vector<Section> sections_;
+  std::vector<Section> segments_;
   std::vector<Symbol> symbols_;
 };
 

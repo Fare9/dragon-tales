@@ -8,7 +8,8 @@
 /// Graph, with no manual architecture or base-address bookkeeping.
 namespace dragon::loader {
 
-/// Disassemble every executable section of `image` into a fresh Graph built for
+/// Disassemble every executable section of `image` (its executable segments
+/// when the section headers are gone) into a fresh Graph built for
 /// the architecture the image declares. Each section is disassembled at its own
 /// virtual address, so cross-section calls and jumps resolve. The entry point
 /// and every function-typed symbol are registered as function starts.
