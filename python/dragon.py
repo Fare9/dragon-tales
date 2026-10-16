@@ -2264,20 +2264,33 @@ class LoadedImage:
             return None
         return lib.dragon_loader_entry(self._ptr)
 
-    def sections(self):
+    def _regions(self, count, describe, raw_bytes):
         out = []
-        for i in range(lib.dragon_loader_section_count(self._ptr)):
+        for i in range(count(self._ptr)):
             addr = ffi.new('uint64_t*')
             vsize = ffi.new('uint64_t*')
             r = ffi.new('int*'); w = ffi.new('int*'); x = ffi.new('int*')
-            name = lib.dragon_loader_section(self._ptr, i, addr, vsize, r, w, x)
+            name = describe(self._ptr, i, addr, vsize, r, w, x)
             length = ffi.new('size_t*')
-            data_ptr = lib.dragon_loader_section_bytes(self._ptr, i, length)
+            data_ptr = raw_bytes(self._ptr, i, length)
             data = (ffi.buffer(data_ptr, length[0])[:] if data_ptr != ffi.NULL
                     else b'')
             out.append(Section(ffi.string(name).decode(), addr[0], vsize[0],
                                bool(r[0]), bool(w[0]), bool(x[0]), data))
         return out
+
+    def sections(self):
+        return self._regions(lib.dragon_loader_section_count,
+                             lib.dragon_loader_section,
+                             lib.dragon_loader_section_bytes)
+
+    def segments(self):
+        """ELF PT_LOAD segments as Sections named "LOAD0", "LOAD1", ... - what
+        the system loader maps, and the only layout left when a protector
+        strips the section headers. Empty for PE."""
+        return self._regions(lib.dragon_loader_segment_count,
+                             lib.dragon_loader_segment,
+                             lib.dragon_loader_segment_bytes)
 
     def symbols(self):
         out = []

@@ -379,17 +379,16 @@ uint64_t dragon_loader_image_base(const dragon_loader_t *l) {
   return as_loader(l)->imageBase();
 }
 
-size_t dragon_loader_section_count(const dragon_loader_t *l) {
-  return as_loader(l)->sections().size();
-}
+namespace {
 
-const char *dragon_loader_section(const dragon_loader_t *l, size_t index,
-                                  uint64_t *out_addr, uint64_t *out_vsize,
-                                  int *out_r, int *out_w, int *out_x) {
-  const auto &secs = as_loader(l)->sections();
-  if (index >= secs.size())
+// Sections and segments share one representation; these back both families.
+const char *describe_region(const std::vector<dragon::loader::Section> &v,
+                            size_t index, uint64_t *out_addr,
+                            uint64_t *out_vsize, int *out_r, int *out_w,
+                            int *out_x) {
+  if (index >= v.size())
     return nullptr;
-  const auto &s = secs[index];
+  const auto &s = v[index];
   if (out_addr)
     *out_addr = s.address;
   if (out_vsize)
@@ -403,18 +402,50 @@ const char *dragon_loader_section(const dragon_loader_t *l, size_t index,
   return s.name.c_str();
 }
 
-const uint8_t *dragon_loader_section_bytes(const dragon_loader_t *l,
-                                           size_t index, size_t *out_len) {
-  const auto &secs = as_loader(l)->sections();
-  if (index >= secs.size()) {
+const uint8_t *region_bytes(const std::vector<dragon::loader::Section> &v,
+                            size_t index, size_t *out_len) {
+  if (index >= v.size()) {
     if (out_len)
       *out_len = 0;
     return nullptr;
   }
-  const auto &s = secs[index];
   if (out_len)
-    *out_len = s.bytes.size();
-  return s.bytes.data();
+    *out_len = v[index].bytes.size();
+  return v[index].bytes.data();
+}
+
+} // namespace
+
+size_t dragon_loader_section_count(const dragon_loader_t *l) {
+  return as_loader(l)->sections().size();
+}
+
+const char *dragon_loader_section(const dragon_loader_t *l, size_t index,
+                                  uint64_t *out_addr, uint64_t *out_vsize,
+                                  int *out_r, int *out_w, int *out_x) {
+  return describe_region(as_loader(l)->sections(), index, out_addr, out_vsize,
+                         out_r, out_w, out_x);
+}
+
+const uint8_t *dragon_loader_section_bytes(const dragon_loader_t *l,
+                                           size_t index, size_t *out_len) {
+  return region_bytes(as_loader(l)->sections(), index, out_len);
+}
+
+size_t dragon_loader_segment_count(const dragon_loader_t *l) {
+  return as_loader(l)->segments().size();
+}
+
+const char *dragon_loader_segment(const dragon_loader_t *l, size_t index,
+                                  uint64_t *out_addr, uint64_t *out_vsize,
+                                  int *out_r, int *out_w, int *out_x) {
+  return describe_region(as_loader(l)->segments(), index, out_addr, out_vsize,
+                         out_r, out_w, out_x);
+}
+
+const uint8_t *dragon_loader_segment_bytes(const dragon_loader_t *l,
+                                           size_t index, size_t *out_len) {
+  return region_bytes(as_loader(l)->segments(), index, out_len);
 }
 
 size_t dragon_loader_symbol_count(const dragon_loader_t *l) {
