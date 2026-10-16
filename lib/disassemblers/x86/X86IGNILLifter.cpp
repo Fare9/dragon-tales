@@ -2968,16 +2968,9 @@ void dragon::x86::X86IGNILLifter::liftMulDiv(const llvm::MCInst &mc,
   auto acc = unary(Opcode::COPY, w, low);
 
   if (isDivide) {
-    if (w == 64) {
-      // RDX:RAX is a 128-bit dividend, which IGNIL has no width for. Guessing
-      // "RDX is zero" would be right most of the time and silently wrong the
-      // rest, so the results are honestly unknown and the block says so.
-      emitUndef(low, addr, out);
-      emitUndef(high, addr, out);
-      emitArithFlags(addr, out, tmp);
-      out.noteUnlifted(addr);
-      return;
-    }
+    // The dividend is twice the operand width: AH:AL, DX:AX, EDX:EAX, or the
+    // 128-bit RDX:RAX. 128-bit temps never meet a 64-bit host fold (the
+    // simplifier leaves them alone); Z3 and LLVM handle them natively.
     const ignil::Width wide = static_cast<ignil::Width>(2 * w);
     ignil::Temp dividend = newTemp(tmp, wide);
     if (w == 8) {

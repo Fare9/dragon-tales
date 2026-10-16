@@ -1580,19 +1580,25 @@ TEST_CASE("IGNIL lifting - an unlifted instruction is recorded, and its "
     REQUIRE(regs.count(dragon::x86::CF.offset) == 1);
     REQUIRE(regs.count(dragon::x86::OF.offset) == 1);
   }
-  SECTION("div rbx [48 f7 f3] - a 128-bit dividend IGNIL cannot hold") {
-    const auto *ib = lift({0x48, 0xf7, 0xf3});
+  SECTION("bswap ax [66 0f c8] - architecturally undefined, so AX is UNDEF") {
+    const auto *ib = lift({0x66, 0x0f, 0xc8});
     REQUIRE(ib != nullptr);
     REQUIRE(ib->unlifted() == std::vector<std::uint64_t>{0x1000});
     const auto regs = undefined(*ib);
-    REQUIRE(regs.count(dragon::x86::RAX.offset) == 1);
-    REQUIRE(regs.count(dragon::x86::RDX.offset) == 1);
+    REQUIRE(regs.count(dragon::x86::AX.offset) == 1);
   }
   SECTION("what is lifted is not reported: nop, mul rbx, adc rax, rbx") {
     const auto *ib = lift({0x90, 0x48, 0xf7, 0xe3, 0x48, 0x11, 0xd8});
     REQUIRE(ib != nullptr);
     REQUIRE(ib->unlifted().empty());
     REQUIRE(hasOpcode(*ib, Opcode::MUL));
+  }
+  SECTION("div rbx [48 f7 f3] is lifted through a 128-bit dividend") {
+    const auto *ib = lift({0x48, 0xf7, 0xf3});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::UDIV));
+    REQUIRE(hasOpcode(*ib, Opcode::UMOD));
   }
   SECTION("the optimisation passes carry the record over") {
     const auto *ib = lift({0xd1, 0xc0});

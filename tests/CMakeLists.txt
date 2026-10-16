@@ -30,6 +30,7 @@ endif()
 if(DRAGON_USE_UNICORN)
     target_sources(dragon_tests PRIVATE
         semantic/TestX86SemanticRoundTrip.cpp
+        semantic/TestX86Div128.cpp
         toy-vm/TestToyVM.cpp
         toy-vm/TestToyVMHandlerRecovery.cpp
     )

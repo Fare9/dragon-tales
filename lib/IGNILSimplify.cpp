@@ -30,7 +30,14 @@ std::int64_t signExtend(std::uint64_t v, Width w) {
   return static_cast<std::int64_t>(masked);
 }
 
+/// A Const carries 64 bits of value, so one wider than 64 bits (the 128-bit
+/// dividend of a 64-bit DIV) cannot be all-ones, and folding at that width
+/// with uint64_t arithmetic would be wrong: such ops are left to Z3 / LLVM.
+constexpr Width kMaxFoldWidth = 64;
+
 bool isAllOnes(const Const &c) {
+  if (c.width > kMaxFoldWidth)
+    return false;
   return maskTo(c.value, c.width) == maskTo(~std::uint64_t{0}, c.width);
 }
 
@@ -89,6 +96,8 @@ bool isUnaryFoldable(Opcode op) {
 // dst - but treated defensively rather than assumed).
 std::optional<Const> foldBinary(Opcode op, const Const &l, const Const &r,
                                 Width dstWidth) {
+  if (l.width > kMaxFoldWidth || r.width > kMaxFoldWidth || dstWidth > kMaxFoldWidth)
+    return std::nullopt;
   // Comparisons always produce a 1-bit result, independent of operand width.
   {
     std::uint64_t lv = maskTo(l.value, l.width);
@@ -160,6 +169,8 @@ std::optional<Const> foldBinary(Opcode op, const Const &l, const Const &r,
 }
 
 std::optional<Const> foldUnary(Opcode op, const Const &v, Width dstWidth) {
+  if (v.width > kMaxFoldWidth || dstWidth > kMaxFoldWidth)
+    return std::nullopt;
   std::uint64_t vv = maskTo(v.value, v.width);
   switch (op) {
     case Opcode::NEG:

@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <optional>
+
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/lifters/ignil/IGNILSimplify.hpp>
 #include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
@@ -429,6 +431,54 @@ TEST_CASE("IGNILSimplify - unused Reg-defining op is kept (block-local scope "
 // ---------------------------------------------------------------------------
 // Fixed-point convergence
 // ---------------------------------------------------------------------------
+
+namespace {
+/// The value last COPY'd into `reg` as a Const, if the block ends that way.
+std::optional<std::uint64_t> constWrittenTo(const Block &b, std::uint32_t regOffset) {
+  std::optional<std::uint64_t> out;
+  for (const Op &op: b.ops())
+    if (op.dst && std::holds_alternative<dragon::ignil::Reg>(*op.dst) &&
+        std::get<dragon::ignil::Reg>(*op.dst).offset == regOffset)
+      out = (op.opcode == Opcode::COPY && std::holds_alternative<Const>(op.srcs[0]))
+                    ? std::optional<std::uint64_t>{std::get<Const>(op.srcs[0]).value}
+                    : std::nullopt;
+  return out;
+}
+} // namespace
+
+TEST_CASE("IGNILSimplify - does not fold wider than 64 bits with 64-bit host math",
+          "[ignil][simplify]") {
+  // RAX = TRUNC64(SHL(ZEXT128(1), 64)) is 0: the bit lands at position 64.
+  // A Const holds only 64 bits of value and `1 << 64` on a uint64_t is
+  // undefined (x86 hosts yield 1), so the fold must be exact or not happen.
+  Block block{kAddr};
+  Temp t1{1, 128}, t2{2, 128};
+  block.append({Opcode::ZEXT, Value{t1}, {Value{Const{1, 64}}}, kAddr});
+  block.append({Opcode::SHL, Value{t2}, {Value{t1}, Value{Const{64, 8}}}, kAddr});
+  block.append({Opcode::TRUNC, Value{x86::RAX}, {Value{t2}}, kAddr});
+  block.append({Opcode::RET, std::nullopt, {}, kAddr + 4});
+
+  const auto folded = constWrittenTo(simplifyBlock(block), x86::RAX.offset);
+  if (folded)
+    REQUIRE(*folded == 0);
+}
+
+TEST_CASE("IGNILSimplify - a wide Const is never all-ones", "[ignil][simplify]") {
+  // x = ZEXT128(RAX) << 64 has only high bits; OR-ing 2^64-1 into it must
+  // keep them, so RDX = TRUNC64((x | (2^64-1)) >> 64) is RAX, not a constant.
+  // Treating the i128 Const 0xffffffffffffffff as all-ones would fold the OR
+  // to that Const and RDX to 0.
+  Block block{kAddr};
+  Temp x0{1, 128}, x{2, 128}, r{3, 128}, y{4, 128};
+  block.append({Opcode::ZEXT, Value{x0}, {Value{x86::RAX}}, kAddr});
+  block.append({Opcode::SHL, Value{x}, {Value{x0}, Value{Const{64, 8}}}, kAddr});
+  block.append({Opcode::OR, Value{r}, {Value{x}, Value{Const{~0ull, 128}}}, kAddr});
+  block.append({Opcode::SHR, Value{y}, {Value{r}, Value{Const{64, 8}}}, kAddr});
+  block.append({Opcode::TRUNC, Value{x86::RDX}, {Value{y}}, kAddr});
+  block.append({Opcode::RET, std::nullopt, {}, kAddr + 4});
+
+  REQUIRE_FALSE(constWrittenTo(simplifyBlock(block), x86::RDX.offset).has_value());
+}
 
 TEST_CASE("IGNILSimplify - chained folds converge to a single COPY",
           "[ignil][simplify]") {
