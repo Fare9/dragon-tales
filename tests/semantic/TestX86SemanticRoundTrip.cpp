@@ -530,3 +530,55 @@ TEST_CASE("Semantic round-trip - SETcc agrees with the hardware for all sixteen 
            kAll,
            inputs});
 }
+
+// feat/x86-lift-rotates-bitops: the variable-count shifts and rotates now emit
+// a CONCRETE overflow flag (so VMProtect's pushfq-folded RFLAGS stays
+// resolvable) instead of UNDEF. With CL == 1 the OF is architecturally
+// DEFINED, so this sweep compares it against the hardware; it is the check
+// that the modelled OF is right, not merely concrete. A handful of larger CL
+// counts (OF undefined, not compared) confirm the result and the other flags
+// were not disturbed.
+TEST_CASE("Semantic round-trip - shifts/rotates by CL: OF modelled, not UNDEF",
+          "[semantic][x86_64][vmp][.][expensive]") {
+  std::vector<Inputs> cl1; // count exactly 1: OF is defined
+  for (std::uint64_t a: {0ull, 1ull, 2ull, 0x7full, 0x80ull, 0xffull,
+                         0x7fffffffull, 0x80000000ull, 0xffffffffull,
+                         0x4000000000000000ull, 0x8000000000000000ull,
+                         0xffffffffffffffffull, 0x123456789abcdef0ull})
+    cl1.push_back({a, 0, /*rcx=*/1, 0, false});
+
+  const unsigned shf = kCF | kPF | kZF | kSF | kOF; // AF undefined for shifts
+  const unsigned rot = kCF | kOF;                   // rotates touch only CF/OF
+  const Form defined[] = {
+          {"shl eax,cl (1)", {0xd3, 0xe0}, shf, cl1},
+          {"shr eax,cl (1)", {0xd3, 0xe8}, shf, cl1},
+          {"sar eax,cl (1)", {0xd3, 0xf8}, shf, cl1},
+          {"shl rax,cl (1)", {0x48, 0xd3, 0xe0}, shf, cl1},
+          {"shr rax,cl (1)", {0x48, 0xd3, 0xe8}, shf, cl1},
+          {"sar rax,cl (1)", {0x48, 0xd3, 0xf8}, shf, cl1},
+          {"rol eax,cl (1)", {0xd3, 0xc0}, rot, cl1},
+          {"ror eax,cl (1)", {0xd3, 0xc8}, rot, cl1},
+          {"rcl eax,cl (1)", {0xd3, 0xd0}, rot, cl1},
+          {"rcr eax,cl (1)", {0xd3, 0xd8}, rot, cl1},
+          {"rol rax,cl (1)", {0x48, 0xd3, 0xc0}, rot, cl1},
+          {"ror rax,cl (1)", {0x48, 0xd3, 0xc8}, rot, cl1},
+  };
+  for (const Form &f: defined)
+    sweep(f);
+
+  // Larger counts: OF is architecturally undefined (not compared), but CF, the
+  // sign/zero/parity flags and the result must still match the hardware.
+  std::vector<Inputs> cln;
+  for (std::uint64_t a: {1ull, 0xffull, 0x8000000000000000ull, 0x123456789abcdef0ull})
+    for (std::uint64_t n: {0ull, 3ull, 7ull, 31ull})
+      cln.push_back({a, 0, /*rcx=*/n, 0, false});
+  const Form undefinedOF[] = {
+          {"shl eax,cl (n)", {0xd3, 0xe0}, kCF | kPF | kZF | kSF, cln},
+          {"shr eax,cl (n)", {0xd3, 0xe8}, kCF | kPF | kZF | kSF, cln},
+          {"sar eax,cl (n)", {0xd3, 0xf8}, kCF | kPF | kZF | kSF, cln},
+          {"rol eax,cl (n)", {0xd3, 0xc0}, kCF, cln},
+          {"ror eax,cl (n)", {0xd3, 0xc8}, kCF, cln},
+  };
+  for (const Form &f: undefinedOF)
+    sweep(f);
+}

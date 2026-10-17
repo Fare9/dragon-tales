@@ -257,6 +257,99 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"BT16rr", &X86IGNILLifter::opBt16rr_},
           {"BT32rr", &X86IGNILLifter::opBt32rr_},
           {"BT64rr", &X86IGNILLifter::opBt64rr_},
+          {"ROL8ri", &X86IGNILLifter::opRol8ri_},
+          {"ROL16ri", &X86IGNILLifter::opRol16ri_},
+          {"ROL32ri", &X86IGNILLifter::opRol32ri_},
+          {"ROL64ri", &X86IGNILLifter::opRol64ri_},
+          {"ROL8r1", &X86IGNILLifter::opRol8r1_},
+          {"ROL16r1", &X86IGNILLifter::opRol16r1_},
+          {"ROL32r1", &X86IGNILLifter::opRol32r1_},
+          {"ROL64r1", &X86IGNILLifter::opRol64r1_},
+          {"ROL8rCL", &X86IGNILLifter::opRol8rCL_},
+          {"ROL16rCL", &X86IGNILLifter::opRol16rCL_},
+          {"ROL32rCL", &X86IGNILLifter::opRol32rCL_},
+          {"ROL64rCL", &X86IGNILLifter::opRol64rCL_},
+          {"ROR8ri", &X86IGNILLifter::opRor8ri_},
+          {"ROR16ri", &X86IGNILLifter::opRor16ri_},
+          {"ROR32ri", &X86IGNILLifter::opRor32ri_},
+          {"ROR64ri", &X86IGNILLifter::opRor64ri_},
+          {"ROR8r1", &X86IGNILLifter::opRor8r1_},
+          {"ROR16r1", &X86IGNILLifter::opRor16r1_},
+          {"ROR32r1", &X86IGNILLifter::opRor32r1_},
+          {"ROR64r1", &X86IGNILLifter::opRor64r1_},
+          {"ROR8rCL", &X86IGNILLifter::opRor8rCL_},
+          {"ROR16rCL", &X86IGNILLifter::opRor16rCL_},
+          {"ROR32rCL", &X86IGNILLifter::opRor32rCL_},
+          {"ROR64rCL", &X86IGNILLifter::opRor64rCL_},
+          {"BTS16ri8", &X86IGNILLifter::opBts16ri8_},
+          {"BTS32ri8", &X86IGNILLifter::opBts32ri8_},
+          {"BTS64ri8", &X86IGNILLifter::opBts64ri8_},
+          {"BTS16rr", &X86IGNILLifter::opBts16rr_},
+          {"BTS32rr", &X86IGNILLifter::opBts32rr_},
+          {"BTS64rr", &X86IGNILLifter::opBts64rr_},
+          {"BTR16ri8", &X86IGNILLifter::opBtr16ri8_},
+          {"BTR32ri8", &X86IGNILLifter::opBtr32ri8_},
+          {"BTR64ri8", &X86IGNILLifter::opBtr64ri8_},
+          {"BTR16rr", &X86IGNILLifter::opBtr16rr_},
+          {"BTR32rr", &X86IGNILLifter::opBtr32rr_},
+          {"BTR64rr", &X86IGNILLifter::opBtr64rr_},
+          {"BTC16ri8", &X86IGNILLifter::opBtc16ri8_},
+          {"BTC32ri8", &X86IGNILLifter::opBtc32ri8_},
+          {"BTC64ri8", &X86IGNILLifter::opBtc64ri8_},
+          {"BTC16rr", &X86IGNILLifter::opBtc16rr_},
+          {"BTC32rr", &X86IGNILLifter::opBtc32rr_},
+          {"BTC64rr", &X86IGNILLifter::opBtc64rr_},
+          {"RCL8ri", &X86IGNILLifter::opRcl8ri_},
+          {"RCL16ri", &X86IGNILLifter::opRcl16ri_},
+          {"RCL32ri", &X86IGNILLifter::opRcl32ri_},
+          {"RCL64ri", &X86IGNILLifter::opRcl64ri_},
+          {"RCL8r1", &X86IGNILLifter::opRcl8r1_},
+          {"RCL16r1", &X86IGNILLifter::opRcl16r1_},
+          {"RCL32r1", &X86IGNILLifter::opRcl32r1_},
+          {"RCL64r1", &X86IGNILLifter::opRcl64r1_},
+          {"RCR8ri", &X86IGNILLifter::opRcr8ri_},
+          {"RCR16ri", &X86IGNILLifter::opRcr16ri_},
+          {"RCR32ri", &X86IGNILLifter::opRcr32ri_},
+          {"RCR64ri", &X86IGNILLifter::opRcr64ri_},
+          {"RCR8r1", &X86IGNILLifter::opRcr8r1_},
+          {"RCR16r1", &X86IGNILLifter::opRcr16r1_},
+          {"RCR32r1", &X86IGNILLifter::opRcr32r1_},
+          {"RCR64r1", &X86IGNILLifter::opRcr64r1_},
+          {"RCL8rCL", &X86IGNILLifter::opRcl8rCL_},
+          {"RCL16rCL", &X86IGNILLifter::opRcl16rCL_},
+          {"RCL32rCL", &X86IGNILLifter::opRcl32rCL_},
+          {"RCL64rCL", &X86IGNILLifter::opRcl64rCL_},
+          {"RCR8rCL", &X86IGNILLifter::opRcr8rCL_},
+          {"RCR16rCL", &X86IGNILLifter::opRcr16rCL_},
+          {"RCR32rCL", &X86IGNILLifter::opRcr32rCL_},
+          {"RCR64rCL", &X86IGNILLifter::opRcr64rCL_},
+          {"XCHG16ar", &X86IGNILLifter::opXchg16ar_},
+          {"XCHG32ar", &X86IGNILLifter::opXchg32ar_},
+          {"XCHG64ar", &X86IGNILLifter::opXchg64ar_},
+          {"BSF16rr", &X86IGNILLifter::opBsf16rr_},
+          {"BSF32rr", &X86IGNILLifter::opBsf32rr_},
+          {"BSF64rr", &X86IGNILLifter::opBsf64rr_},
+          {"BSR16rr", &X86IGNILLifter::opBsr16rr_},
+          {"BSR32rr", &X86IGNILLifter::opBsr32rr_},
+          {"BSR64rr", &X86IGNILLifter::opBsr64rr_},
+          {"CMOV16rr", &X86IGNILLifter::opCmov16rr_},
+          {"CMOV32rr", &X86IGNILLifter::opCmov32rr_},
+          {"CMOV64rr", &X86IGNILLifter::opCmov64rr_},
+          {"XADD8rr", &X86IGNILLifter::opXadd8rr_},
+          {"XADD16rr", &X86IGNILLifter::opXadd16rr_},
+          {"XADD32rr", &X86IGNILLifter::opXadd32rr_},
+          {"XADD64rr", &X86IGNILLifter::opXadd64rr_},
+          {"INC8m", &X86IGNILLifter::opInc8m_},
+          {"INC16m", &X86IGNILLifter::opInc16m_},
+          {"INC32m", &X86IGNILLifter::opInc32m_},
+          {"INC64m", &X86IGNILLifter::opInc64m_},
+          {"DEC8m", &X86IGNILLifter::opDec8m_},
+          {"DEC16m", &X86IGNILLifter::opDec16m_},
+          {"DEC32m", &X86IGNILLifter::opDec32m_},
+          {"DEC64m", &X86IGNILLifter::opDec64m_},
+          {"MOV8ri_alt", &X86IGNILLifter::opMov8riAlt_},
+          {"LAHF", &X86IGNILLifter::opLahf_},
+          {"SAHF", &X86IGNILLifter::opSahf_},
           {"CLC", &X86IGNILLifter::opClc_},
           {"CMC", &X86IGNILLifter::opCmc_},
           {"CPUID", &X86IGNILLifter::opCpuid_},
@@ -555,6 +648,133 @@ dragon::ignil::Block dragon::x86::X86IGNILLifter::liftTrace(
   return result;
 }
 
+bool dragon::x86::X86IGNILLifter::liftExtendedForm(unsigned opc,
+                                                   const llvm::MCInst &mc,
+                                                   std::uint64_t addr,
+                                                   ignil::Block &out,
+                                                   std::uint32_t &tmp) const {
+  // Early-return dispatch (no deep nesting) for the VMProtect-mutation forms.
+  if (opc == opRol8ri_ || opc == opRol16ri_ || opc == opRol32ri_ ||
+      opc == opRol64ri_) {
+    liftRotate(mc, addr, out, tmp, /*left=*/true, ShiftCount::Imm);
+    return true;
+  }
+  if (opc == opRol8r1_ || opc == opRol16r1_ || opc == opRol32r1_ ||
+      opc == opRol64r1_) {
+    liftRotate(mc, addr, out, tmp, /*left=*/true, ShiftCount::One);
+    return true;
+  }
+  if (opc == opRol8rCL_ || opc == opRol16rCL_ || opc == opRol32rCL_ ||
+      opc == opRol64rCL_) {
+    liftRotate(mc, addr, out, tmp, /*left=*/true, ShiftCount::CL);
+    return true;
+  }
+  if (opc == opRor8ri_ || opc == opRor16ri_ || opc == opRor32ri_ ||
+      opc == opRor64ri_) {
+    liftRotate(mc, addr, out, tmp, /*left=*/false, ShiftCount::Imm);
+    return true;
+  }
+  if (opc == opRor8r1_ || opc == opRor16r1_ || opc == opRor32r1_ ||
+      opc == opRor64r1_) {
+    liftRotate(mc, addr, out, tmp, /*left=*/false, ShiftCount::One);
+    return true;
+  }
+  if (opc == opRor8rCL_ || opc == opRor16rCL_ || opc == opRor32rCL_ ||
+      opc == opRor64rCL_) {
+    liftRotate(mc, addr, out, tmp, /*left=*/false, ShiftCount::CL);
+    return true;
+  }
+  if (opc == opRcl8ri_ || opc == opRcl16ri_ || opc == opRcl32ri_ ||
+      opc == opRcl64ri_) {
+    liftRotateCarry(mc, addr, out, tmp, /*left=*/true, ShiftCount::Imm);
+    return true;
+  }
+  if (opc == opRcl8r1_ || opc == opRcl16r1_ || opc == opRcl32r1_ ||
+      opc == opRcl64r1_) {
+    liftRotateCarry(mc, addr, out, tmp, /*left=*/true, ShiftCount::One);
+    return true;
+  }
+  if (opc == opRcr8ri_ || opc == opRcr16ri_ || opc == opRcr32ri_ ||
+      opc == opRcr64ri_) {
+    liftRotateCarry(mc, addr, out, tmp, /*left=*/false, ShiftCount::Imm);
+    return true;
+  }
+  if (opc == opRcr8r1_ || opc == opRcr16r1_ || opc == opRcr32r1_ ||
+      opc == opRcr64r1_) {
+    liftRotateCarry(mc, addr, out, tmp, /*left=*/false, ShiftCount::One);
+    return true;
+  }
+  if (opc == opRcl8rCL_ || opc == opRcl16rCL_ || opc == opRcl32rCL_ ||
+      opc == opRcl64rCL_) {
+    liftRotateCarryCL(mc, addr, out, tmp, /*left=*/true);
+    return true;
+  }
+  if (opc == opRcr8rCL_ || opc == opRcr16rCL_ || opc == opRcr32rCL_ ||
+      opc == opRcr64rCL_) {
+    liftRotateCarryCL(mc, addr, out, tmp, /*left=*/false);
+    return true;
+  }
+  if (opc == opXchg16ar_ || opc == opXchg32ar_ || opc == opXchg64ar_) {
+    liftXchgAcc(mc, addr, out, tmp);
+    return true;
+  }
+  if (opc == opBsf16rr_ || opc == opBsf32rr_ || opc == opBsf64rr_) {
+    liftBitScan(mc, addr, out, tmp, /*reverse=*/false);
+    return true;
+  }
+  if (opc == opBsr16rr_ || opc == opBsr32rr_ || opc == opBsr64rr_) {
+    liftBitScan(mc, addr, out, tmp, /*reverse=*/true);
+    return true;
+  }
+  if (opc == opBts16ri8_ || opc == opBts32ri8_ || opc == opBts64ri8_ ||
+      opc == opBts16rr_ || opc == opBts32rr_ || opc == opBts64rr_) {
+    liftBitModify(mc, addr, out, tmp, BitOp::Set);
+    return true;
+  }
+  if (opc == opBtr16ri8_ || opc == opBtr32ri8_ || opc == opBtr64ri8_ ||
+      opc == opBtr16rr_ || opc == opBtr32rr_ || opc == opBtr64rr_) {
+    liftBitModify(mc, addr, out, tmp, BitOp::Reset);
+    return true;
+  }
+  if (opc == opBtc16ri8_ || opc == opBtc32ri8_ || opc == opBtc64ri8_ ||
+      opc == opBtc16rr_ || opc == opBtc32rr_ || opc == opBtc64rr_) {
+    liftBitModify(mc, addr, out, tmp, BitOp::Complement);
+    return true;
+  }
+  if (opc == opCmov16rr_ || opc == opCmov32rr_ || opc == opCmov64rr_) {
+    liftCmov(mc, addr, out, tmp);
+    return true;
+  }
+  if (opc == opXadd8rr_ || opc == opXadd16rr_ || opc == opXadd32rr_ ||
+      opc == opXadd64rr_) {
+    liftXadd(mc, addr, out, tmp);
+    return true;
+  }
+  if (opc == opInc8m_ || opc == opInc16m_ || opc == opInc32m_ ||
+      opc == opInc64m_) {
+    liftIncDecMem(mc, addr, out, tmp, /*dec=*/false);
+    return true;
+  }
+  if (opc == opDec8m_ || opc == opDec16m_ || opc == opDec32m_ ||
+      opc == opDec64m_) {
+    liftIncDecMem(mc, addr, out, tmp, /*dec=*/true);
+    return true;
+  }
+  if (opMov8riAlt_ != 0 && opc == opMov8riAlt_) {
+    liftMov(mc, addr, out, tmp);
+    return true;
+  }
+  if (opLahf_ != 0 && opc == opLahf_) {
+    liftLahf(addr, out, tmp);
+    return true;
+  }
+  if (opSahf_ != 0 && opc == opSahf_) {
+    liftSahf(addr, out, tmp);
+    return true;
+  }
+  return false;
+}
+
 void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
                                                   ignil::Block &out,
                                                   std::uint32_t &tempId) const {
@@ -792,6 +1012,12 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opBt16ri8_ || opc == opBt32ri8_ || opc == opBt64ri8_ ||
            opc == opBt16rr_ || opc == opBt32rr_ || opc == opBt64rr_)
     liftBt(*mc, addr, out, tempId);
+  // The rotate / bit-op / CMOV / XADD / memory INC-DEC / LAHF-SAHF family is
+  // dispatched in its own helper. Kept out of this else-if chain on purpose:
+  // MSVC caps how deeply blocks may nest (C1061), and a long chain of `else
+  // if` counts against that limit.
+  else if (liftExtendedForm(opc, *mc, addr, out, tempId))
+    ; // handled
   else if (opc == opStc_)
     liftCarryOp(addr, out, tempId, CarryOp::STC);
   else if (opc == opClc_)
@@ -3104,6 +3330,732 @@ void dragon::x86::X86IGNILLifter::liftBt(const llvm::MCInst &mc,
   out.append({ignil::Opcode::COPY, regCF_, {ignil::Value{carry}}, addr});
 }
 
+void dragon::x86::X86IGNILLifter::liftRotate(const llvm::MCInst &mc,
+                                             std::uint64_t addr,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp, bool left,
+                                             ShiftCount count) const {
+  // op[0]=dst(out), op[1]=src(tied=dst), [op[2]=imm8 for the ri form].
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftRotate in addr {:#x} no dst", addr);
+    return;
+  }
+  const ignil::Width w = dst->width;
+  const std::uint64_t W = w;
+  const std::uint64_t mask = W - 1;
+
+  auto xv = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, xv, {*dst}, addr});
+
+  // The effective rotation amount, masked to W-1. x86 masks the raw count to
+  // 5 bits (6 for 64-bit) then takes it mod the width; for every width that
+  // is exactly `count & (W-1)`.
+  auto cnt = newTemp(tmp, w);
+  switch (count) {
+    case ShiftCount::Imm: {
+      const auto imm =
+              static_cast<std::uint64_t>(mc.getOperand(2).getImm()) & mask;
+      out.append({ignil::Opcode::COPY, cnt, {ignil::Const{imm, w}}, addr});
+      break;
+    }
+    case ShiftCount::One:
+      out.append({ignil::Opcode::COPY, cnt, {ignil::Const{1 & mask, w}}, addr});
+      break;
+    case ShiftCount::CL: {
+      auto cl = newTemp(tmp, 8);
+      out.append({ignil::Opcode::AND, cl, {regCL_, ignil::Const{mask, 8}}, addr});
+      if (w == 8)
+        out.append({ignil::Opcode::COPY, cnt, {ignil::Value{cl}}, addr});
+      else
+        out.append({ignil::Opcode::ZEXT, cnt, {ignil::Value{cl}}, addr});
+      break;
+    }
+  }
+
+  // comp = (W - cnt) & (W-1): the complementary shift, masked so a zero count
+  // shifts by 0 (not W, which is poison) and the rotate reduces to x | x = x.
+  auto comp = newTemp(tmp, w);
+  out.append({ignil::Opcode::SUB, comp, {ignil::Const{W, w}, ignil::Value{cnt}},
+              addr});
+  auto compM = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND, compM,
+              {ignil::Value{comp}, ignil::Const{mask, w}}, addr});
+  auto part1 = newTemp(tmp, w);
+  out.append({left ? ignil::Opcode::SHL : ignil::Opcode::SHR, part1,
+              {ignil::Value{xv}, ignil::Value{cnt}}, addr});
+  auto part2 = newTemp(tmp, w);
+  out.append({left ? ignil::Opcode::SHR : ignil::Opcode::SHL, part2,
+              {ignil::Value{xv}, ignil::Value{compM}}, addr});
+  auto result = newTemp(tmp, w);
+  out.append({ignil::Opcode::OR, result, {ignil::Value{part1}, ignil::Value{part2}},
+              addr});
+  out.append({ignil::Opcode::COPY, *dst, {ignil::Value{result}}, addr});
+
+  // CF is the bit rotated past the far end: for ROL it is the new bit 0, for
+  // ROR the new bit W-1. A zero count leaves CF (and OF) unchanged, so CF is
+  // merged with its old value under an 8-bit mask, as the gated shifts do.
+  auto isZero = newTemp(tmp, 1);
+  out.append({ignil::Opcode::EQ, isZero, {ignil::Value{cnt}, ignil::Const{0, w}},
+              addr});
+  auto z8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::ZEXT, z8, {ignil::Value{isZero}}, addr});
+  auto nz8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::XOR, nz8, {ignil::Value{z8}, ignil::Const{1, 8}},
+              addr});
+  auto shifted = newTemp(tmp, w);
+  if (left)
+    out.append({ignil::Opcode::COPY, shifted, {ignil::Value{result}}, addr});
+  else
+    out.append({ignil::Opcode::SHR, shifted,
+                {ignil::Value{result}, ignil::Const{mask, w}}, addr});
+  auto bit = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND, bit, {ignil::Value{shifted}, ignil::Const{1, w}},
+              addr});
+  auto cfNew8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::TRUNC, cfNew8, {ignil::Value{bit}}, addr});
+  auto keep = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND, keep, {regCF_, ignil::Value{z8}}, addr});
+  auto take = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND, take, {ignil::Value{cfNew8}, ignil::Value{nz8}},
+              addr});
+  auto cf = newTemp(tmp, 8);
+  out.append({ignil::Opcode::OR, cf, {ignil::Value{keep}, ignil::Value{take}},
+              addr});
+  out.append({ignil::Opcode::COPY, regCF_, {ignil::Value{cf}}, addr});
+  // OF is defined only for a 1-bit rotate (= MSB(result) XOR the bit rotated
+  // into CF) and architecturally undefined otherwise. We emit that concrete
+  // value, gated like CF, rather than UNDEF: VMProtect folds the whole RFLAGS
+  // word (via pushfq) into its VM state, so an UNDEF OF poisons the recovered
+  // control flow (same reasoning as the PF/AF modeling). The value is exact
+  // for a 1-bit rotate and a deterministic, legal choice for larger counts.
+  auto resMSB = newTemp(tmp, 1);
+  out.append({ignil::Opcode::SLT, resMSB, {ignil::Value{result}, ignil::Const{0, w}}, addr});
+  // Left rotate: OF = MSB(result) XOR CF(after). Right rotate: OF = the two
+  // most-significant bits of the result XOR'd together.
+  auto otherBit = newTemp(tmp, 1);
+  if (left) {
+    out.append({ignil::Opcode::NEQ, otherBit, {ignil::Value{bit}, ignil::Const{0, w}}, addr});
+  } else {
+    auto sh2 = newTemp(tmp, w);
+    out.append({ignil::Opcode::SHR, sh2, {ignil::Value{result}, ignil::Const{W - 2, w}}, addr});
+    auto b2 = newTemp(tmp, w);
+    out.append({ignil::Opcode::AND, b2, {ignil::Value{sh2}, ignil::Const{1, w}}, addr});
+    out.append({ignil::Opcode::NEQ, otherBit, {ignil::Value{b2}, ignil::Const{0, w}}, addr});
+  }
+  auto ofBit = newTemp(tmp, 1);
+  out.append({ignil::Opcode::XOR, ofBit, {ignil::Value{resMSB}, ignil::Value{otherBit}}, addr});
+  auto ofNew8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::ZEXT, ofNew8, {ignil::Value{ofBit}}, addr});
+  auto keepOf = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND, keepOf, {regOF_, ignil::Value{z8}}, addr});
+  auto takeOf = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND, takeOf, {ignil::Value{ofNew8}, ignil::Value{nz8}}, addr});
+  auto ofMerged = newTemp(tmp, 8);
+  out.append({ignil::Opcode::OR, ofMerged, {ignil::Value{keepOf}, ignil::Value{takeOf}}, addr});
+  out.append({ignil::Opcode::COPY, regOF_, {ignil::Value{ofMerged}}, addr});
+  // SF/ZF/PF/AF are not affected by a rotate: left untouched on purpose.
+}
+
+void dragon::x86::X86IGNILLifter::liftRotateCarry(const llvm::MCInst &mc,
+                                                  std::uint64_t addr,
+                                                  ignil::Block &out,
+                                                  std::uint32_t &tmp, bool left,
+                                                  ShiftCount count) const {
+  // op[0]=dst(out), op[1]=src(tied=dst), [op[2]=imm8].
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftRotateCarry in addr {:#x} no dst", addr);
+    return;
+  }
+  const ignil::Width w = dst->width;
+  const std::uint64_t W = w;
+
+  // The count is known at lift time, so reduce it here: mask to 5 bits (6 for
+  // 64-bit), then mod (W+1) for the 8/16-bit forms (32/64-bit never exceed W).
+  std::uint64_t raw =
+          (count == ShiftCount::One)
+                  ? 1
+                  : static_cast<std::uint64_t>(mc.getOperand(2).getImm());
+  std::uint64_t c = raw & ((W == 64) ? 0x3Full : 0x1Full);
+  if (W == 8)
+    c %= 9;
+  else if (W == 16)
+    c %= 17;
+  if (c == 0) {
+    // A zero count changes neither the operand nor any flag. Emit an explicit
+    // identity copy rather than nothing, so the instruction is visibly lifted
+    // (no ops at all reads as a silently dropped instruction downstream).
+    out.append({ignil::Opcode::COPY, *dst, {*dst}, addr});
+    return;
+  }
+
+  auto xv = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, xv, {*dst}, addr});
+  auto cf8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND, cf8, {regCF_, ignil::Const{1, 8}}, addr});
+  auto cfW = newTemp(tmp, w);
+  if (w == 8)
+    out.append({ignil::Opcode::COPY, cfW, {ignil::Value{cf8}}, addr});
+  else
+    out.append({ignil::Opcode::ZEXT, cfW, {ignil::Value{cf8}}, addr});
+
+  auto shiftTerm = [&](ignil::Opcode op, ignil::Value base,
+                       std::uint64_t amt) -> ignil::Temp {
+    auto t = newTemp(tmp, w);
+    out.append({op, t, {base, ignil::Const{amt, w}}, addr});
+    return t;
+  };
+  std::vector<ignil::Temp> terms;
+  if (left) {
+    // result = (x << c) | (CF << (c-1)) | (x >> (W+1-c))
+    if (c < W)
+      terms.push_back(shiftTerm(ignil::Opcode::SHL, ignil::Value{xv}, c));
+    terms.push_back(shiftTerm(ignil::Opcode::SHL, ignil::Value{cfW}, c - 1));
+    if (c > 1)
+      terms.push_back(shiftTerm(ignil::Opcode::SHR, ignil::Value{xv}, W + 1 - c));
+  } else {
+    // result = (x >> c) | (CF << (W-c)) | (x << (W+1-c))
+    if (c < W)
+      terms.push_back(shiftTerm(ignil::Opcode::SHR, ignil::Value{xv}, c));
+    terms.push_back(shiftTerm(ignil::Opcode::SHL, ignil::Value{cfW}, W - c));
+    if (c > 1)
+      terms.push_back(shiftTerm(ignil::Opcode::SHL, ignil::Value{xv}, W + 1 - c));
+  }
+  ignil::Temp acc = terms.front();
+  for (std::size_t i = 1; i < terms.size(); ++i) {
+    auto merged = newTemp(tmp, w);
+    out.append({ignil::Opcode::OR, merged, {ignil::Value{acc}, ignil::Value{terms[i]}},
+                addr});
+    acc = merged;
+  }
+  out.append({ignil::Opcode::COPY, *dst, {ignil::Value{acc}}, addr});
+
+  // New CF = the bit that rotated into the carry: bit (W-c) of x for RCL, bit
+  // (c-1) for RCR. Both are in range for 1 <= c <= W.
+  const std::uint64_t cfPos = left ? (W - c) : (c - 1);
+  auto sh = newTemp(tmp, w);
+  out.append({ignil::Opcode::SHR, sh, {ignil::Value{xv}, ignil::Const{cfPos, w}},
+              addr});
+  auto bit = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND, bit, {ignil::Value{sh}, ignil::Const{1, w}}, addr});
+  auto cfNew = newTemp(tmp, 8);
+  out.append({ignil::Opcode::TRUNC, cfNew, {ignil::Value{bit}}, addr});
+  out.append({ignil::Opcode::COPY, regCF_, {ignil::Value{cfNew}}, addr});
+  // OF (concrete rather than UNDEF, see liftRotate): MSB(result) XOR the new
+  // CF. The count here is known to be >= 1, so no zero-count gate is needed.
+  auto resMSB = newTemp(tmp, 1);
+  out.append({ignil::Opcode::SLT, resMSB, {ignil::Value{acc}, ignil::Const{0, w}}, addr});
+  auto otherBit = newTemp(tmp, 1);
+  if (left) {
+    out.append({ignil::Opcode::NEQ, otherBit, {ignil::Value{bit}, ignil::Const{0, w}}, addr});
+  } else {
+    auto sh2 = newTemp(tmp, w);
+    out.append({ignil::Opcode::SHR, sh2, {ignil::Value{acc}, ignil::Const{W - 2, w}}, addr});
+    auto b2 = newTemp(tmp, w);
+    out.append({ignil::Opcode::AND, b2, {ignil::Value{sh2}, ignil::Const{1, w}}, addr});
+    out.append({ignil::Opcode::NEQ, otherBit, {ignil::Value{b2}, ignil::Const{0, w}}, addr});
+  }
+  auto ofBit = newTemp(tmp, 1);
+  out.append({ignil::Opcode::XOR, ofBit, {ignil::Value{resMSB}, ignil::Value{otherBit}}, addr});
+  out.append({ignil::Opcode::COPY, regOF_, {ignil::Value{ofBit}}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftRotateCarryCL(const llvm::MCInst &mc,
+                                                    std::uint64_t addr,
+                                                    ignil::Block &out,
+                                                    std::uint32_t &tmp,
+                                                    bool left) const {
+  // op[0]=dst(out), op[1]=src(tied=dst); the count is CL.
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftRotateCarryCL in addr {:#x} no dst", addr);
+    return;
+  }
+  const ignil::Width w = dst->width;
+  const std::uint64_t W = w;
+  const std::uint64_t mask = W - 1;
+
+  // Reduce the count exactly as x86 does: mask to 5 bits (6 for 64-bit), then
+  // take it mod (W+1) for the 8/16-bit forms (32/64 never exceed W).
+  auto cl5 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND, cl5,
+              {regCL_, ignil::Const{(W == 64) ? 0x3Full : 0x1Full, 8}}, addr});
+  auto c8 = newTemp(tmp, 8);
+  if (W == 8)
+    out.append({ignil::Opcode::UMOD, c8, {ignil::Value{cl5}, ignil::Const{9, 8}}, addr});
+  else if (W == 16)
+    out.append({ignil::Opcode::UMOD, c8, {ignil::Value{cl5}, ignil::Const{17, 8}}, addr});
+  else
+    out.append({ignil::Opcode::COPY, c8, {ignil::Value{cl5}}, addr});
+  auto cW = newTemp(tmp, w);
+  if (w == 8)
+    out.append({ignil::Opcode::COPY, cW, {ignil::Value{c8}}, addr});
+  else
+    out.append({ignil::Opcode::ZEXT, cW, {ignil::Value{c8}}, addr});
+
+  auto xv = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, xv, {*dst}, addr});
+  auto cf8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND, cf8, {regCF_, ignil::Const{1, 8}}, addr});
+  auto cfW = newTemp(tmp, w);
+  if (w == 8)
+    out.append({ignil::Opcode::COPY, cfW, {ignil::Value{cf8}}, addr});
+  else
+    out.append({ignil::Opcode::ZEXT, cfW, {ignil::Value{cf8}}, addr});
+
+  // A variable shift whose amount may be as large as W: mask the amount to
+  // W-1 for the shift itself (never poison) and zero the result when the true
+  // amount was >= W.
+  auto shiftGated = [&](ignil::Opcode op, ignil::Value base,
+                        ignil::Temp amt) -> ignil::Temp {
+    auto amtM = newTemp(tmp, w);
+    out.append({ignil::Opcode::AND, amtM, {ignil::Value{amt}, ignil::Const{mask, w}},
+                addr});
+    auto raw = newTemp(tmp, w);
+    out.append({op, raw, {base, ignil::Value{amtM}}, addr});
+    auto lt = newTemp(tmp, 1);
+    out.append({ignil::Opcode::ULT, lt, {ignil::Value{amt}, ignil::Const{W, w}}, addr});
+    auto ltW = newTemp(tmp, w);
+    out.append({ignil::Opcode::ZEXT, ltW, {ignil::Value{lt}}, addr});
+    auto gate = newTemp(tmp, w);
+    out.append({ignil::Opcode::NEG, gate, {ignil::Value{ltW}}, addr});
+    auto res = newTemp(tmp, w);
+    out.append({ignil::Opcode::AND, res, {ignil::Value{raw}, ignil::Value{gate}}, addr});
+    return res;
+  };
+  auto maskedShiftConstBase = [&](ignil::Value base, ignil::Temp amt,
+                                  ignil::Opcode op) -> ignil::Temp {
+    // Plain shift by an amount already known to be in [0, W-1] for c >= 1; the
+    // amount is masked anyway so a c == 0 wrap can never poison (its result is
+    // discarded by the count != 0 gate below).
+    auto amtM = newTemp(tmp, w);
+    out.append({ignil::Opcode::AND, amtM, {ignil::Value{amt}, ignil::Const{mask, w}},
+                addr});
+    auto r = newTemp(tmp, w);
+    out.append({op, r, {base, ignil::Value{amtM}}, addr});
+    return r;
+  };
+
+  auto cm1 = newTemp(tmp, w); // c - 1
+  out.append({ignil::Opcode::SUB, cm1, {ignil::Value{cW}, ignil::Const{1, w}}, addr});
+  auto wp1mc = newTemp(tmp, w); // W + 1 - c
+  out.append({ignil::Opcode::SUB, wp1mc, {ignil::Const{W + 1, w}, ignil::Value{cW}}, addr});
+  auto wmc = newTemp(tmp, w); // W - c
+  out.append({ignil::Opcode::SUB, wmc, {ignil::Const{W, w}, ignil::Value{cW}}, addr});
+
+  ignil::Temp termA{0, w}, termB{0, w}, termC{0, w}, cfbit{0, w};
+  if (left) {
+    termA = shiftGated(ignil::Opcode::SHL, ignil::Value{xv}, cW); // x << c
+    termB = maskedShiftConstBase(ignil::Value{cfW}, cm1, ignil::Opcode::SHL); // CF << (c-1)
+    termC = shiftGated(ignil::Opcode::SHR, ignil::Value{xv}, wp1mc); // x >> (W+1-c)
+    cfbit = maskedShiftConstBase(ignil::Value{xv}, wmc, ignil::Opcode::SHR); // bit W-c
+  } else {
+    termA = shiftGated(ignil::Opcode::SHR, ignil::Value{xv}, cW); // x >> c
+    termB = maskedShiftConstBase(ignil::Value{cfW}, wmc, ignil::Opcode::SHL); // CF << (W-c)
+    termC = shiftGated(ignil::Opcode::SHL, ignil::Value{xv}, wp1mc); // x << (W+1-c)
+    cfbit = maskedShiftConstBase(ignil::Value{xv}, cm1, ignil::Opcode::SHR); // bit c-1
+  }
+  auto ab = newTemp(tmp, w);
+  out.append({ignil::Opcode::OR, ab, {ignil::Value{termA}, ignil::Value{termB}}, addr});
+  auto result = newTemp(tmp, w);
+  out.append({ignil::Opcode::OR, result, {ignil::Value{ab}, ignil::Value{termC}}, addr});
+
+  // A zero count changes nothing: final = (c != 0) ? result : x.
+  auto cnz = newTemp(tmp, 1);
+  out.append({ignil::Opcode::NEQ, cnz, {ignil::Value{cW}, ignil::Const{0, w}}, addr});
+  auto cnzW = newTemp(tmp, w);
+  out.append({ignil::Opcode::ZEXT, cnzW, {ignil::Value{cnz}}, addr});
+  auto gmask = newTemp(tmp, w);
+  out.append({ignil::Opcode::NEG, gmask, {ignil::Value{cnzW}}, addr});
+  auto gkeep = newTemp(tmp, w);
+  out.append({ignil::Opcode::NOT, gkeep, {ignil::Value{gmask}}, addr});
+  auto take = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND, take, {ignil::Value{result}, ignil::Value{gmask}}, addr});
+  auto keep = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND, keep, {ignil::Value{xv}, ignil::Value{gkeep}}, addr});
+  auto final = newTemp(tmp, w);
+  out.append({ignil::Opcode::OR, final, {ignil::Value{take}, ignil::Value{keep}}, addr});
+  out.append({ignil::Opcode::COPY, *dst, {ignil::Value{final}}, addr});
+
+  // CF = the rotated-in bit (gated by count != 0, like the operand).
+  auto cfbit8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::TRUNC, cfbit8, {ignil::Value{cfbit}}, addr});
+  auto z8 = newTemp(tmp, 8);
+  auto isZero = newTemp(tmp, 1);
+  out.append({ignil::Opcode::EQ, isZero, {ignil::Value{cW}, ignil::Const{0, w}}, addr});
+  out.append({ignil::Opcode::ZEXT, z8, {ignil::Value{isZero}}, addr});
+  auto nz8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::XOR, nz8, {ignil::Value{z8}, ignil::Const{1, 8}}, addr});
+  auto keepCf = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND, keepCf, {regCF_, ignil::Value{z8}}, addr});
+  auto takeCf = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND, takeCf, {ignil::Value{cfbit8}, ignil::Value{nz8}}, addr});
+  auto cf = newTemp(tmp, 8);
+  out.append({ignil::Opcode::OR, cf, {ignil::Value{keepCf}, ignil::Value{takeCf}}, addr});
+  out.append({ignil::Opcode::COPY, regCF_, {ignil::Value{cf}}, addr});
+  // OF (concrete rather than UNDEF, see liftRotate): MSB(result) XOR new CF,
+  // gated by count != 0 just like CF.
+  auto resMSB = newTemp(tmp, 1);
+  out.append({ignil::Opcode::SLT, resMSB, {ignil::Value{result}, ignil::Const{0, w}}, addr});
+  auto otherBit = newTemp(tmp, 1);
+  if (left) {
+    out.append({ignil::Opcode::NEQ, otherBit, {ignil::Value{cfbit}, ignil::Const{0, w}}, addr});
+  } else {
+    auto sh2 = newTemp(tmp, w);
+    out.append({ignil::Opcode::SHR, sh2, {ignil::Value{result}, ignil::Const{W - 2, w}}, addr});
+    auto b2 = newTemp(tmp, w);
+    out.append({ignil::Opcode::AND, b2, {ignil::Value{sh2}, ignil::Const{1, w}}, addr});
+    out.append({ignil::Opcode::NEQ, otherBit, {ignil::Value{b2}, ignil::Const{0, w}}, addr});
+  }
+  auto ofBit = newTemp(tmp, 1);
+  out.append({ignil::Opcode::XOR, ofBit, {ignil::Value{resMSB}, ignil::Value{otherBit}}, addr});
+  auto ofNew8 = newTemp(tmp, 8);
+  out.append({ignil::Opcode::ZEXT, ofNew8, {ignil::Value{ofBit}}, addr});
+  auto keepOf = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND, keepOf, {regOF_, ignil::Value{z8}}, addr});
+  auto takeOf = newTemp(tmp, 8);
+  out.append({ignil::Opcode::AND, takeOf, {ignil::Value{ofNew8}, ignil::Value{nz8}}, addr});
+  auto ofMerged = newTemp(tmp, 8);
+  out.append({ignil::Opcode::OR, ofMerged, {ignil::Value{keepOf}, ignil::Value{takeOf}}, addr});
+  out.append({ignil::Opcode::COPY, regOF_, {ignil::Value{ofMerged}}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftXchgAcc(const llvm::MCInst &mc,
+                                              std::uint64_t addr,
+                                              ignil::Block &out,
+                                              std::uint32_t &tmp) const {
+  auto reg = toReg(mc.getOperand(0).getReg());
+  if (!reg) {
+    logger_.log("Error liftXchgAcc in addr {:#x} no reg", addr);
+    return;
+  }
+  const ignil::Reg acc =
+          (reg->width == 16) ? regAX_ : (reg->width == 32) ? regEAX_ : regRAX_;
+  auto tr = newTemp(tmp, reg->width);
+  out.append({ignil::Opcode::COPY, tr, {*reg}, addr});
+  auto ta = newTemp(tmp, acc.width);
+  out.append({ignil::Opcode::COPY, ta, {acc}, addr});
+  out.append({ignil::Opcode::COPY, *reg, {ignil::Value{ta}}, addr});
+  out.append({ignil::Opcode::COPY, acc, {ignil::Value{tr}}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftBitScan(const llvm::MCInst &mc,
+                                              std::uint64_t addr,
+                                              ignil::Block &out,
+                                              std::uint32_t &tmp,
+                                              bool reverse) const {
+  // op[0]=dst(out), last operand = source register.
+  auto dst = toReg(mc.getOperand(0).getReg());
+  auto src = toReg(mc.getOperand(mc.getNumOperands() - 1).getReg());
+  if (!dst || !src) {
+    logger_.log("Error liftBitScan in addr {:#x} bad operands", addr);
+    if (dst)
+      emitUndef(*dst, addr, out);
+    emitArithFlags(addr, out, tmp);
+    return;
+  }
+  const ignil::Width w = dst->width;
+  const unsigned W = w;
+
+  auto srcV = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, srcV, {*src}, addr});
+
+  // dst = index of the lowest (BSF) / highest (BSR) set bit, as an unrolled
+  // "last write wins" scan. BSF scans from the high bit down so the lowest set
+  // bit is written last; BSR scans from the low bit up. A source of 0 leaves
+  // dst at its initial 0 (the ISA leaves it undefined; ZF flags the case).
+  auto result = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, result, {ignil::Const{0, w}}, addr});
+  for (unsigned step = 0; step < W; ++step) {
+    const unsigned i = reverse ? step : (W - 1 - step);
+    auto shifted = newTemp(tmp, w);
+    out.append({ignil::Opcode::SHR, shifted, {ignil::Value{srcV}, ignil::Const{i, w}},
+                addr});
+    auto justBit = newTemp(tmp, w);
+    out.append({ignil::Opcode::AND, justBit,
+                {ignil::Value{shifted}, ignil::Const{1, w}}, addr});
+    auto isOne = newTemp(tmp, 1);
+    out.append({ignil::Opcode::NEQ, isOne,
+                {ignil::Value{justBit}, ignil::Const{0, w}}, addr});
+    auto condW = newTemp(tmp, w);
+    out.append({ignil::Opcode::ZEXT, condW, {ignil::Value{isOne}}, addr});
+    auto mask = newTemp(tmp, w);
+    out.append({ignil::Opcode::NEG, mask, {ignil::Value{condW}}, addr});
+    auto keepMask = newTemp(tmp, w);
+    out.append({ignil::Opcode::NOT, keepMask, {ignil::Value{mask}}, addr});
+    auto take = newTemp(tmp, w);
+    out.append({ignil::Opcode::AND, take,
+                {ignil::Const{i, w}, ignil::Value{mask}}, addr});
+    auto keep = newTemp(tmp, w);
+    out.append({ignil::Opcode::AND, keep,
+                {ignil::Value{result}, ignil::Value{keepMask}}, addr});
+    auto next = newTemp(tmp, w);
+    out.append({ignil::Opcode::OR, next, {ignil::Value{take}, ignil::Value{keep}},
+                addr});
+    result = next;
+  }
+  out.append({ignil::Opcode::COPY, *dst, {ignil::Value{result}}, addr});
+
+  // ZF reflects a zero source; every other flag is architecturally undefined.
+  emitArithFlags(addr, out, tmp, {{X86Flag::ZF, zfEqZero(ignil::Value{srcV}, addr)}});
+}
+
+void dragon::x86::X86IGNILLifter::liftBitModify(const llvm::MCInst &mc,
+                                                std::uint64_t addr,
+                                                ignil::Block &out,
+                                                std::uint32_t &tmp,
+                                                BitOp op) const {
+  // op[0]=dst(out), op[1]=src(tied=dst), op[2]=bit index (reg or imm8).
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftBitModify in addr {:#x} no dst", addr);
+    emitUndef(regCF_, addr, out);
+    return;
+  }
+  const ignil::Width w = dst->width;
+
+  auto value = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, value, {*dst}, addr});
+
+  // Index wraps at the operand width.
+  auto index = newTemp(tmp, w);
+  const auto &indexOp = mc.getOperand(2);
+  if (indexOp.isImm()) {
+    out.append({ignil::Opcode::COPY, index,
+                {ignil::Const{static_cast<std::uint64_t>(indexOp.getImm()) % w, w}},
+                addr});
+  } else {
+    auto indexReg = toReg(indexOp.getReg());
+    if (!indexReg) {
+      logger_.log("Error liftBitModify in addr {:#x} no index", addr);
+      emitUndef(regCF_, addr, out);
+      return;
+    }
+    out.append({ignil::Opcode::AND, index,
+                {*indexReg, ignil::Const{static_cast<std::uint64_t>(w) - 1, w}},
+                addr});
+  }
+
+  // CF = the selected bit's current value.
+  auto shifted = newTemp(tmp, w);
+  out.append({ignil::Opcode::SHR, shifted, {ignil::Value{value}, ignil::Value{index}},
+              addr});
+  auto oldBit = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND, oldBit, {ignil::Value{shifted}, ignil::Const{1, w}},
+              addr});
+  auto cf = newTemp(tmp, 8);
+  out.append({ignil::Opcode::TRUNC, cf, {ignil::Value{oldBit}}, addr});
+  out.append({ignil::Opcode::COPY, regCF_, {ignil::Value{cf}}, addr});
+
+  // bitmask = 1 << index, then set / clear / complement that bit.
+  auto bitmask = newTemp(tmp, w);
+  out.append({ignil::Opcode::SHL, bitmask, {ignil::Const{1, w}, ignil::Value{index}},
+              addr});
+  auto result = newTemp(tmp, w);
+  switch (op) {
+    case BitOp::Set:
+      out.append({ignil::Opcode::OR, result,
+                  {ignil::Value{value}, ignil::Value{bitmask}}, addr});
+      break;
+    case BitOp::Reset: {
+      auto inv = newTemp(tmp, w);
+      out.append({ignil::Opcode::NOT, inv, {ignil::Value{bitmask}}, addr});
+      out.append({ignil::Opcode::AND, result,
+                  {ignil::Value{value}, ignil::Value{inv}}, addr});
+      break;
+    }
+    case BitOp::Complement:
+      out.append({ignil::Opcode::XOR, result,
+                  {ignil::Value{value}, ignil::Value{bitmask}}, addr});
+      break;
+  }
+  out.append({ignil::Opcode::COPY, *dst, {ignil::Value{result}}, addr});
+  // Only CF is defined; the other flags are left as they were.
+}
+
+void dragon::x86::X86IGNILLifter::liftCmov(const llvm::MCInst &mc,
+                                           std::uint64_t addr, ignil::Block &out,
+                                           std::uint32_t &tmp) const {
+  // op[0]=dst(out), op[1]=src1(tied=dst, kept value), op[2]=src2(moved-in),
+  // op[3]=condition code.
+  auto dst = toReg(mc.getOperand(0).getReg());
+  auto kept = toReg(mc.getOperand(1).getReg());
+  auto taken = toReg(mc.getOperand(2).getReg());
+  if (!dst || !kept || !taken) {
+    logger_.log("Error liftCmov in addr {:#x} bad operands", addr);
+    if (dst)
+      emitUndef(*dst, addr, out);
+    return;
+  }
+  const ignil::Width w = dst->width;
+  const auto condCode = static_cast<unsigned>(mc.getOperand(3).getImm());
+  auto cond = emitCondition(condCode, addr, out, tmp);
+
+  // dst = cond ? taken : kept, as (taken & m) | (kept & ~m), m = all-ones
+  // when the condition holds. IGNIL has no select (same trick as
+  // liftShiftDouble).
+  auto keptV = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, keptV, {*kept}, addr});
+  auto takenV = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, takenV, {*taken}, addr});
+  auto condW = newTemp(tmp, w);
+  out.append({ignil::Opcode::ZEXT, condW, {ignil::Value{cond}}, addr});
+  auto mask = newTemp(tmp, w);
+  out.append({ignil::Opcode::NEG, mask, {ignil::Value{condW}}, addr});
+  auto keepMask = newTemp(tmp, w);
+  out.append({ignil::Opcode::NOT, keepMask, {ignil::Value{mask}}, addr});
+  auto takePart = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND, takePart, {ignil::Value{takenV}, ignil::Value{mask}},
+              addr});
+  auto keepPart = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND, keepPart,
+              {ignil::Value{keptV}, ignil::Value{keepMask}}, addr});
+  auto result = newTemp(tmp, w);
+  out.append({ignil::Opcode::OR, result, {ignil::Value{takePart}, ignil::Value{keepPart}},
+              addr});
+  out.append({ignil::Opcode::COPY, *dst, {ignil::Value{result}}, addr});
+  // CMOVcc affects no flags.
+}
+
+void dragon::x86::X86IGNILLifter::liftXadd(const llvm::MCInst &mc,
+                                           std::uint64_t addr, ignil::Block &out,
+                                           std::uint32_t &tmp) const {
+  // op[0]=DEST, op[1]=SRC (both registers, both read before either write).
+  auto dst = toReg(mc.getOperand(0).getReg());
+  auto src = toReg(mc.getOperand(1).getReg());
+  if (!dst || !src) {
+    logger_.log("Error liftXadd in addr {:#x} bad operands", addr);
+    if (dst)
+      emitUndef(*dst, addr, out);
+    if (src)
+      emitUndef(*src, addr, out);
+    return;
+  }
+  const ignil::Width w = dst->width;
+
+  auto lhs = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, lhs, {*dst}, addr});
+  auto rhs = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, rhs, {*src}, addr});
+  auto result = newTemp(tmp, w);
+  out.append({ignil::Opcode::ADD, result, {ignil::Value{lhs}, ignil::Value{rhs}},
+              addr});
+  // SRC = old DEST; DEST = DEST + SRC.
+  out.append({ignil::Opcode::COPY, *src, {ignil::Value{lhs}}, addr});
+  out.append({ignil::Opcode::COPY, *dst, {ignil::Value{result}}, addr});
+
+  emitArithFlags(addr, out, tmp,
+                 {
+                         {X86Flag::CF, cfAddOverflow(result, ignil::Value{rhs}, addr)},
+                         {X86Flag::PF, pfParity(result, addr)},
+                         {X86Flag::AF, afNibbleCarry(lhs, rhs, result, addr)},
+                         {X86Flag::ZF, zfEqZero(result, addr)},
+                         {X86Flag::SF, sfSignBit(result, addr)},
+                         {X86Flag::OF, ofAddOverflow(lhs, rhs, result, addr)},
+                 });
+}
+
+void dragon::x86::X86IGNILLifter::liftIncDecMem(const llvm::MCInst &mc,
+                                                std::uint64_t addr,
+                                                ignil::Block &out,
+                                                std::uint32_t &tmp,
+                                                bool dec) const {
+  // op[0..4]=mem(base,scale,index,disp,seg). Load, +/- 1, store back.
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+  const unsigned opc = mc.getOpcode();
+  ignil::Width w = 32;
+  if (opc == opInc8m_ || opc == opDec8m_)
+    w = 8;
+  else if (opc == opInc16m_ || opc == opDec16m_)
+    w = 16;
+  else if (opc == opInc64m_ || opc == opDec64m_)
+    w = 64;
+
+  auto addrTemp = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
+  auto lhs = newTemp(tmp, w);
+  out.append({ignil::Opcode::LOAD, lhs, {addrTemp}, addr});
+  auto result = newTemp(tmp, w);
+  out.append({dec ? ignil::Opcode::SUB : ignil::Opcode::ADD, result,
+              {ignil::Value{lhs}, ignil::Const{1, w}}, addr});
+  out.append({ignil::Opcode::STORE, std::nullopt, {addrTemp, ignil::Value{result}},
+              addr});
+
+  // Exactly the register INC/DEC flag convention: CF deliberately untouched.
+  pfParity(result, addr)(out, tmp);
+  afNibbleCarry(ignil::Value{lhs}, ignil::Const{1, w}, result, addr)(out, tmp);
+  zfEqZero(result, addr)(out, tmp);
+  sfSignBit(result, addr)(out, tmp);
+  auto lhsNeg = newTemp(tmp, 1);
+  out.append({ignil::Opcode::SLT, lhsNeg, {ignil::Value{lhs}, ignil::Const{0, w}},
+              addr});
+  auto resNeg = newTemp(tmp, 1);
+  out.append({ignil::Opcode::SLT, resNeg, {ignil::Value{result}, ignil::Const{0, w}},
+              addr});
+  auto of = newTemp(tmp, 1);
+  if (dec) {
+    // OF set iff value was the minimum negative (negative -> non-negative).
+    auto resNonNeg = newTemp(tmp, 1);
+    out.append({ignil::Opcode::NOT, resNonNeg, {ignil::Value{resNeg}}, addr});
+    out.append({ignil::Opcode::AND, of, {ignil::Value{lhsNeg}, ignil::Value{resNonNeg}},
+                addr});
+  } else {
+    // OF set iff value was the maximum positive (non-negative -> negative).
+    auto lhsNonNeg = newTemp(tmp, 1);
+    out.append({ignil::Opcode::NOT, lhsNonNeg, {ignil::Value{lhsNeg}}, addr});
+    out.append({ignil::Opcode::AND, of, {ignil::Value{lhsNonNeg}, ignil::Value{resNeg}},
+                addr});
+  }
+  out.append({ignil::Opcode::COPY, regOF_, {ignil::Value{of}}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftLahf(std::uint64_t addr, ignil::Block &out,
+                                           std::uint32_t &tmp) const {
+  // AH = SF(7):ZF(6):0(5):AF(4):0(3):PF(2):1(1):CF(0).
+  auto acc = newTemp(tmp, 8);
+  out.append({ignil::Opcode::COPY, acc, {ignil::Const{0x02, 8}}, addr}); // bit 1 reads as 1
+  const std::array<std::pair<ignil::Reg, unsigned>, 5> bits = {{
+          {regCF_, 0}, {regPF_, 2}, {regAF_, 4}, {regZF_, 6}, {regSF_, 7},
+  }};
+  for (const auto &[flag, pos]: bits) {
+    auto f8 = newTemp(tmp, 8);
+    out.append({ignil::Opcode::AND, f8, {flag, ignil::Const{1, 8}}, addr});
+    auto placed = newTemp(tmp, 8);
+    if (pos == 0)
+      out.append({ignil::Opcode::COPY, placed, {ignil::Value{f8}}, addr});
+    else
+      out.append({ignil::Opcode::SHL, placed, {ignil::Value{f8}, ignil::Const{pos, 8}},
+                  addr});
+    auto merged = newTemp(tmp, 8);
+    out.append({ignil::Opcode::OR, merged, {ignil::Value{acc}, ignil::Value{placed}},
+                addr});
+    acc = merged;
+  }
+  out.append({ignil::Opcode::COPY, regAH_, {ignil::Value{acc}}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftSahf(std::uint64_t addr, ignil::Block &out,
+                                           std::uint32_t &tmp) const {
+  // Set SF/ZF/AF/PF/CF from the matching bits of AH.
+  auto ah = newTemp(tmp, 8);
+  out.append({ignil::Opcode::COPY, ah, {regAH_}, addr});
+  const std::array<std::pair<ignil::Reg, unsigned>, 5> bits = {{
+          {regCF_, 0}, {regPF_, 2}, {regAF_, 4}, {regZF_, 6}, {regSF_, 7},
+  }};
+  for (const auto &[flag, pos]: bits) {
+    auto sh = newTemp(tmp, 8);
+    if (pos == 0)
+      out.append({ignil::Opcode::COPY, sh, {ignil::Value{ah}}, addr});
+    else
+      out.append({ignil::Opcode::SHR, sh, {ignil::Value{ah}, ignil::Const{pos, 8}},
+                  addr});
+    auto bit = newTemp(tmp, 8);
+    out.append({ignil::Opcode::AND, bit, {ignil::Value{sh}, ignil::Const{1, 8}}, addr});
+    out.append({ignil::Opcode::COPY, flag, {ignil::Value{bit}}, addr});
+  }
+}
+
 void dragon::x86::X86IGNILLifter::liftCarryOp(std::uint64_t addr,
                                               ignil::Block &out,
                                               std::uint32_t &tmp,
@@ -3214,16 +4166,23 @@ void dragon::x86::X86IGNILLifter::emitGatedShiftFlags(std::uint64_t addr,
               {ignil::Value{result}, ignil::Const{0, w}},
               addr});
   gate(regSF_, sf);
-  // OF is architecturally defined only for a count of 1, PF/AF are not
-  // modeled: honestly UNDEF (a zero count would keep them, which the gate
-  // cannot express for an undefined value).
-  // PF from the result and AF cleared, both gated like CF/ZF/SF; OF is
-  // architecturally defined only for a count of 1 and stays UNDEF.
+  // PF from the result and AF cleared, both gated like CF/ZF/SF.
   gate(regPF_, parityBit(ignil::Value{result}, addr, out, tmp));
   auto afZero = newTemp(tmp, 1);
   out.append({ignil::Opcode::COPY, afZero, {ignil::Const{0, 1}}, addr});
   gate(regAF_, afZero);
-  emitUndef(regOF_, addr, out);
+  // OF for a 1-bit shift is "did the sign bit change", i.e. MSB(lhs) XOR
+  // MSB(result) - which is exactly right for SHL (sign flipped), SHR (new MSB
+  // is 0, so OF = old MSB) and SAR (MSB preserved, so OF = 0). For counts > 1
+  // the ISA leaves OF undefined; we still emit this concrete, deterministic
+  // value (gated like the rest) rather than UNDEF, because VMProtect folds the
+  // whole RFLAGS word (pushfq) into its VM state and a symbolic OF poisons the
+  // recovered control flow - the same reason PF/AF are modeled, not UNDEF.
+  auto lhsSign = newTemp(tmp, 1);
+  out.append({ignil::Opcode::SLT, lhsSign, {ignil::Value{lhs}, ignil::Const{0, w}}, addr});
+  auto ofBit = newTemp(tmp, 1);
+  out.append({ignil::Opcode::XOR, ofBit, {ignil::Value{lhsSign}, ignil::Value{sf}}, addr});
+  gate(regOF_, ofBit);
 }
 
 void dragon::x86::X86IGNILLifter::liftXchg(const llvm::MCInst &mc,

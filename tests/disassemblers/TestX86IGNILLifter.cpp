@@ -1276,7 +1276,9 @@ TEST_CASE("IGNIL lifting - VMProtect handler forms (NOT, shift by CL, 8/16-bit "
     const auto *ib = lift({0xd3, 0xef});
     REQUIRE(ib != nullptr);
     REQUIRE(hasOpcode(*ib, Opcode::SHR));
-    REQUIRE(countOpcode(*ib, Opcode::UNDEF) == 1);     // OF, PF, AF only  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
+    // CF/ZF/SF/PF gated, AF cleared, and OF now modelled concretely (so a
+    // pushfq after a shift carries a real OF, not UNDEF) - nothing is UNDEF.
+    REQUIRE(countOpcode(*ib, Opcode::UNDEF) == 0);
   }
   SECTION("shl r9w, cl [66 41 d3 e1] / shl rax, cl [48 d3 e0]") {
     for (auto bytes: {std::vector<uint8_t>{0x66, 0x41, 0xd3, 0xe1}, {0x48, 0xd3, 0xe0}}) {
@@ -1379,7 +1381,9 @@ TEST_CASE("IGNIL lifting - VMProtect handler forms round 2 (8/16-bit ALU, "
     const auto *a = lift({0x45, 0x0f, 0xa5, 0xca});
     REQUIRE(hasOpcode(*a, Opcode::SHL));
     REQUIRE(hasOpcode(*a, Opcode::SHR));
-    REQUIRE(countOpcode(*a, Opcode::UNDEF) == 1);   // OF, PF, AF  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
+    // OF is modelled concretely now (shared emitGatedShiftFlags), so the
+    // double-shift leaves nothing UNDEF either.
+    REQUIRE(countOpcode(*a, Opcode::UNDEF) == 0);
     const auto *b = lift({0x66, 0x0f, 0xac, 0xd0, 0x05});
     REQUIRE(hasOpcode(*b, Opcode::SHR));
     REQUIRE(hasOpcode(*b, Opcode::SHL));
@@ -1569,13 +1573,16 @@ TEST_CASE("IGNIL lifting - an unlifted instruction is recorded, and its "
     return out;
   };
 
-  SECTION("rol eax, 1 [d1 c0] - no lifter: EAX and the flags it writes") {
-    const auto *ib = lift({0xd1, 0xc0});
+  SECTION("adc eax, [rbp] [13 45 00] - no lifter: EAX and the flags it writes") {
+    // The register and immediate ADC/SBB forms are lifted; the memory-source
+    // form (ADC32rm) is not, so it stands in as an instruction whose results
+    // must fall back to UNDEF (both the destination register and the flags).
+    const auto *ib = lift({0x13, 0x45, 0x00});
     REQUIRE(ib != nullptr);
     REQUIRE(ib->unlifted() == std::vector<std::uint64_t>{0x1000});
     const auto regs = undefined(*ib);
     REQUIRE(regs.count(dragon::x86::EAX.offset) == 1);
-    // ROL defines CF and OF; without this a `jc` after it would read the
+    // ADC defines CF and OF; without this a `jc` after it would read the
     // carry of whatever ran before.
     REQUIRE(regs.count(dragon::x86::CF.offset) == 1);
     REQUIRE(regs.count(dragon::x86::OF.offset) == 1);
@@ -1601,9 +1608,218 @@ TEST_CASE("IGNIL lifting - an unlifted instruction is recorded, and its "
     REQUIRE(hasOpcode(*ib, Opcode::UMOD));
   }
   SECTION("the optimisation passes carry the record over") {
-    const auto *ib = lift({0xd1, 0xc0});
+    const auto *ib = lift({0x13, 0x45, 0x00}); // adc eax, [rbp] - still unlifted
     REQUIRE(ib != nullptr);
+    REQUIRE_FALSE(ib->unlifted().empty());
     const auto simplified = dragon::ignil::simplifyBlock(*ib);
     REQUIRE(simplified.unlifted() == ib->unlifted());
+  }
+}
+
+// feat/x86-lift-rotates-bitops: the rest of the VMProtect mutation handler
+// forms the lift-coverage sweep over License-Check reported as unlifted -
+// rotates, bit test-and-modify, CMOVcc, XADD, memory INC/DEC and LAHF/SAHF.
+// Simple structural checks: the instruction must leave the unlifted() list and
+// produce the ops its semantics are built from (no Unicorn round-trip here).
+TEST_CASE("IGNIL lifting - rotates, BTS/BTR/BTC, CMOVcc, XADD, mem INC/DEC, "
+          "LAHF/SAHF",
+          "[ignil][x86_64][vmp]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+
+  SECTION("rol eax, 5  [c1 c0 05] - synthesized from SHL/SHR/OR, CF written") {
+    const auto *ib = lift({0xc1, 0xc0, 0x05});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::SHL));
+    REQUIRE(hasOpcode(*ib, Opcode::SHR));
+    REQUIRE(hasOpcode(*ib, Opcode::OR));
+  }
+  SECTION("ror eax, 5  [c1 c8 05]") {
+    const auto *ib = lift({0xc1, 0xc8, 0x05});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::SHL));
+    REQUIRE(hasOpcode(*ib, Opcode::SHR));
+  }
+  SECTION("rol eax, cl  [d3 c0] - variable count") {
+    const auto *ib = lift({0xd3, 0xc0});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::OR));
+  }
+  SECTION("rol rax, 7  [48 c1 c0 07] - 64-bit") {
+    const auto *ib = lift({0x48, 0xc1, 0xc0, 0x07});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+  }
+  SECTION("bts eax, ebx  [0f ab d8] - CF set, dst OR'd with the bit mask") {
+    const auto *ib = lift({0x0f, 0xab, 0xd8});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::OR));
+  }
+  SECTION("btr eax, 3  [0f ba f0 03] - bit cleared with AND NOT") {
+    const auto *ib = lift({0x0f, 0xba, 0xf0, 0x03});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::NOT));
+    REQUIRE(hasOpcode(*ib, Opcode::AND));
+  }
+  SECTION("btc rax, rbx  [48 0f bb d8] - bit complemented with XOR") {
+    const auto *ib = lift({0x48, 0x0f, 0xbb, 0xd8});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::XOR));
+  }
+  SECTION("cmove eax, ebx  [0f 44 c3] - select, no flags written") {
+    const auto *ib = lift({0x0f, 0x44, 0xc3});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::OR));
+    REQUIRE(hasOpcode(*ib, Opcode::NEG)); // mask = -(cond as word)
+  }
+  SECTION("xadd ebx, eax  [0f c1 c3] - exchange-and-add, ADD flags") {
+    const auto *ib = lift({0x0f, 0xc1, 0xc3});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::ADD));
+  }
+  SECTION("inc dword ptr [rbp-4]  [ff 45 fc] - load/add 1/store, CF untouched") {
+    const auto *ib = lift({0xff, 0x45, 0xfc});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::LOAD));
+    REQUIRE(hasOpcode(*ib, Opcode::ADD));
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
+  }
+  SECTION("dec qword ptr [rbp-8]  [48 ff 4d f8]") {
+    const auto *ib = lift({0x48, 0xff, 0x4d, 0xf8});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::LOAD));
+    REQUIRE(hasOpcode(*ib, Opcode::SUB));
+    REQUIRE(hasOpcode(*ib, Opcode::STORE));
+  }
+  SECTION("lahf  [9f] - AH gathered from the flag bits") {
+    const auto *ib = lift({0x9f});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::OR));
+  }
+  SECTION("sahf  [9e] - flags scattered back from AH") {
+    const auto *ib = lift({0x9e});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::AND));
+  }
+}
+
+// feat/x86-lift-rotates-bitops (second batch): rotate-through-carry by a known
+// count (RCL/RCR imm8 and by-1; the CL forms stay unlifted on purpose) and the
+// bit-scan instructions BSF/BSR. Structural checks only.
+TEST_CASE("IGNIL lifting - RCL/RCR (imm) and BSF/BSR", "[ignil][x86_64][vmp]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+
+  SECTION("rcl eax, 3  [c1 d0 03] - CF folded in, CF rewritten") {
+    const auto *ib = lift({0xc1, 0xd0, 0x03});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::OR));
+    REQUIRE(hasOpcode(*ib, Opcode::SHL));
+  }
+  SECTION("rcr eax, 3  [c1 d8 03]") {
+    const auto *ib = lift({0xc1, 0xd8, 0x03});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::OR));
+    REQUIRE(hasOpcode(*ib, Opcode::SHR));
+  }
+  SECTION("rcl eax, 1  [d1 d0] - by the implicit 1") {
+    const auto *ib = lift({0xd1, 0xd0});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+  }
+  SECTION("rcr rax, 5  [48 c1 d8 05] - 64-bit, no (width+1) container needed") {
+    const auto *ib = lift({0x48, 0xc1, 0xd8, 0x05});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+  }
+  SECTION("bsf eax, ebx  [0f bc c3] - index of lowest set bit, ZF on zero") {
+    const auto *ib = lift({0x0f, 0xbc, 0xc3});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::NEG)); // mask-select per bit
+  }
+  SECTION("bsr rax, rbx  [48 0f bd c3] - index of highest set bit") {
+    const auto *ib = lift({0x48, 0x0f, 0xbd, 0xc3});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+  }
+}
+
+// feat/x86-lift-rotates-bitops (third batch): the variable rotate-through-carry
+// (RCL/RCR by CL) and the accumulator XCHG (xchg ax/eax/rax, r) - the forms the
+// serial_ok devirt run still reported as UNDEF on its executed path.
+TEST_CASE("IGNIL lifting - RCL/RCR by CL and accumulator XCHG",
+          "[ignil][x86_64][vmp]") {
+  using dragon::ignil::Opcode;
+  auto lift = [](std::vector<uint8_t> bytes) {
+    static std::vector<dragon::Graph> keep;
+    keep.push_back(makeGraph(dragon::Architecture::X86_64));
+    auto &g = keep.back();
+    auto dis = makeDisassembler(dragon::Architecture::X86_64);
+    bytes.push_back(0xc3);
+    dis.disassemble(bytes, 0x1000, g);
+    return g.getIGNILBlock(0x1000);
+  };
+
+  SECTION("rcl eax, cl  [d3 d0] - variable rotate through carry") {
+    const auto *ib = lift({0xd3, 0xd0});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::OR));
+    REQUIRE(hasOpcode(*ib, Opcode::SHL));
+    REQUIRE(hasOpcode(*ib, Opcode::SHR));
+  }
+  SECTION("rcr rdx, cl  [48 d3 da] - 64-bit, no (width+1) container") {
+    const auto *ib = lift({0x48, 0xd3, 0xda});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::OR));
+  }
+  SECTION("rcr dl, cl  [d2 da] - 8-bit, count reduced mod 9 with UMOD") {
+    const auto *ib = lift({0xd2, 0xda});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::UMOD));
+  }
+  SECTION("xchg ax, r11w  [66 41 93] - accumulator XCHG16ar") {
+    const auto *ib = lift({0x66, 0x41, 0x93});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, Opcode::COPY));
+  }
+  SECTION("xchg rax, rbx  [48 93] - accumulator XCHG64ar") {
+    const auto *ib = lift({0x48, 0x93});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
   }
 }
