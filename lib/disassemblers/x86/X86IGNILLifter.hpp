@@ -30,6 +30,12 @@ enum class AccExtend : std::uint8_t { CBW, CWDE, CDQE, CWD, CDQ, CQO };
 /// Carry-flag-only instructions.
 enum class CarryOp : std::uint8_t { STC, CLC, CMC };
 
+/// Where a rotate/shift gets its count: an explicit imm8 operand, the
+/// implicit 1 of the dedicated by-1 opcode, or the CL register.
+enum class ShiftCount : std::uint8_t { Imm, One, CL };
+/// Which bit a BTS/BTR/BTC instruction does to the selected bit.
+enum class BitOp : std::uint8_t { Set, Reset, Complement };
+
 /// Callable that appends IGNIL ops for a single flag into a Block.
 /// Receives the block and the running temp-id counter by reference.
 using FlagSetter = std::function<void(ignil::Block &, std::uint32_t &)>;
@@ -84,6 +90,15 @@ class X86IGNILLifter {
   /// tempId is the next available temporary index (incremented as needed).
   void liftInstruction(const Instruction &insn, ignil::Block &out,
                        std::uint32_t &tempId) const;
+
+  /// Dispatch for the rotate / bit-operation family added for VMProtect
+  /// mutation handlers (ROL/ROR/RCL/RCR, BTS/BTR/BTC, BSF/BSR, CMOVcc, XADD,
+  /// memory INC/DEC, accumulator XCHG, MOV8ri_alt, LAHF/SAHF). Returns true if
+  /// it handled the opcode. Separated from liftInstruction's main else-if
+  /// chain so the chain stays under MSVC's block-nesting limit (C1061).
+  [[nodiscard]] bool liftExtendedForm(unsigned opc, const llvm::MCInst &mc,
+                                      std::uint64_t addr, ignil::Block &out,
+                                      std::uint32_t &tmp) const;
 
   // Per-opcode lifting helpers
   void liftMov(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -301,6 +316,76 @@ class X86IGNILLifter {
   /// rest undefined - and keeping them is one legal outcome of undefined).
   void liftBt(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
               std::uint32_t &tmp) const;
+  // ROL/ROR, by imm8, by the implicit 1, or by CL. IGNIL has no rotate op,
+  // so a rotate-left by c is synthesized as (x << c) | (x >> ((W - c) & (W-1)))
+  // - the complementary amount masked to W-1 so a zero count shifts by 0, not
+  // by W (poison), and reduces to x | x = x. Only CF and OF are affected:
+  // CF = the bit rotated into the far end (gated, left untouched for a zero
+  // count), OF defined only for a 1-bit rotate and otherwise UNDEF. SF/ZF/PF/AF
+  // are not touched at all - a rotate does not disturb them. op[0]=dst(out),
+  // op[1]=src(tied=dst), [op[2]=imm8] for the ri form.
+  void liftRotate(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                  std::uint32_t &tmp, bool left, ShiftCount count) const;
+  // RCL/RCR by imm8 or by the implicit 1 (the CL forms stay unlifted: a
+  // variable rotate through the carry is a (width+1)-bit rotation that does
+  // not fit a 64-bit temp). With the count known at lift time, the result is a
+  // fixed OR of at most three constant-shift terms - x shifted, CF inserted at
+  // the seam, and x's wrap-around - each emitted only when its shift amount is
+  // in range. Only CF (= the bit rotated into the far end) and OF (UNDEF,
+  // defined only for a 1-bit rotate) are touched; a zero count changes
+  // nothing. op[0]=dst(out), op[1]=src(tied=dst), [op[2]=imm8].
+  void liftRotateCarry(const llvm::MCInst &mc, std::uint64_t addr,
+                       ignil::Block &out, std::uint32_t &tmp, bool left,
+                       ShiftCount count) const;
+  // RCL/RCR by CL: the variable rotate through carry. The count is unknown at
+  // lift time, so the result is built from the same three terms as the
+  // immediate form but with runtime shift amounts - each kept in [0, W-1] (a
+  // shift of exactly W is gated to 0) so none becomes poison, which is why a
+  // (W+1)-bit container is avoided. The count is reduced with the real x86
+  // rule (mask to 5/6 bits, then UMOD (W+1) for the 8/16-bit forms), and the
+  // whole operation is gated by count != 0 - a zero count changes nothing.
+  // Only CF (gated) and OF (UNDEF) are written.
+  void liftRotateCarryCL(const llvm::MCInst &mc, std::uint64_t addr,
+                         ignil::Block &out, std::uint32_t &tmp, bool left) const;
+  // XCHG with the accumulator (XCHG16ar/XCHG32ar/XCHG64ar, `xchg ax/eax/rax,
+  // r`): swap the explicit register op[0] with the width-matching accumulator.
+  // No flags.
+  void liftXchgAcc(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                   std::uint32_t &tmp) const;
+  // BSF/BSR r,r: dst = index of the lowest (BSF) or highest (BSR) set bit of
+  // the source; ZF = (source == 0), in which case dst is left at 0 (the ISA
+  // leaves it undefined). Built as an unrolled "last write wins" scan over the
+  // operand width - BSF scans high bit to low, BSR low to high - using the
+  // mask-select idiom since IGNIL has no select. CF/OF/SF/AF/PF are UNDEF.
+  void liftBitScan(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                   std::uint32_t &tmp, bool reverse) const;
+  // BTS/BTR/BTC reg, reg/imm8: CF = the selected bit's old value, then that
+  // bit of the register is set / cleared / complemented. The index wraps at
+  // the operand width (register form) or is taken mod width (imm form). Like
+  // liftBt, only CF is written; the other flags are left unchanged (ZF is
+  // documented unchanged, the rest undefined - keeping them is one legal
+  // outcome). op[0]=dst(out), op[1]=src(tied=dst), op[2]=bit index(reg/imm8).
+  void liftBitModify(const llvm::MCInst &mc, std::uint64_t addr,
+                     ignil::Block &out, std::uint32_t &tmp, BitOp op) const;
+  // CMOVcc r,r: dst = cond ? src : dst. IGNIL has no select, so the result is
+  // (src & m) | (dst & ~m) with m = all-ones when the condition holds. No
+  // flags. op[0]=dst(out), op[1]=src1(tied=dst, the kept value), op[2]=src2
+  // (the moved-in value), op[3]=condition code.
+  void liftCmov(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                std::uint32_t &tmp) const;
+  // XADD r,r: temp = dst + src; src = dst; dst = temp. The two registers are
+  // op[0] (DEST) and op[1] (SRC); both are read before either is written, so
+  // `xadd eax, eax` is handled. Flags are the plain ADD rules.
+  void liftXadd(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                std::uint32_t &tmp) const;
+  // INC/DEC with a memory destination: load, +/- 1, store back, then the same
+  // flags as the register INC/DEC (CF deliberately untouched). op[0..4]=mem.
+  void liftIncDecMem(const llvm::MCInst &mc, std::uint64_t addr,
+                     ignil::Block &out, std::uint32_t &tmp, bool dec) const;
+  // LAHF: AH = SF:ZF:0:AF:0:PF:1:CF (the low byte of RFLAGS). SAHF: set
+  // SF/ZF/AF/PF/CF from the matching bits of AH. No other state changes.
+  void liftLahf(std::uint64_t addr, ignil::Block &out, std::uint32_t &tmp) const;
+  void liftSahf(std::uint64_t addr, ignil::Block &out, std::uint32_t &tmp) const;
   void liftCarryOp(std::uint64_t addr, ignil::Block &out, std::uint32_t &tmp,
                    CarryOp kind) const;
   // CPUID / RDTSC / RDTSCP: instructions whose results x86 defines but IGNIL
@@ -520,6 +605,44 @@ class X86IGNILLifter {
   unsigned opSetccr_{};
   unsigned opBt16ri8_{}, opBt32ri8_{}, opBt64ri8_{};
   unsigned opBt16rr_{}, opBt32rr_{}, opBt64rr_{};
+  // Rotates (LifterGaps.md: VMProtect mutation handlers).
+  unsigned opRol8ri_{}, opRol16ri_{}, opRol32ri_{}, opRol64ri_{};
+  unsigned opRol8r1_{}, opRol16r1_{}, opRol32r1_{}, opRol64r1_{};
+  unsigned opRol8rCL_{}, opRol16rCL_{}, opRol32rCL_{}, opRol64rCL_{};
+  unsigned opRor8ri_{}, opRor16ri_{}, opRor32ri_{}, opRor64ri_{};
+  unsigned opRor8r1_{}, opRor16r1_{}, opRor32r1_{}, opRor64r1_{};
+  unsigned opRor8rCL_{}, opRor16rCL_{}, opRor32rCL_{}, opRor64rCL_{};
+  // Rotate through carry, imm8 and by-1 forms only (see liftRotateCarry).
+  unsigned opRcl8ri_{}, opRcl16ri_{}, opRcl32ri_{}, opRcl64ri_{};
+  unsigned opRcl8r1_{}, opRcl16r1_{}, opRcl32r1_{}, opRcl64r1_{};
+  unsigned opRcr8ri_{}, opRcr16ri_{}, opRcr32ri_{}, opRcr64ri_{};
+  unsigned opRcr8r1_{}, opRcr16r1_{}, opRcr32r1_{}, opRcr64r1_{};
+  // Rotate through carry by CL (variable count; see liftRotateCarryCL).
+  unsigned opRcl8rCL_{}, opRcl16rCL_{}, opRcl32rCL_{}, opRcl64rCL_{};
+  unsigned opRcr8rCL_{}, opRcr16rCL_{}, opRcr32rCL_{}, opRcr64rCL_{};
+  // XCHG with the accumulator.
+  unsigned opXchg16ar_{}, opXchg32ar_{}, opXchg64ar_{};
+  // Bit scan forward / reverse, reg,reg.
+  unsigned opBsf16rr_{}, opBsf32rr_{}, opBsf64rr_{};
+  unsigned opBsr16rr_{}, opBsr32rr_{}, opBsr64rr_{};
+  // Bit test-and-modify (BTS/BTR/BTC), register and imm8 index.
+  unsigned opBts16ri8_{}, opBts32ri8_{}, opBts64ri8_{};
+  unsigned opBts16rr_{}, opBts32rr_{}, opBts64rr_{};
+  unsigned opBtr16ri8_{}, opBtr32ri8_{}, opBtr64ri8_{};
+  unsigned opBtr16rr_{}, opBtr32rr_{}, opBtr64rr_{};
+  unsigned opBtc16ri8_{}, opBtc32ri8_{}, opBtc64ri8_{};
+  unsigned opBtc16rr_{}, opBtc32rr_{}, opBtc64rr_{};
+  // CMOVcc (unified LLVM opcode with a condition-code operand), reg,reg.
+  unsigned opCmov16rr_{}, opCmov32rr_{}, opCmov64rr_{};
+  // XADD reg,reg.
+  unsigned opXadd8rr_{}, opXadd16rr_{}, opXadd32rr_{}, opXadd64rr_{};
+  // INC/DEC with a memory destination.
+  unsigned opInc8m_{}, opInc16m_{}, opInc32m_{}, opInc64m_{};
+  unsigned opDec8m_{}, opDec16m_{}, opDec32m_{}, opDec64m_{};
+  // MOV r8(high), imm8 - the alternate encoding LLVM names MOV8ri_alt.
+  unsigned opMov8riAlt_{};
+  // LAHF / SAHF.
+  unsigned opLahf_{}, opSahf_{};
   unsigned opCpuid_{}, opRdtsc_{}, opRdtscp_{};
   // push imm (LifterGaps.md #7 round 3)
   unsigned opPush32I_{}, opPush32I8_{}, opPush64I32_{}, opPush64I8_{};
