@@ -1431,6 +1431,15 @@ void dragon_symexec_set_fresh_tag(dragon_symexec_t *e, const char *tag) {
     as_exec(e)->exec.setFreshTag(tag ? tag : "");
 }
 
+void dragon_symexec_set_concrete_opaque(dragon_symexec_t *e, uint32_t kind,
+                                        uint64_t selector,
+                                        const uint64_t *results, size_t n) {
+  if (!e || (n && !results))
+    return;
+  as_exec(e)->exec.setConcreteOpaque(static_cast<sym::OpaqueKind>(kind), selector,
+                                     std::vector<std::uint64_t>(results, results + n));
+}
+
 namespace {
 
 int literal_of(const z3::expr &value, uint64_t *out) {

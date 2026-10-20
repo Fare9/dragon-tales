@@ -772,6 +772,17 @@
   // to keep them apart. NULL or "" restores the untagged names.
   void dragon_symexec_set_fresh_tag(dragon_symexec_t* e, const char* tag);
 
+  // Make an OPAQUE op (CPUID=0, RDTSC=1, RDTSCP=2) return concrete `results`
+  // instead of a symbol, so a concolic trace stays concrete through an
+  // anti-tamper CPUID. `selector` identifies the invocation from its operands:
+  // for CPUID it is (leaf << 32) | (subleaf & 0xffffffff); for RDTSC/RDTSCP it
+  // is 0. `results` are the per-result-index values (CPUID: EAX,EBX,ECX,EDX)
+  // and `n` their count. Only matching ops are concretised; everything else
+  // keeps the default symbolic behaviour.
+  void dragon_symexec_set_concrete_opaque(dragon_symexec_t* e, uint32_t kind,
+                                          uint64_t selector,
+                                          const uint64_t* results, size_t n);
+
   // The register / memory value as a host integer, when it is a literal. These
   // are the cheap form of read + evaluate for a location expected to be
   // concrete: no expression handle, no solver. Return 0 (and leave *out alone)

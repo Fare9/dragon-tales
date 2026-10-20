@@ -612,6 +612,11 @@ z3::expr SymbolicExecutor::symbolizeMemory(std::uint64_t addr,
 
 void SymbolicExecutor::assume(const z3::expr &c) { state_.addConstraint(c); }
 
+void SymbolicExecutor::setConcreteOpaque(OpaqueKind kind, std::uint64_t selector,
+                                         std::vector<std::uint64_t> results) {
+  concreteOpaque_[{kind, selector}] = std::move(results);
+}
+
 // -- reading ----------------------------------------------------------------
 
 z3::expr SymbolicExecutor::readRegister(const Reg &r) const {
@@ -1075,6 +1080,25 @@ z3::expr SymbolicExecutor::opaqueValue(const Op &op, Width dstWidth) {
   const OpaqueKind kind = opaqueKindOf(op.aux);
   const unsigned index = opaqueIndexOf(op.aux);
   const std::string name(opaqueKindName(kind));
+
+  // A caller-supplied concrete result short-circuits the symbol entirely, so a
+  // concolic trace never goes symbolic on an anti-tamper CPUID. Match on the
+  // kind plus the operands (leaf/subleaf for CPUID), which a concrete trace has
+  // as literals; a non-literal operand cannot be matched, so it falls through.
+  if (!concreteOpaque_.empty()) {
+    std::uint64_t selector = 0;
+    bool matchable = true;
+    for (std::size_t i = 0; i < op.srcs.size() && i < 2; ++i) {
+      const z3::expr s = eval(op.srcs[i]).simplify();
+      if (!s.is_numeral() || bvWidth(s) > 64) { matchable = false; break; }
+      selector |= (s.get_numeral_uint64() & 0xffffffffULL) << (i == 0 ? 32 : 0);
+    }
+    if (matchable) {
+      const auto it = concreteOpaque_.find({kind, selector});
+      if (it != concreteOpaque_.end() && index < it->second.size())
+        return bvVal(*ctx_, it->second[index], dstWidth);
+    }
+  }
 
   if (!opaqueIsPure(kind)) {
     // Each execution is its own event, so the symbol is keyed on where it
