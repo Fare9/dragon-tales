@@ -1823,3 +1823,21 @@ TEST_CASE("IGNIL lifting - RCL/RCR by CL and accumulator XCHG",
     REQUIRE(ib->unlifted().empty());
   }
 }
+
+// -----------------------------------------------------------------------
+// i386 forms
+// -----------------------------------------------------------------------
+
+TEST_CASE("IGNIL lifting - i386 ret (RET32)", "[ignil][x86_32]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xc3, // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::RET));
+}
