@@ -8,7 +8,7 @@ if(DRAGON_USE_UNICORN)
     target_link_libraries(obfusheader_trace_recovery PRIVATE dragon::libdragon)
 
     target_include_directories(obfusheader_trace_recovery PRIVATE
-            ${CMAKE_SOURCE_DIR}/include
+            ${PROJECT_SOURCE_DIR}/include
             ${LLVM_INCLUDE_DIRS}
     )
 

@@ -3,7 +3,11 @@ project(dragon)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+# Keep every executable next to the DLLs it loads. When dragon is pulled into another project
+# that already chose an output directory, use that one rather than splitting the binaries.
+if(NOT DEFINED CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Find LLVM
@@ -60,11 +64,43 @@ if(DRAGON_USE_Z3)
     find_package(Z3 REQUIRED)
     message(STATUS "Found Z3 ${Z3_VERSION_STRING} at ${Z3_LIBRARIES}")
     if(NOT TARGET z3::libz3)
-        add_library(z3::libz3 UNKNOWN IMPORTED)
-        set_target_properties(z3::libz3 PROPERTIES
-            IMPORTED_LOCATION "${Z3_LIBRARIES}"
-            INTERFACE_INCLUDE_DIRECTORIES "${Z3_INCLUDE_DIR}"
-        )
+        # On Windows Z3_LIBRARIES is either a static library or a DLL's import
+        # library; a DLL beside it (or in the sibling bin/) means the latter.
+        if(WIN32)
+            get_filename_component(_z3_lib_dir "${Z3_LIBRARIES}" DIRECTORY)
+            get_filename_component(_z3_lib_name "${Z3_LIBRARIES}" NAME_WE)
+            find_file(Z3_DLL "${_z3_lib_name}.dll"
+                PATHS "${_z3_lib_dir}/../bin" "${_z3_lib_dir}"
+                NO_DEFAULT_PATH
+            )
+        endif()
+        if(Z3_DLL)
+            add_library(z3::libz3 SHARED IMPORTED)
+            set_target_properties(z3::libz3 PROPERTIES
+                IMPORTED_IMPLIB "${Z3_LIBRARIES}"
+                IMPORTED_LOCATION "${Z3_DLL}"
+                INTERFACE_INCLUDE_DIRECTORIES "${Z3_INCLUDE_DIR}"
+            )
+        else()
+            add_library(z3::libz3 UNKNOWN IMPORTED)
+            set_target_properties(z3::libz3 PROPERTIES
+                IMPORTED_LOCATION "${Z3_LIBRARIES}"
+                INTERFACE_INCLUDE_DIRECTORIES "${Z3_INCLUDE_DIR}"
+            )
+        endif()
+    endif()
+
+    # libdragon and every target using z3++ directly (tests, examples) each
+    # link Z3. A static Z3 gives each of those binaries its own copy of Z3's
+    # global state, and a context created by one copy crashes when another
+    # copy uses it - so on Windows, where there is no shared libz3 by default,
+    # it has to be a DLL.
+    get_target_property(_z3_type z3::libz3 TYPE)
+    if(WIN32 AND NOT _z3_type STREQUAL "SHARED_LIBRARY")
+        message(WARNING "Z3 (${Z3_LIBRARIES}) is not a DLL. libdragon and its Z3-using "
+                        "tests and examples will each carry their own copy of Z3, and "
+                        "passing a Z3 context between them crashes. Point Z3_LIBRARIES "
+                        "at the import library of a shared Z3 build.")
     endif()
 endif()
 
@@ -106,6 +142,19 @@ FetchContent_MakeAvailable(Catch2)
 option(DRAGON_BUILD_TESTS "Build tests" ON)
 
 add_subdirectory(lib)
+
+# Windows has no rpath: put the Z3 DLL beside libdragon (and so beside every
+# executable, which share its output directory) so they can load it.
+if(DRAGON_USE_Z3 AND WIN32 AND _z3_type STREQUAL "SHARED_LIBRARY")
+    add_custom_target(dragon_z3_runtime
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:libdragon>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:z3::libz3> $<TARGET_FILE_DIR:libdragon>
+        COMMENT "Copying the Z3 DLL beside libdragon"
+    )
+    add_dependencies(libdragon dragon_z3_runtime)
+endif()
+
 add_subdirectory(c_shim)
 add_subdirectory(examples/cpp)
 add_subdirectory(examples/obfush)

@@ -85,7 +85,7 @@ endif()
 
 target_include_directories(dragon_tests
         PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/include
 )
 
 include(CTest)
