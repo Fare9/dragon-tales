@@ -41,6 +41,7 @@
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 
+#include <llvm/ExecutionEngine/Orc/ExecutionUtils.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/IRReader/IRReader.h>
 #include <llvm/Support/SourceMgr.h>
@@ -329,6 +330,37 @@ inline RoundTripResult runLifted(std::span<const std::uint8_t> code,
     throw std::runtime_error("runLifted: LLJITBuilder failed: " +
                              llvm::toString(jitOrErr.takeError()));
   auto jit = std::move(*jitOrErr);
+
+#ifdef DRAGON_TEST_COMPILER_RT_BUILTINS
+  // i128 division calls compiler-rt helpers, which MSVC processes lack. The
+  // archive's /GS objects also need the stack cookie, defined in JIT memory
+  // to stay within RIP-relative reach.
+  {
+    auto builtins = llvm::orc::StaticLibraryDefinitionGenerator::Load(
+            jit->getObjLinkingLayer(), DRAGON_TEST_COMPILER_RT_BUILTINS);
+    if (!builtins)
+      throw std::runtime_error(
+              "runLifted: loading compiler-rt builtins failed: " +
+              llvm::toString(builtins.takeError()));
+    jit->getMainJITDylib().addGenerator(std::move(*builtins));
+
+    static constexpr std::string_view kGsIR =
+            "@__security_cookie = global i64 3141592653589793\n"
+            "define void @__security_check_cookie(i64 %cookie) {\n"
+            "  ret void\n"
+            "}\n";
+    auto gsCtx = std::make_unique<llvm::LLVMContext>();
+    auto gsMod = llvm::parseIR(llvm::MemoryBufferRef(kGsIR, "gs"), err, *gsCtx);
+    if (!gsMod)
+      throw std::runtime_error("runLifted: parseIR(gs) failed: " +
+                               err.getMessage().str());
+    if (auto e = jit->addIRModule(llvm::orc::ThreadSafeModule(
+                std::move(gsMod),
+                llvm::orc::ThreadSafeContext(std::move(gsCtx)))))
+      throw std::runtime_error("runLifted: addIRModule(gs) failed: " +
+                               llvm::toString(std::move(e)));
+  }
+#endif
 
   llvm::orc::ThreadSafeContext tsCtx(std::move(ctx));
   llvm::orc::ThreadSafeModule tsm(std::move(mod), tsCtx);
