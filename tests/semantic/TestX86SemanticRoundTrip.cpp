@@ -8,13 +8,15 @@ using namespace dragon::test;
 
 // Compares real (Unicorn) vs lifted (JIT) final state, ignoring the flags
 // X86IGNILLifter doesn't model (see maskUnmodeledFlags in the fixture).
-static void requireStatesMatch(RoundTripResult expected, RoundTripResult actual,
-                               const RegBuf &initialRegs) {
+static void
+requireStatesMatch(RoundTripResult expected, RoundTripResult actual,
+                   const RegBuf &initialRegs,
+                   dragon::Architecture arch = dragon::Architecture::X86_64) {
   maskUnmodeledFlags(expected.regs);
   maskUnmodeledFlags(actual.regs);
   REQUIRE(expected.regs == actual.regs);
-  maskSentinelSlot(expected.mem, initialRegs);
-  maskSentinelSlot(actual.mem, initialRegs);
+  maskSentinelSlot(expected.mem, initialRegs, arch);
+  maskSentinelSlot(actual.mem, initialRegs, arch);
   if (expected.mem != actual.mem) {
     for (std::size_t i = 0; i < expected.mem.size(); ++i) {
       if (expected.mem[i] != actual.mem[i])
@@ -581,4 +583,32 @@ TEST_CASE("Semantic round-trip - shifts/rotates by CL: OF modelled, not UNDEF",
   };
   for (const Form &f: undefinedOF)
     sweep(f);
+}
+
+// -----------------------------------------------------------------------
+// i386 baseline: instructions that already lift, to check the harness.
+// -----------------------------------------------------------------------
+
+TEST_CASE("Semantic round-trip - i386 mov/add/push/pop registers",
+          "[semantic][x86_32]") {
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb8, 0x05, 0x00, 0x00, 0x00, // mov eax, 5
+          0xbb, 0x03, 0x00, 0x00, 0x00, // mov ebx, 3
+          0x01, 0xd8, // add eax, ebx
+          0x50, // push eax
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 8);
+  requireStatesMatch(expected, actual, initialRegs, arch);
 }
