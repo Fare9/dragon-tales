@@ -185,7 +185,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"RET64", &X86IGNILLifter::opRet64_},
           {"RET32", &X86IGNILLifter::opRet32_},
           {"RETI64", &X86IGNILLifter::opRetI64_},
-          {"RETIL", &X86IGNILLifter::opRetIL_},
+          {"RETI32", &X86IGNILLifter::opRetI32_},
           {"LEAVE64", &X86IGNILLifter::opLeave64_},
           {"LEAVE", &X86IGNILLifter::opLeave_},
           {"SAR32ri", &X86IGNILLifter::opSar32ri_},
@@ -883,7 +883,7 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opCall_ || opc == opCall64r_)
     liftCall(*mc, addr, insn.size(), out, tempId);
   else if (opc == opRet64_ || opc == opRet32_ || opc == opRetI64_ ||
-           opc == opRetIL_)
+           opc == opRetI32_)
     liftRet(*mc, addr, out, tempId);
   else if (opc == opLeave64_ || opc == opLeave_)
     liftLeave(*mc, addr, out, tempId);
@@ -1921,7 +1921,7 @@ void dragon::x86::X86IGNILLifter::liftCall(const llvm::MCInst &mc,
 void dragon::x86::X86IGNILLifter::liftRet(const llvm::MCInst &mc,
                                           std::uint64_t addr, ignil::Block &out,
                                           std::uint32_t &tmp) const {
-  // ret N (RETI64/RETIL) pops N extra bytes after the return address, but
+  // ret N (RETI64/RETI32) pops N extra bytes after the return address, but
   // control transfers before that cleanup is visible to the callee, so a
   // plain RET is sufficient for intra-function analysis.
   out.append({ignil::Opcode::RET, std::nullopt, {}, addr});

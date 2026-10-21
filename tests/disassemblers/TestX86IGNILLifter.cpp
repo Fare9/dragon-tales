@@ -1841,3 +1841,16 @@ TEST_CASE("IGNIL lifting - i386 ret (RET32)", "[ignil][x86_32]") {
   REQUIRE(ib->unlifted().empty());
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::RET));
 }
+
+TEST_CASE("IGNIL lifting - i386 ret imm16 (RETI32)", "[ignil][x86_32]") {
+  // ret 4
+  const std::vector<std::uint8_t> bytes = {0xc2, 0x04, 0x00};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::RET));
+}
