@@ -1854,3 +1854,25 @@ TEST_CASE("IGNIL lifting - i386 ret imm16 (RETI32)", "[ignil][x86_32]") {
   REQUIRE(ib->unlifted().empty());
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::RET));
 }
+
+TEST_CASE("IGNIL lifting - i386 call rel32 (CALLpcrel32)", "[ignil][x86_32]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xe8, 0x00, 0x00, 0x00, 0x00, // call $+5
+          0x58, // pop eax
+          0xc3, // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  const auto &ops = ib->ops();
+  auto callIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::CALL;
+  });
+  REQUIRE(callIt != ops.end());
+  const auto *target = std::get_if<dragon::ignil::Const>(&callIt->srcs[0]);
+  REQUIRE(target != nullptr);
+  REQUIRE(target->value == 0x1005);
+}

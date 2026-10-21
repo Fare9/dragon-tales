@@ -182,6 +182,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"CALL64m", &X86IGNILLifter::opCall64m_},
           {"CALL32m", &X86IGNILLifter::opCall32m_},
           {"CALL64pcrel32", &X86IGNILLifter::opCall_},
+          {"CALLpcrel32", &X86IGNILLifter::opCall32_},
           {"RET64", &X86IGNILLifter::opRet64_},
           {"RET32", &X86IGNILLifter::opRet32_},
           {"RETI64", &X86IGNILLifter::opRetI64_},
@@ -880,7 +881,7 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opTest64rr_ || opc == opTest32rr_ || opc == opTest64ri_ ||
            opc == opTest32ri_)
     liftTest(*mc, addr, out, tempId);
-  else if (opc == opCall_ || opc == opCall64r_)
+  else if (opc == opCall_ || opc == opCall32_ || opc == opCall64r_)
     liftCall(*mc, addr, insn.size(), out, tempId);
   else if (opc == opRet64_ || opc == opRet32_ || opc == opRetI64_ ||
            opc == opRetI32_)

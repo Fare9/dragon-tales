@@ -577,7 +577,7 @@ class X86IGNILLifter {
   unsigned opCall64m_{}, opCall32m_{}; // indirect memory call
   unsigned opJmp_{}; // direct
   unsigned opCall64r_{}; // indirect
-  unsigned opCall_{}; // direct
+  unsigned opCall_{}, opCall32_{}; // direct
   unsigned opRet64_{}, opRet32_{};
   unsigned opRetI64_{}, opRetI32_{}; // ret N  (callee-cleanup variant)
   unsigned opLeave64_{}, opLeave_{}; // leave (decomposed to mov rsp,rbp / pop rbp)
