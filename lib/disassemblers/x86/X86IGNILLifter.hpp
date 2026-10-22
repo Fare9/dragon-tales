@@ -583,6 +583,7 @@ class X86IGNILLifter {
   unsigned opCmp64rm_{}, opCmp32rm_{};
   unsigned opCmp64mr_{}, opCmp32mr_{};
   unsigned opCmp64mi_{}, opCmp32mi_{}, opCmp64mi8_{}, opCmp32mi8_{};
+  unsigned opCmp8mi_{};
   unsigned opTest64rr_{}, opTest32rr_{};
   unsigned opTest32ri_{}, opTest64ri_{};
   unsigned opJmp64r_{}, opJmp32r_{}; // indirect

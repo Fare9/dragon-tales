@@ -2111,3 +2111,23 @@ TEST_CASE("IGNIL lifting - i386 mov byte [mem], imm (MOV8mi)",
   REQUIRE(storeIt != ops.end());
   REQUIRE(dragon::ignil::widthOf(storeIt->srcs[1]) == 8);
 }
+
+TEST_CASE("IGNIL lifting - i386 cmp byte [mem], imm (CMP8mi)",
+          "[ignil][x86_32]") {
+  // cmp byte [edx], 0; ret
+  const std::vector<std::uint8_t> bytes = {0x80, 0x3a, 0x00, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE_FALSE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  const auto &ops = ib->ops();
+  auto loadIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::LOAD;
+  });
+  REQUIRE(loadIt != ops.end());
+  REQUIRE(dragon::ignil::widthOf(*loadIt->dst) == 8);
+}

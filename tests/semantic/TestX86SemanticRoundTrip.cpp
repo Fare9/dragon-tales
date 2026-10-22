@@ -836,3 +836,26 @@ TEST_CASE("Semantic round-trip - i386 mov byte [mem], imm",
   REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x112233f0);
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
+
+TEST_CASE("Semantic round-trip - i386 cmp byte [mem], imm",
+          "[semantic][x86_32]") {
+  // A 32-bit compare would leave ZF clear.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x00, 0x33, 0x22, 0x11, // push 0x11223300
+          0x80, 0x3c, 0x24, 0x00, // cmp byte [esp], 0
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(actual.regs[x86off::ZF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}

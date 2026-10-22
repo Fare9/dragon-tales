@@ -179,6 +179,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"CMP64mi8", &X86IGNILLifter::opCmp64mi8_},
           {"CMP32mi", &X86IGNILLifter::opCmp32mi_},
           {"CMP32mi8", &X86IGNILLifter::opCmp32mi8_},
+          {"CMP8mi", &X86IGNILLifter::opCmp8mi_},
           {"TEST64rr", &X86IGNILLifter::opTest64rr_},
           {"TEST32rr", &X86IGNILLifter::opTest32rr_},
           {"TEST64ri32", &X86IGNILLifter::opTest64ri_},
@@ -899,7 +900,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opCmp64rm_ || opc == opCmp32rm_)
     liftCmpRegMem(*mc, addr, out, tempId);
   else if (opc == opCmp64mr_ || opc == opCmp32mr_ || opc == opCmp64mi_ ||
-           opc == opCmp32mi_ || opc == opCmp64mi8_ || opc == opCmp32mi8_)
+           opc == opCmp32mi_ || opc == opCmp64mi8_ || opc == opCmp32mi8_ ||
+           opc == opCmp8mi_)
     liftCmpMem(*mc, addr, out, tempId);
   else if (opc == opTest64rr_ || opc == opTest32rr_ || opc == opTest64ri_ ||
            opc == opTest32ri_)
@@ -1855,7 +1857,8 @@ void dragon::x86::X86IGNILLifter::liftCmpMem(const llvm::MCInst &mc,
   const unsigned opc = mc.getOpcode();
   const ignil::Width opWidth =
           (opc == opCmp64mr_ || opc == opCmp64mi_ || opc == opCmp64mi8_) ? 64
-                                                                          : 32;
+          : (opc == opCmp8mi_)                                           ? 8
+                                                                         : 32;
 
   ignil::Value rhs;
   const auto &srcOp = mc.getOperand(5);
