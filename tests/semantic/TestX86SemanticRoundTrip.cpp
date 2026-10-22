@@ -706,6 +706,24 @@ TEST_CASE("Semantic round-trip - i386 accumulator short forms",
     sweep(form, dragon::Architecture::X86_32);
 }
 
+TEST_CASE("Semantic round-trip - i386 push/pop and xchg registers",
+          "[semantic][x86_32][.][expensive]") {
+  // Each push is paired with a pop.
+  const auto &in = arithmeticInputs32();
+  for (const Form &form: std::vector<Form>{
+               {"push eax ; pop ecx", {0x50, 0x59}, kNone, in},
+               {"push ebx ; pop eax", {0x53, 0x58}, kNone, in},
+               {"push 0x9095 ; pop edx",
+                {0x68, 0x95, 0x90, 0x00, 0x00, 0x5a},
+                kNone,
+                in},
+               {"xchg ebx, edx", {0x87, 0xda}, kNone, in},
+               {"xchg eax, ebx (XCHG32ar)", {0x93}, kNone, in},
+               {"xchg al, bl", {0x86, 0xd8}, kNone, in},
+       })
+    sweep(form, dragon::Architecture::X86_32);
+}
+
 // -----------------------------------------------------------------------
 // i386 baseline: instructions that already lift, to check the harness.
 // -----------------------------------------------------------------------
