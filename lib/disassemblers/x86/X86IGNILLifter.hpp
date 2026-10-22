@@ -579,6 +579,7 @@ class X86IGNILLifter {
   unsigned opXor32rm_{}, opXor32mi_{}, opXor32mr_{};
   unsigned opXor32ri_{}, opXor64ri_{}, opXor32ri8_{}, opXor64ri8_{};
   unsigned opAnd64rr_{}, opAnd32rr_{};
+  unsigned opAnd32mr_{};
   unsigned opAnd32ri_{}, opAnd64ri_{}, opAnd32ri8_{}, opAnd64ri8_{};
   unsigned opOr64rr_{}, opOr32rr_{};
   unsigned opOr32ri_{}, opOr64ri_{}, opOr32ri8_{}, opOr64ri8_{};
