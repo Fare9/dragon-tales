@@ -859,3 +859,26 @@ TEST_CASE("Semantic round-trip - i386 cmp byte [mem], imm",
   REQUIRE(actual.regs[x86off::ZF] == 1);
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
+
+TEST_CASE("Semantic round-trip - i386 xor reg, [mem]", "[semantic][x86_32]") {
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x0f, 0x0f, 0x0f, 0x0f, // push 0x0F0F0F0F
+          0xb8, 0x00, 0x00, 0xff, 0xff, // mov eax, 0xFFFF0000
+          0x33, 0x04, 0x24, // xor eax, [esp]
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 0xf0f00f0f);
+  REQUIRE(actual.regs[x86off::SF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}

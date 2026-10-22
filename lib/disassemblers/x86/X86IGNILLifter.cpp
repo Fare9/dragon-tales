@@ -141,6 +141,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"XOR64ri8", &X86IGNILLifter::opXor64ri8_},
           {"XOR32ri", &X86IGNILLifter::opXor32ri_},
           {"XOR32ri8", &X86IGNILLifter::opXor32ri8_},
+          {"XOR32rm", &X86IGNILLifter::opXor32rm_},
           {"AND64rr", &X86IGNILLifter::opAnd64rr_},
           {"AND32rr", &X86IGNILLifter::opAnd32rr_},
           {"AND64ri32", &X86IGNILLifter::opAnd64ri_},
@@ -867,6 +868,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftSubMem(*mc, addr, out, tempId);
   else if (opc == opSub64rm_ || opc == opSub32rm_)
     liftSubRegMem(*mc, addr, out, tempId);
+  else if (opc == opXor32rm_)
+    liftLogicRegMem(*mc, addr, out, tempId, ignil::Opcode::XOR);
   else if (opc == opXor64rr_ || opc == opXor32rr_ || opc == opXor64ri_ ||
            opc == opXor32ri_ || opc == opXor64ri8_ || opc == opXor32ri8_)
     liftXor(*mc, addr, out, tempId);
@@ -1399,6 +1402,38 @@ void dragon::x86::X86IGNILLifter::liftSubRegMem(const llvm::MCInst &mc,
                          {X86Flag::ZF, zfEqZero(result, addr)},
                          {X86Flag::SF, sfSignBit(result, addr)},
                          {X86Flag::OF, ofSubOverflow(lhs, rhs, result, addr)},
+                 });
+}
+
+void dragon::x86::X86IGNILLifter::liftLogicRegMem(const llvm::MCInst &mc,
+                                                  std::uint64_t addr,
+                                                  ignil::Block &out,
+                                                  std::uint32_t &tmp,
+                                                  ignil::Opcode op) const {
+  // op[0]=dst(out), op[1]=src1(tied=dst), op[2..6]=mem(rhs).
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) {
+    logger_.log("Error liftLogicRegMem in addr {:#x} no dst", addr);
+    return;
+  }
+
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+  auto addrTemp = emitAddress(mc, 2, ptrWidth, addr, out, tmp);
+  auto src = newTemp(tmp, dst->width);
+  out.append({ignil::Opcode::LOAD, src, {addrTemp}, addr});
+
+  auto result = newTemp(tmp, dst->width);
+  out.append({op, result, {*dst, src}, addr});
+  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+  emitArithFlags(addr, out, tmp,
+                 {
+                         {X86Flag::CF, cfAlwaysZero(addr)},
+                         {X86Flag::PF, pfParity(result, addr)},
+                         {X86Flag::AF, afAlwaysZero(addr)},
+                         {X86Flag::ZF, zfEqZero(result, addr)},
+                         {X86Flag::SF, sfSignBit(result, addr)},
+                         {X86Flag::OF, ofAlwaysZero(addr)},
                  });
 }
 

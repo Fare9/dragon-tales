@@ -127,6 +127,10 @@ class X86IGNILLifter {
                      ignil::Block &out, std::uint32_t &tmp) const;
   void liftSubRegMem(const llvm::MCInst &mc, std::uint64_t addr,
                      ignil::Block &out, std::uint32_t &tmp) const;
+  // reg op= [mem] for an XOR, AND or OR `op`, with the rr forms' flags.
+  void liftLogicRegMem(const llvm::MCInst &mc, std::uint64_t addr,
+                       ignil::Block &out, std::uint32_t &tmp,
+                       ignil::Opcode op) const;
   void liftXor(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftAnd(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -568,6 +572,7 @@ class X86IGNILLifter {
   unsigned opSub64mi_{}, opSub32mi_{}, opSub64mi8_{}, opSub32mi8_{};
   unsigned opSub64rm_{}, opSub32rm_{};
   unsigned opXor64rr_{}, opXor32rr_{};
+  unsigned opXor32rm_{};
   unsigned opXor32ri_{}, opXor64ri_{}, opXor32ri8_{}, opXor64ri8_{};
   unsigned opAnd64rr_{}, opAnd32rr_{};
   unsigned opAnd32ri_{}, opAnd64ri_{}, opAnd32ri8_{}, opAnd64ri8_{};
