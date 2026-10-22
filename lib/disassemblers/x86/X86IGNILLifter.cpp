@@ -154,6 +154,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"POP64r", &X86IGNILLifter::opPop64r_},
           {"POP32r", &X86IGNILLifter::opPop32r_},
           {"POPF64", &X86IGNILLifter::opPopf64_},
+          {"POPF32", &X86IGNILLifter::opPopf32_},
           {"PUSHF64", &X86IGNILLifter::opPushf64_},
           {"PUSHF32", &X86IGNILLifter::opPushf32_},
           {"CMP64rr", &X86IGNILLifter::opCmp64rr_},
@@ -866,7 +867,7 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftPush(*mc, addr, out, tempId);
   else if (opc == opPop64r_ || opc == opPop32r_)
     liftPop(*mc, addr, out, tempId);
-  else if (opc == opPopf64_)
+  else if (opc == opPopf64_ || opc == opPopf32_)
     liftPopf(*mc, addr, out, tempId);
   else if (opc == opPushf64_ || opc == opPushf32_)
     liftPushf(*mc, addr, out, tempId);

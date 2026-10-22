@@ -637,3 +637,29 @@ TEST_CASE("Semantic round-trip - i386 pushfd stores the flags word",
   REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x97);
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
+
+TEST_CASE("Semantic round-trip - i386 popfd loads flags from the stack",
+          "[semantic][x86_32]") {
+  // 0xCD5 sets CF, PF, AF, ZF, SF, DF and OF.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb8, 0xd5, 0x0c, 0x00, 0x00, // mov eax, 0xCD5
+          0x50, // push eax
+          0x9d, // popfd
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  REQUIRE(actual.regs[x86off::ZF] == 1);
+  REQUIRE(actual.regs[x86off::SF] == 1);
+  REQUIRE(actual.regs[x86off::OF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}

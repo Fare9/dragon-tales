@@ -564,7 +564,7 @@ class X86IGNILLifter {
   unsigned opOr32ri_{}, opOr64ri_{}, opOr32ri8_{}, opOr64ri8_{};
   unsigned opPush64r_{}, opPop64r_{};
   unsigned opPush32r_{}, opPop32r_{};
-  unsigned opPopf64_{}, opPushf64_{}, opPushf32_{};
+  unsigned opPopf64_{}, opPopf32_{}, opPushf64_{}, opPushf32_{};
   unsigned opCmp64rr_{}, opCmp32rr_{};
   unsigned opCmp64ri_{}, opCmp32ri_{}, opCmp64ri8_{}, opCmp32ri8_{};
   unsigned opCmp64rm_{}, opCmp32rm_{};
