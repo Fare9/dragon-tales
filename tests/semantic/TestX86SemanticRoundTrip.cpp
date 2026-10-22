@@ -1126,3 +1126,28 @@ TEST_CASE("Semantic round-trip - i386 btr [mem], imm", "[semantic][x86_32]") {
   REQUIRE(actual.regs[x86off::CF] == 1);
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
+
+TEST_CASE("Semantic round-trip - i386 loop counts ECX down",
+          "[semantic][x86_32]") {
+  // loop leaves the last add's flags alone.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb9, 0x05, 0x00, 0x00, 0x00, // mov ecx, 5
+          0x31, 0xc0, // xor eax, eax
+          0x83, 0xc0, 0x02, // L: add eax, 2
+          0xe2, 0xfb, // loop L
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 10);
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}

@@ -185,6 +185,10 @@ class X86IGNILLifter {
   void liftJcc(const llvm::MCInst &mc, std::uint64_t addr,
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;
+  // LOOP: ECX (RCX in 64-bit mode) -= 1, then CJMP while it is non-zero.
+  void liftLoop(const llvm::MCInst &mc, std::uint64_t addr,
+                std::uint8_t insnSize, ignil::Block &out,
+                std::uint32_t &tmp) const;
   void liftJmp(const llvm::MCInst &mc, std::uint64_t addr,
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;
@@ -615,6 +619,7 @@ class X86IGNILLifter {
   unsigned opJmp64m_{}, opJmp32m_{}; // indirect memory jump
   unsigned opCall64m_{}, opCall32m_{}; // indirect memory call
   unsigned opJmp_{}; // direct
+  unsigned opLoop_{};
   unsigned opCall64r_{}, opCall32r_{}; // indirect
   unsigned opCall_{}, opCall32_{}; // direct
   unsigned opRet64_{}, opRet32_{};
@@ -772,6 +777,8 @@ class X86IGNILLifter {
   ignil::Reg regEBX_{}, regECX_{};
   // PUSHAD/POPAD also save and restore ESI and EDI.
   ignil::Reg regESI_{}, regEDI_{};
+  // LOOP's counter in 64-bit mode.
+  ignil::Reg regRCX_{};
 };
 
 } // namespace x86

@@ -83,6 +83,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   regECX_ = findGprReg("ECX");
   regESI_ = findGprReg("ESI");
   regEDI_ = findGprReg("EDI");
+  regRCX_ = findGprReg("RCX");
   regRDX_ = findGprReg("RDX");
 
   // Scan opcodes by name: map LLVM mnemonic string -> pointer-to-member field.
@@ -193,6 +194,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"JMP64r", &X86IGNILLifter::opJmp64r_},
           {"JMP_1", &X86IGNILLifter::opJmp_},
           {"JMP", &X86IGNILLifter::opJmp_},
+          {"LOOP", &X86IGNILLifter::opLoop_},
           {"JMP64m", &X86IGNILLifter::opJmp64m_},
           {"JMP32m", &X86IGNILLifter::opJmp32m_},
           {"CALL64r", &X86IGNILLifter::opCall64r_},
@@ -938,6 +940,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opCall_ || opc == opCall32_ || opc == opCall64r_ ||
            opc == opCall32r_)
     liftCall(*mc, addr, insn.size(), out, tempId);
+  else if (opc == opLoop_)
+    liftLoop(*mc, addr, insn.size(), out, tempId);
   else if (opc == opRet64_ || opc == opRet32_ || opc == opRetI64_ ||
            opc == opRetI32_)
     liftRet(*mc, addr, out, tempId);
@@ -2099,6 +2103,36 @@ void dragon::x86::X86IGNILLifter::liftJcc(const llvm::MCInst &mc,
                               : 0;
 
   auto cond = emitCondition(condCode, addr, out, tmp);
+  out.append({ignil::Opcode::CJMP,
+              std::nullopt,
+              {cond, ignil::Const{taken, 64}, ignil::Const{fallthrough, 64}},
+              addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftLoop(const llvm::MCInst &mc,
+                                           std::uint64_t addr,
+                                           std::uint8_t insnSize,
+                                           ignil::Block &out,
+                                           std::uint32_t &tmp) const {
+  // op[0] = signed PC-relative offset. No flags are touched.
+  const std::int64_t offset = mc.getOperand(0).getImm();
+  const auto taken = static_cast<std::uint64_t>(
+          static_cast<std::int64_t>(addr) + insnSize + offset);
+  const std::uint64_t fallthrough = addr + insnSize;
+  const ignil::Reg counter =
+          (architecture_ == Architecture::X86_64) ? regRCX_ : regECX_;
+
+  auto next = newTemp(tmp, counter.width);
+  out.append({ignil::Opcode::SUB,
+              next,
+              {counter, ignil::Const{1, counter.width}},
+              addr});
+  out.append({ignil::Opcode::COPY, counter, {next}, addr});
+  auto cond = newTemp(tmp, 1);
+  out.append({ignil::Opcode::NEQ,
+              cond,
+              {next, ignil::Const{0, counter.width}},
+              addr});
   out.append({ignil::Opcode::CJMP,
               std::nullopt,
               {cond, ignil::Const{taken, 64}, ignil::Const{fallthrough, 64}},

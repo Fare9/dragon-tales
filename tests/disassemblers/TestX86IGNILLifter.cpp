@@ -2320,3 +2320,33 @@ TEST_CASE("IGNIL lifting - i386 btr [mem], imm (BTR32mi8)", "[ignil][x86_32]") {
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
 }
+
+TEST_CASE("IGNIL lifting - i386 loop (LOOP)", "[ignil][x86_32]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xe2, 0x02, // loop 0x1004
+          0x90, // nop
+          0x90, // nop
+          0xc3, // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::CJMP));
+  // ECX is decremented; no flag is read or written.
+  const auto &ops = ib->ops();
+  REQUIRE(std::any_of(ops.begin(), ops.end(), [](const auto &op) {
+    const auto *dst =
+            op.dst ? std::get_if<dragon::ignil::Reg>(&*op.dst) : nullptr;
+    return dst && dst->name == "ECX";
+  }));
+  REQUIRE(std::none_of(ops.begin(), ops.end(), [](const auto &op) {
+    return std::any_of(op.srcs.begin(), op.srcs.end(), [](const auto &src) {
+      const auto *reg = std::get_if<dragon::ignil::Reg>(&src);
+      return reg && reg->name == "OF";
+    });
+  }));
+}
