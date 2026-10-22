@@ -392,8 +392,11 @@ class X86IGNILLifter {
   // liftBt, only CF is written; the other flags are left unchanged (ZF is
   // documented unchanged, the rest undefined - keeping them is one legal
   // outcome). op[0]=dst(out), op[1]=src(tied=dst), op[2]=bit index(reg/imm8).
+  // With memWidth the destination is memory (op[0..4], op[5]=imm8 only; a
+  // register index would address a bit string).
   void liftBitModify(const llvm::MCInst &mc, std::uint64_t addr,
-                     ignil::Block &out, std::uint32_t &tmp, BitOp op) const;
+                     ignil::Block &out, std::uint32_t &tmp, BitOp op,
+                     std::optional<ignil::Width> memWidth = std::nullopt) const;
   // CMOVcc r,r: dst = cond ? src : dst. IGNIL has no select, so the result is
   // (src & m) | (dst & ~m) with m = all-ones when the condition holds. No
   // flags. op[0]=dst(out), op[1]=src1(tied=dst, the kept value), op[2]=src2
@@ -668,6 +671,7 @@ class X86IGNILLifter {
   unsigned opBts16ri8_{}, opBts32ri8_{}, opBts64ri8_{};
   unsigned opBts16rr_{}, opBts32rr_{}, opBts64rr_{};
   unsigned opBtr16ri8_{}, opBtr32ri8_{}, opBtr64ri8_{};
+  unsigned opBtr32mi8_{};
   unsigned opBtr16rr_{}, opBtr32rr_{}, opBtr64rr_{};
   unsigned opBtc16ri8_{}, opBtc32ri8_{}, opBtc64ri8_{};
   unsigned opBtc16rr_{}, opBtc32rr_{}, opBtc64rr_{};

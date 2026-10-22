@@ -2306,3 +2306,17 @@ TEST_CASE("IGNIL lifting - i386 shr [mem], cl (SHR32mCL)", "[ignil][x86_32]") {
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SHR));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
 }
+
+TEST_CASE("IGNIL lifting - i386 btr [mem], imm (BTR32mi8)", "[ignil][x86_32]") {
+  // btr dword [ebx+8], 6; ret
+  const std::vector<std::uint8_t> bytes = {0x0f, 0xba, 0x73, 0x08, 0x06, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+}

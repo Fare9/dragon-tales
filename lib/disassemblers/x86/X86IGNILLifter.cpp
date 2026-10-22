@@ -311,6 +311,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"BTS64rr", &X86IGNILLifter::opBts64rr_},
           {"BTR16ri8", &X86IGNILLifter::opBtr16ri8_},
           {"BTR32ri8", &X86IGNILLifter::opBtr32ri8_},
+          {"BTR32mi8", &X86IGNILLifter::opBtr32mi8_},
           {"BTR64ri8", &X86IGNILLifter::opBtr64ri8_},
           {"BTR16rr", &X86IGNILLifter::opBtr16rr_},
           {"BTR32rr", &X86IGNILLifter::opBtr32rr_},
@@ -763,6 +764,10 @@ bool dragon::x86::X86IGNILLifter::liftExtendedForm(unsigned opc,
   if (opc == opBtr16ri8_ || opc == opBtr32ri8_ || opc == opBtr64ri8_ ||
       opc == opBtr16rr_ || opc == opBtr32rr_ || opc == opBtr64rr_) {
     liftBitModify(mc, addr, out, tmp, BitOp::Reset);
+    return true;
+  }
+  if (opc == opBtr32mi8_) {
+    liftBitModify(mc, addr, out, tmp, BitOp::Reset, 32);
     return true;
   }
   if (opc == opBtc16ri8_ || opc == opBtc32ri8_ || opc == opBtc64ri8_ ||
@@ -4086,26 +4091,36 @@ void dragon::x86::X86IGNILLifter::liftBitScan(const llvm::MCInst &mc,
   emitArithFlags(addr, out, tmp, {{X86Flag::ZF, zfEqZero(ignil::Value{srcV}, addr)}});
 }
 
-void dragon::x86::X86IGNILLifter::liftBitModify(const llvm::MCInst &mc,
-                                                std::uint64_t addr,
-                                                ignil::Block &out,
-                                                std::uint32_t &tmp,
-                                                BitOp op) const {
+void dragon::x86::X86IGNILLifter::liftBitModify(
+        const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+        std::uint32_t &tmp, BitOp op,
+        std::optional<ignil::Width> memWidth) const {
   // op[0]=dst(out), op[1]=src(tied=dst), op[2]=bit index (reg or imm8).
-  auto dst = toReg(mc.getOperand(0).getReg());
-  if (!dst) {
-    logger_.log("Error liftBitModify in addr {:#x} no dst", addr);
-    emitUndef(regCF_, addr, out);
-    return;
+  std::optional<ignil::Reg> dst;
+  std::optional<ignil::Temp> memAddr;
+  if (memWidth) {
+    const ignil::Width ptrWidth =
+            (architecture_ == Architecture::X86_64) ? 64 : 32;
+    memAddr = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
+  } else {
+    dst = toReg(mc.getOperand(0).getReg());
+    if (!dst) {
+      logger_.log("Error liftBitModify in addr {:#x} no dst", addr);
+      emitUndef(regCF_, addr, out);
+      return;
+    }
   }
-  const ignil::Width w = dst->width;
+  const ignil::Width w = memWidth ? *memWidth : dst->width;
 
   auto value = newTemp(tmp, w);
-  out.append({ignil::Opcode::COPY, value, {*dst}, addr});
+  if (memAddr)
+    out.append({ignil::Opcode::LOAD, value, {*memAddr}, addr});
+  else
+    out.append({ignil::Opcode::COPY, value, {*dst}, addr});
 
   // Index wraps at the operand width.
   auto index = newTemp(tmp, w);
-  const auto &indexOp = mc.getOperand(2);
+  const auto &indexOp = mc.getOperand(memWidth ? 5 : 2);
   if (indexOp.isImm()) {
     out.append({ignil::Opcode::COPY, index,
                 {ignil::Const{static_cast<std::uint64_t>(indexOp.getImm()) % w, w}},
@@ -4155,7 +4170,13 @@ void dragon::x86::X86IGNILLifter::liftBitModify(const llvm::MCInst &mc,
                   {ignil::Value{value}, ignil::Value{bitmask}}, addr});
       break;
   }
-  out.append({ignil::Opcode::COPY, *dst, {ignil::Value{result}}, addr});
+  if (memAddr)
+    out.append({ignil::Opcode::STORE,
+                std::nullopt,
+                {*memAddr, ignil::Value{result}},
+                addr});
+  else
+    out.append({ignil::Opcode::COPY, *dst, {ignil::Value{result}}, addr});
   // Only CF is defined; the other flags are left as they were.
 }
 
