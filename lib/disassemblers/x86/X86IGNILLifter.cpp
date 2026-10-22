@@ -103,6 +103,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"MOV8mr", &X86IGNILLifter::opMov8mr_},
           {"MOV64mi32", &X86IGNILLifter::opMov64mi_},
           {"MOV32mi", &X86IGNILLifter::opMov32mi_},
+          {"MOV8mi", &X86IGNILLifter::opMov8mi_},
           {"LEA64r", &X86IGNILLifter::opLea64r_},
           {"LEA32r", &X86IGNILLifter::opLea32r_},
           {"ADD64rr", &X86IGNILLifter::opAdd64rr_},
@@ -845,7 +846,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
            opc == opMov8rm_)
     liftMovLoad(*mc, addr, out, tempId);
   else if (opc == opMov64mr_ || opc == opMov32mr_ || opc == opMov16mr_ ||
-           opc == opMov8mr_ || opc == opMov64mi_ || opc == opMov32mi_)
+           opc == opMov8mr_ || opc == opMov64mi_ || opc == opMov32mi_ ||
+           opc == opMov8mi_)
     liftMovStore(*mc, addr, out, tempId);
   else if (opc == opAdd64rr_ || opc == opAdd32rr_ || opc == opAdd64ri_ ||
            opc == opAdd32ri_ || opc == opAdd64ri8_ || opc == opAdd32ri8_)
@@ -1178,9 +1180,12 @@ void dragon::x86::X86IGNILLifter::liftMovStore(const llvm::MCInst &mc,
   ignil::Value src;
   if (srcOp.isImm()) {
     // The memory operand carries no register to read a width from; the
-    // opcode variant (32 vs 64) is the only source of truth for how wide
+    // opcode variant (8, 32 or 64) is the only source of truth for how wide
     // the store is.
-    const ignil::Width opWidth = (mc.getOpcode() == opMov64mi_) ? 64 : 32;
+    const unsigned opc = mc.getOpcode();
+    const ignil::Width opWidth = (opc == opMov64mi_)  ? 64
+                                 : (opc == opMov8mi_) ? 8
+                                                      : 32;
     src = ignil::Const{static_cast<std::uint64_t>(srcOp.getImm()), opWidth};
   } else {
     auto srcReg = toReg(srcOp.getReg());

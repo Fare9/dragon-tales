@@ -555,7 +555,7 @@ class X86IGNILLifter {
   unsigned opMov64ri_{}, opMov32ri_{}, opMov64ri32_{};
   unsigned opMov64rm_{}, opMov32rm_{}, opMov16rm_{}, opMov8rm_{};
   unsigned opMov64mr_{}, opMov32mr_{}, opMov16mr_{}, opMov8mr_{};
-  unsigned opMov64mi_{}, opMov32mi_{};
+  unsigned opMov64mi_{}, opMov32mi_{}, opMov8mi_{};
   unsigned opLea64r_{}, opLea32r_{};
   unsigned opAdd64rr_{}, opAdd32rr_{};
   unsigned opAdd64ri_{}, opAdd32ri_{}, opAdd64ri8_{}, opAdd32ri8_{};
