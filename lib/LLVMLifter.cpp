@@ -495,7 +495,7 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
                                std::format("fn_{:x}", ci->getZExtValue()), fnTy)
                         .getCallee();
       } else {
-        callee = target; // indirect call
+        callee = builder.CreateIntToPtr(target, ptrTy); // indirect call
       }
       builder.CreateCall(fnTy, callee, {memPtr});
       break;

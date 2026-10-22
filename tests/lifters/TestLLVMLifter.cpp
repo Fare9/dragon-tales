@@ -109,3 +109,16 @@ TEST_CASE("LLVMLifter - i386 addresses are zero-extended", "[llvm][lifter]") {
   REQUIRE(ir.find("zext i32") != std::string::npos);
   REQUIRE(ir.find("sext") == std::string::npos);
 }
+
+TEST_CASE("LLVMLifter - an indirect call is through a pointer",
+          "[llvm][lifter]") {
+  // call edx; ret
+  const std::vector<std::uint8_t> bytes = {0xff, 0xd2, 0xc3};
+  dragon::Graph g(dragon::Architecture::X86_32, dragon::Configuration{});
+  const auto fn = disassembleI386(bytes, g);
+  REQUIRE(fn);
+
+  dragon::llvmlifter::LLVMLifter llvml{dragon::Architecture::X86_32};
+  REQUIRE(llvml.lift(*fn, g));
+  REQUIRE_FALSE(llvm::verifyModule(llvml.module(), &llvm::errs()));
+}
