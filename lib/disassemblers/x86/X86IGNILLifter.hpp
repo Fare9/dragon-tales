@@ -599,6 +599,7 @@ class X86IGNILLifter {
   unsigned opImul32rr_{}, opImul64rr_{};
   unsigned opLea64_32r_{};
   unsigned opInc32r_{}, opInc64r_{}, opDec32r_{}, opDec64r_{};
+  unsigned opDec32r_alt_{}; // 0x48+r, 32-bit only
   unsigned opNeg32r_{}, opNeg64r_{};
   unsigned opShl32ri_{}, opShl64ri_{}, opShr32ri_{}, opShr64ri_{};
   unsigned opSar32r1_{}, opSar64r1_{}, opShl32r1_{}, opShl64r1_{},

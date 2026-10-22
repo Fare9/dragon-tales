@@ -210,6 +210,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"INC32r", &X86IGNILLifter::opInc32r_},
           {"INC64r", &X86IGNILLifter::opInc64r_},
           {"DEC32r", &X86IGNILLifter::opDec32r_},
+          {"DEC32r_alt", &X86IGNILLifter::opDec32r_alt_},
           {"DEC64r", &X86IGNILLifter::opDec64r_},
           {"NEG32r", &X86IGNILLifter::opNeg32r_},
           {"NEG64r", &X86IGNILLifter::opNeg64r_},
@@ -925,7 +926,7 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftLeaTrunc32(*mc, addr, out, tempId);
   else if (opc == opInc32r_ || opc == opInc64r_)
     liftInc(*mc, addr, out, tempId);
-  else if (opc == opDec32r_ || opc == opDec64r_)
+  else if (opc == opDec32r_ || opc == opDec32r_alt_ || opc == opDec64r_)
     liftDec(*mc, addr, out, tempId);
   else if (opc == opNeg32r_ || opc == opNeg64r_)
     liftNeg(*mc, addr, out, tempId);
