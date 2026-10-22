@@ -162,6 +162,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"PUSHA32", &X86IGNILLifter::opPusha32_},
           {"POPA32", &X86IGNILLifter::opPopa32_},
           {"PUSHSS32", &X86IGNILLifter::opPushSS32_},
+          {"POPSS32", &X86IGNILLifter::opPopSS32_},
           {"CMP64rr", &X86IGNILLifter::opCmp64rr_},
           {"CMP32rr", &X86IGNILLifter::opCmp32rr_},
           {"CMP64ri32", &X86IGNILLifter::opCmp64ri_},
@@ -882,6 +883,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftPopa(*mc, addr, out, tempId);
   else if (opc == opPushSS32_)
     liftPushSeg(*mc, addr, out, tempId);
+  else if (opc == opPopSS32_)
+    liftPopSeg(*mc, addr, out, tempId);
   else if (opc == opLea64r_ || opc == opLea32r_)
     liftLea(*mc, addr, out, tempId);
   else if (opc == opCmp64rr_ || opc == opCmp32rr_ || opc == opCmp64ri_ ||
@@ -1734,6 +1737,17 @@ void dragon::x86::X86IGNILLifter::liftPushSeg(const llvm::MCInst & /*mc*/,
   out.append({ignil::Opcode::SUB, newSP, {regESP_, ignil::Const{4, 32}}, addr});
   out.append({ignil::Opcode::COPY, regESP_, {newSP}, addr});
   out.append({ignil::Opcode::STORE, std::nullopt, {regESP_, selector}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftPopSeg(const llvm::MCInst & /*mc*/,
+                                             std::uint64_t addr,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp) const {
+  // Not modeled: the selector, and POP SS inhibiting interrupts and traps
+  // for one instruction.
+  auto newSP = newTemp(tmp, 32);
+  out.append({ignil::Opcode::ADD, newSP, {regESP_, ignil::Const{4, 32}}, addr});
+  out.append({ignil::Opcode::COPY, regESP_, {newSP}, addr});
 }
 
 void dragon::x86::X86IGNILLifter::liftLea(const llvm::MCInst &mc,
