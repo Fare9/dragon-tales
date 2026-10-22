@@ -2052,3 +2052,23 @@ TEST_CASE("IGNIL lifting - i386 dec reg short form (DEC32r_alt)",
   REQUIRE(ib->unlifted().empty());
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SUB));
 }
+
+TEST_CASE("IGNIL lifting - i386 cld (CLD)", "[ignil][x86_32]") {
+  // cld; ret
+  const std::vector<std::uint8_t> bytes = {0xfc, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  const auto &ops = ib->ops();
+  REQUIRE(std::any_of(ops.begin(), ops.end(), [](const auto &op) {
+    if (op.opcode != dragon::ignil::Opcode::COPY || !op.dst)
+      return false;
+    const auto *dst = std::get_if<dragon::ignil::Reg>(&*op.dst);
+    const auto *value = std::get_if<dragon::ignil::Const>(&op.srcs[0]);
+    return dst && dst->name == "DF" && value && value->value == 0;
+  }));
+}

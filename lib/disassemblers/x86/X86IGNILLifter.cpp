@@ -363,6 +363,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"SAHF", &X86IGNILLifter::opSahf_},
           {"CLC", &X86IGNILLifter::opClc_},
           {"CMC", &X86IGNILLifter::opCmc_},
+          {"CLD", &X86IGNILLifter::opCld_},
           {"CPUID", &X86IGNILLifter::opCpuid_},
           {"RDTSC", &X86IGNILLifter::opRdtsc_},
           {"RDTSCP", &X86IGNILLifter::opRdtscp_},
@@ -1044,6 +1045,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftCarryOp(addr, out, tempId, CarryOp::CLC);
   else if (opc == opCmc_)
     liftCarryOp(addr, out, tempId, CarryOp::CMC);
+  else if (opc == opCld_)
+    liftCarryOp(addr, out, tempId, CarryOp::CLD);
   else if (opc == opCpuid_)
     liftOpaque(addr, out, tempId, ignil::OpaqueKind::CPUID);
   else if (opc == opRdtsc_)
@@ -4165,6 +4168,9 @@ void dragon::x86::X86IGNILLifter::liftCarryOp(std::uint64_t addr,
       out.append({ignil::Opcode::COPY, regCF_, {ignil::Value{t}}, addr});
       return;
     }
+    case CarryOp::CLD:
+      out.append({ignil::Opcode::COPY, regDF_, {ignil::Const{0, 1}}, addr});
+      return;
   }
 }
 

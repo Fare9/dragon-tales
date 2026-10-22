@@ -27,8 +27,8 @@ enum class X86Flag : std::uint8_t { CF, PF, AF, ZF, SF, OF, DF };
 
 /// Accumulator sign-extension forms (no explicit operands, no flags).
 enum class AccExtend : std::uint8_t { CBW, CWDE, CDQE, CWD, CDQ, CQO };
-/// Carry-flag-only instructions.
-enum class CarryOp : std::uint8_t { STC, CLC, CMC };
+/// Single-flag instructions: STC/CLC/CMC on CF, CLD on DF.
+enum class CarryOp : std::uint8_t { STC, CLC, CMC, CLD };
 
 /// Where a rotate/shift gets its count: an explicit imm8 operand, the
 /// implicit 1 of the dedicated by-1 opcode, or the CL register.
@@ -615,7 +615,7 @@ class X86IGNILLifter {
   unsigned opShr8rCL_{}, opShr16rCL_{}, opShr32rCL_{}, opShr64rCL_{};
   unsigned opSar8rCL_{}, opSar16rCL_{}, opSar32rCL_{}, opSar64rCL_{};
   unsigned opCbw_{}, opCwde_{}, opCdqe_{}, opCwd_{}, opCdq_{}, opCqo_{};
-  unsigned opStc_{}, opClc_{}, opCmc_{};
+  unsigned opStc_{}, opClc_{}, opCmc_{}, opCld_{};
   unsigned opSetccr_{};
   unsigned opBt16ri8_{}, opBt32ri8_{}, opBt64ri8_{};
   unsigned opBt16rr_{}, opBt32rr_{}, opBt64rr_{};

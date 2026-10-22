@@ -766,3 +766,25 @@ TEST_CASE("Semantic round-trip - i386 dec reg short form overflows",
   REQUIRE(actual.regs[x86off::OF] == 1);
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
+
+TEST_CASE("Semantic round-trip - i386 cld clears DF", "[semantic][x86_32]") {
+  // popfd sets DF only.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x00, 0x04, 0x00, 0x00, // push 0x400
+          0x9d, // popfd
+          0xfc, // cld
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(actual.regs[x86off::DF] == 0);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
