@@ -1876,3 +1876,23 @@ TEST_CASE("IGNIL lifting - i386 call rel32 (CALLpcrel32)", "[ignil][x86_32]") {
   REQUIRE(target != nullptr);
   REQUIRE(target->value == 0x1005);
 }
+
+TEST_CASE("IGNIL lifting - i386 call reg (CALL32r)", "[ignil][x86_32]") {
+  // call edx; ret
+  const std::vector<std::uint8_t> bytes = {0xff, 0xd2, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  const auto &ops = ib->ops();
+  auto callIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::CALL;
+  });
+  REQUIRE(callIt != ops.end());
+  const auto *target = std::get_if<dragon::ignil::Reg>(&callIt->srcs[0]);
+  REQUIRE(target != nullptr);
+  REQUIRE(target->name == "EDX");
+  REQUIRE(target->width == 32);
+}
