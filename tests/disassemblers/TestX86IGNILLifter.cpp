@@ -2162,3 +2162,18 @@ TEST_CASE("IGNIL lifting - i386 xor [mem], imm (XOR32mi)", "[ignil][x86_32]") {
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::XOR));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
 }
+
+TEST_CASE("IGNIL lifting - i386 xor [mem], reg (XOR32mr)", "[ignil][x86_32]") {
+  // xor dword [edi], eax; ret
+  const std::vector<std::uint8_t> bytes = {0x31, 0x07, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::XOR));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+}

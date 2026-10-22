@@ -143,6 +143,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"XOR32ri8", &X86IGNILLifter::opXor32ri8_},
           {"XOR32rm", &X86IGNILLifter::opXor32rm_},
           {"XOR32mi", &X86IGNILLifter::opXor32mi_},
+          {"XOR32mr", &X86IGNILLifter::opXor32mr_},
           {"AND64rr", &X86IGNILLifter::opAnd64rr_},
           {"AND32rr", &X86IGNILLifter::opAnd32rr_},
           {"AND64ri32", &X86IGNILLifter::opAnd64ri_},
@@ -871,7 +872,7 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftSubRegMem(*mc, addr, out, tempId);
   else if (opc == opXor32rm_)
     liftLogicRegMem(*mc, addr, out, tempId, ignil::Opcode::XOR);
-  else if (opc == opXor32mi_)
+  else if (opc == opXor32mi_ || opc == opXor32mr_)
     liftLogicMem(*mc, addr, out, tempId, ignil::Opcode::XOR);
   else if (opc == opXor64rr_ || opc == opXor32rr_ || opc == opXor64ri_ ||
            opc == opXor32ri_ || opc == opXor64ri8_ || opc == opXor32ri8_)
