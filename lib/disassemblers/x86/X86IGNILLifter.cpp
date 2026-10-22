@@ -142,6 +142,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"XOR32ri", &X86IGNILLifter::opXor32ri_},
           {"XOR32ri8", &X86IGNILLifter::opXor32ri8_},
           {"XOR32rm", &X86IGNILLifter::opXor32rm_},
+          {"XOR32mi", &X86IGNILLifter::opXor32mi_},
           {"AND64rr", &X86IGNILLifter::opAnd64rr_},
           {"AND32rr", &X86IGNILLifter::opAnd32rr_},
           {"AND64ri32", &X86IGNILLifter::opAnd64ri_},
@@ -870,6 +871,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftSubRegMem(*mc, addr, out, tempId);
   else if (opc == opXor32rm_)
     liftLogicRegMem(*mc, addr, out, tempId, ignil::Opcode::XOR);
+  else if (opc == opXor32mi_)
+    liftLogicMem(*mc, addr, out, tempId, ignil::Opcode::XOR);
   else if (opc == opXor64rr_ || opc == opXor32rr_ || opc == opXor64ri_ ||
            opc == opXor32ri_ || opc == opXor64ri8_ || opc == opXor32ri8_)
     liftXor(*mc, addr, out, tempId);
@@ -1426,6 +1429,49 @@ void dragon::x86::X86IGNILLifter::liftLogicRegMem(const llvm::MCInst &mc,
   auto result = newTemp(tmp, dst->width);
   out.append({op, result, {*dst, src}, addr});
   out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+  emitArithFlags(addr, out, tmp,
+                 {
+                         {X86Flag::CF, cfAlwaysZero(addr)},
+                         {X86Flag::PF, pfParity(result, addr)},
+                         {X86Flag::AF, afAlwaysZero(addr)},
+                         {X86Flag::ZF, zfEqZero(result, addr)},
+                         {X86Flag::SF, sfSignBit(result, addr)},
+                         {X86Flag::OF, ofAlwaysZero(addr)},
+                 });
+}
+
+void dragon::x86::X86IGNILLifter::liftLogicMem(const llvm::MCInst &mc,
+                                               std::uint64_t addr,
+                                               ignil::Block &out,
+                                               std::uint32_t &tmp,
+                                               ignil::Opcode op) const {
+  // RMW: op[0..4]=mem, op[5]=reg-or-imm rhs.
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+
+  ignil::Value rhs;
+  ignil::Width opWidth = 32; // only 32-bit immediate forms are registered
+  const auto &srcOp = mc.getOperand(5);
+  if (srcOp.isImm()) {
+    rhs = ignil::Const{static_cast<std::uint64_t>(srcOp.getImm()), opWidth};
+  } else {
+    auto srcReg = toReg(srcOp.getReg());
+    if (!srcReg) {
+      logger_.log("Error liftLogicMem in addr {:#x} no src", addr);
+      return;
+    }
+    // The register is as wide as the memory operand.
+    opWidth = srcReg->width;
+    rhs = *srcReg;
+  }
+
+  auto addrTemp = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
+  auto lhs = newTemp(tmp, opWidth);
+  out.append({ignil::Opcode::LOAD, lhs, {addrTemp}, addr});
+
+  auto result = newTemp(tmp, opWidth);
+  out.append({op, result, {lhs, rhs}, addr});
+  out.append({ignil::Opcode::STORE, std::nullopt, {addrTemp, result}, addr});
   emitArithFlags(addr, out, tmp,
                  {
                          {X86Flag::CF, cfAlwaysZero(addr)},
