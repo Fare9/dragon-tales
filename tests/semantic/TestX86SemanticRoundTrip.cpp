@@ -641,6 +641,31 @@ TEST_CASE("Semantic round-trip - i386 32-bit ALU and moves",
     sweep(form, dragon::Architecture::X86_32);
 }
 
+TEST_CASE("Semantic round-trip - i386 shifts and rotates",
+          "[semantic][x86_32][.][expensive]") {
+  // CL = b & 31: counts 0, 1, 24 and 31. OF only for the by-1 forms.
+  const auto &in = arithmeticInputs32();
+  const unsigned shf = kCF | kPF | kZF | kSF;
+  for (const Form &form: std::vector<Form>{
+               {"shl eax, 16", {0xc1, 0xe0, 0x10}, shf, in},
+               {"shr ebx, 3", {0xc1, 0xeb, 0x03}, shf, in},
+               {"shl bl, 3", {0xc0, 0xe3, 0x03}, shf, in},
+               {"shr al, 3", {0xc0, 0xe8, 0x03}, shf, in},
+               {"shl ebx", {0xd1, 0xe3}, shf | kOF, in},
+               {"shr eax", {0xd1, 0xe8}, shf | kOF, in},
+               {"shl bl", {0xd0, 0xe3}, shf | kOF, in},
+               {"shr al", {0xd0, 0xe8}, shf | kOF, in},
+               {"shl eax, cl", {0xd3, 0xe0}, shf, in},
+               {"shr ebx, cl", {0xd3, 0xeb}, shf, in},
+               {"rol eax, 16", {0xc1, 0xc0, 0x10}, kCF, in},
+               {"ror ebx, 5", {0xc1, 0xcb, 0x05}, kCF, in},
+               {"ror eax, cl", {0xd3, 0xc8}, kCF, in},
+               {"ror al, cl", {0xd2, 0xc8}, kCF, in},
+               {"rol bl, cl", {0xd2, 0xc3}, kCF, in},
+       })
+    sweep(form, dragon::Architecture::X86_32);
+}
+
 // -----------------------------------------------------------------------
 // i386 baseline: instructions that already lift, to check the harness.
 // -----------------------------------------------------------------------
