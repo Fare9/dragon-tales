@@ -760,6 +760,34 @@ TEST_CASE("Semantic round-trip - i386 memory operands",
     sweep(form, dragon::Architecture::X86_32);
 }
 
+TEST_CASE("Semantic round-trip - i386 branches",
+          "[semantic][x86_32][.][expensive]") {
+  // Each branch jumps over `mov ecx, 1`. `jmp reg` is not swept: LLVMLifter
+  // lowers an indirect JMP to unreachable.
+  const auto &in = arithmeticInputs32();
+  const auto overMovEcx = [](std::vector<std::uint8_t> branch) {
+    branch.insert(branch.end(), {0xb9, 0x01, 0x00, 0x00, 0x00});
+    return branch;
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  sweep({"jmp short", overMovEcx({0xeb, 0x05}), kNone, in}, arch);
+  sweep({"jmp near", overMovEcx({0xe9, 0x05, 0x00, 0x00, 0x00}), kNone, in},
+        arch);
+  sweep({"test eax, eax ; jns short", overMovEcx({0x85, 0xc0, 0x79, 0x05}),
+         kLogic, in},
+        arch);
+
+  // cmp eax, ebx ; jcc rel32, for all sixteen conditions.
+  const char *names[16] = {"jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja",
+                           "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"};
+  for (std::uint8_t cc = 0; cc < 16; ++cc)
+    sweep({names[cc],
+           overMovEcx({0x39, 0xd8, 0x0f, static_cast<std::uint8_t>(0x80 + cc),
+                       0x05, 0x00, 0x00, 0x00}),
+           kAll, in},
+          arch);
+}
+
 // -----------------------------------------------------------------------
 // i386 baseline: instructions that already lift, to check the harness.
 // -----------------------------------------------------------------------
