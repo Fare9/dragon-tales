@@ -300,6 +300,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"ROR8rCL", &X86IGNILLifter::opRor8rCL_},
           {"ROR16rCL", &X86IGNILLifter::opRor16rCL_},
           {"ROR32rCL", &X86IGNILLifter::opRor32rCL_},
+          {"ROR32mCL", &X86IGNILLifter::opRor32mCL_},
           {"ROR64rCL", &X86IGNILLifter::opRor64rCL_},
           {"BTS16ri8", &X86IGNILLifter::opBts16ri8_},
           {"BTS32ri8", &X86IGNILLifter::opBts32ri8_},
@@ -705,6 +706,10 @@ bool dragon::x86::X86IGNILLifter::liftExtendedForm(unsigned opc,
   if (opc == opRor8rCL_ || opc == opRor16rCL_ || opc == opRor32rCL_ ||
       opc == opRor64rCL_) {
     liftRotate(mc, addr, out, tmp, /*left=*/false, ShiftCount::CL);
+    return true;
+  }
+  if (opc == opRor32mCL_) {
+    liftRotate(mc, addr, out, tmp, /*left=*/false, ShiftCount::CL, 32);
     return true;
   }
   if (opc == opRcl8ri_ || opc == opRcl16ri_ || opc == opRcl32ri_ ||
@@ -3577,23 +3582,33 @@ void dragon::x86::X86IGNILLifter::liftBt(const llvm::MCInst &mc,
   out.append({ignil::Opcode::COPY, regCF_, {ignil::Value{carry}}, addr});
 }
 
-void dragon::x86::X86IGNILLifter::liftRotate(const llvm::MCInst &mc,
-                                             std::uint64_t addr,
-                                             ignil::Block &out,
-                                             std::uint32_t &tmp, bool left,
-                                             ShiftCount count) const {
+void dragon::x86::X86IGNILLifter::liftRotate(
+        const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+        std::uint32_t &tmp, bool left, ShiftCount count,
+        std::optional<ignil::Width> memWidth) const {
   // op[0]=dst(out), op[1]=src(tied=dst), [op[2]=imm8 for the ri form].
-  auto dst = toReg(mc.getOperand(0).getReg());
-  if (!dst) {
-    logger_.log("Error liftRotate in addr {:#x} no dst", addr);
-    return;
+  std::optional<ignil::Reg> dst;
+  std::optional<ignil::Temp> memAddr;
+  if (memWidth) {
+    const ignil::Width ptrWidth =
+            (architecture_ == Architecture::X86_64) ? 64 : 32;
+    memAddr = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
+  } else {
+    dst = toReg(mc.getOperand(0).getReg());
+    if (!dst) {
+      logger_.log("Error liftRotate in addr {:#x} no dst", addr);
+      return;
+    }
   }
-  const ignil::Width w = dst->width;
+  const ignil::Width w = memWidth ? *memWidth : dst->width;
   const std::uint64_t W = w;
   const std::uint64_t mask = W - 1;
 
   auto xv = newTemp(tmp, w);
-  out.append({ignil::Opcode::COPY, xv, {*dst}, addr});
+  if (memAddr)
+    out.append({ignil::Opcode::LOAD, xv, {*memAddr}, addr});
+  else
+    out.append({ignil::Opcode::COPY, xv, {*dst}, addr});
 
   // The effective rotation amount, masked to W-1. x86 masks the raw count to
   // 5 bits (6 for 64-bit) then takes it mod the width; for every width that
@@ -3601,8 +3616,9 @@ void dragon::x86::X86IGNILLifter::liftRotate(const llvm::MCInst &mc,
   auto cnt = newTemp(tmp, w);
   switch (count) {
     case ShiftCount::Imm: {
-      const auto imm =
-              static_cast<std::uint64_t>(mc.getOperand(2).getImm()) & mask;
+      const auto imm = static_cast<std::uint64_t>(
+                               mc.getOperand(memWidth ? 5 : 2).getImm()) &
+                       mask;
       out.append({ignil::Opcode::COPY, cnt, {ignil::Const{imm, w}}, addr});
       break;
     }
@@ -3637,7 +3653,13 @@ void dragon::x86::X86IGNILLifter::liftRotate(const llvm::MCInst &mc,
   auto result = newTemp(tmp, w);
   out.append({ignil::Opcode::OR, result, {ignil::Value{part1}, ignil::Value{part2}},
               addr});
-  out.append({ignil::Opcode::COPY, *dst, {ignil::Value{result}}, addr});
+  if (memAddr)
+    out.append({ignil::Opcode::STORE,
+                std::nullopt,
+                {*memAddr, ignil::Value{result}},
+                addr});
+  else
+    out.append({ignil::Opcode::COPY, *dst, {ignil::Value{result}}, addr});
 
   // CF is the bit rotated past the far end: for ROL it is the new bit 0, for
   // ROR the new bit W-1. A zero count leaves CF (and OF) unchanged, so CF is

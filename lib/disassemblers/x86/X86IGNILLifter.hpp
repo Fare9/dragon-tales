@@ -348,9 +348,11 @@ class X86IGNILLifter {
   // CF = the bit rotated into the far end (gated, left untouched for a zero
   // count), OF defined only for a 1-bit rotate and otherwise UNDEF. SF/ZF/PF/AF
   // are not touched at all - a rotate does not disturb them. op[0]=dst(out),
-  // op[1]=src(tied=dst), [op[2]=imm8] for the ri form.
+  // op[1]=src(tied=dst), [op[2]=imm8] for the ri form. With memWidth the
+  // destination is memory (op[0..4], [op[5]=imm8]).
   void liftRotate(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
-                  std::uint32_t &tmp, bool left, ShiftCount count) const;
+                  std::uint32_t &tmp, bool left, ShiftCount count,
+                  std::optional<ignil::Width> memWidth = std::nullopt) const;
   // RCL/RCR by imm8 or by the implicit 1 (the CL forms stay unlifted: a
   // variable rotate through the carry is a (width+1)-bit rotation that does
   // not fit a 64-bit temp). With the count known at lift time, the result is a
@@ -647,6 +649,7 @@ class X86IGNILLifter {
   unsigned opRor8ri_{}, opRor16ri_{}, opRor32ri_{}, opRor64ri_{};
   unsigned opRor8r1_{}, opRor16r1_{}, opRor32r1_{}, opRor64r1_{};
   unsigned opRor8rCL_{}, opRor16rCL_{}, opRor32rCL_{}, opRor64rCL_{};
+  unsigned opRor32mCL_{};
   // Rotate through carry, imm8 and by-1 forms only (see liftRotateCarry).
   unsigned opRcl8ri_{}, opRcl16ri_{}, opRcl32ri_{}, opRcl64ri_{};
   unsigned opRcl8r1_{}, opRcl16r1_{}, opRcl32r1_{}, opRcl64r1_{};
