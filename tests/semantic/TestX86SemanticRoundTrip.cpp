@@ -724,6 +724,42 @@ TEST_CASE("Semantic round-trip - i386 push/pop and xchg registers",
     sweep(form, dragon::Architecture::X86_32);
 }
 
+TEST_CASE("Semantic round-trip - i386 memory operands",
+          "[semantic][x86_32][.][expensive]") {
+  // push ebx ; <op on [esp]> ; pop ecx: the result lands in ECX.
+  const auto &in = arithmeticInputs32();
+  const auto onStack = [](std::vector<std::uint8_t> op) {
+    op.insert(op.begin(), 0x53); // push ebx
+    op.push_back(0x59); // pop ecx
+    return op;
+  };
+  for (const Form &form: std::vector<Form>{
+               {"mov eax, [esp]", onStack({0x8b, 0x04, 0x24}), kNone, in},
+               {"mov [esp], eax", onStack({0x89, 0x04, 0x24}), kNone, in},
+               {"mov dword [esp], 0x2140ae2e",
+                onStack({0xc7, 0x04, 0x24, 0x2e, 0xae, 0x40, 0x21}), kNone, in},
+               {"mov al, [esp+1]", onStack({0x8a, 0x44, 0x24, 0x01}), kNone,
+                in},
+               {"movzx eax, word [esp]", onStack({0x0f, 0xb7, 0x04, 0x24}),
+                kNone, in},
+               {"add eax, [esp]", onStack({0x03, 0x04, 0x24}), kAll, in},
+               {"add [esp], eax", onStack({0x01, 0x04, 0x24}), kAll, in},
+               {"add dword [esp], 4 (ADD32mi)",
+                onStack({0x81, 0x04, 0x24, 0x04, 0x00, 0x00, 0x00}), kAll, in},
+               {"sub [esp], eax", onStack({0x29, 0x04, 0x24}), kAll, in},
+               {"sub dword [esp], 27 (SUB32mi)",
+                onStack({0x81, 0x2c, 0x24, 0x1b, 0x00, 0x00, 0x00}), kAll, in},
+               {"inc dword [esp]", onStack({0xff, 0x04, 0x24}), kAll, in},
+               {"dec byte [esp]", onStack({0xfe, 0x0c, 0x24}), kAll, in},
+               {"lock dec byte [esp]", onStack({0xf0, 0xfe, 0x0c, 0x24}), kAll,
+                in},
+               {"cmp dword [esp], 0x2140ae2e",
+                onStack({0x81, 0x3c, 0x24, 0x2e, 0xae, 0x40, 0x21}), kAll, in},
+               {"cmp [esp], eax", onStack({0x39, 0x04, 0x24}), kAll, in},
+       })
+    sweep(form, dragon::Architecture::X86_32);
+}
+
 // -----------------------------------------------------------------------
 // i386 baseline: instructions that already lift, to check the harness.
 // -----------------------------------------------------------------------
