@@ -254,6 +254,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"SHR8rCL", &X86IGNILLifter::opShr8rCL_},
           {"SHR16rCL", &X86IGNILLifter::opShr16rCL_},
           {"SHR32rCL", &X86IGNILLifter::opShr32rCL_},
+          {"SHR32mCL", &X86IGNILLifter::opShr32mCL_},
           {"SHR64rCL", &X86IGNILLifter::opShr64rCL_},
           {"SAR8ri", &X86IGNILLifter::opSar8ri_},
           {"SAR8r1", &X86IGNILLifter::opSar8r1_},
@@ -1040,6 +1041,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opShr8rCL_ || opc == opShr16rCL_ || opc == opShr32rCL_ ||
            opc == opShr64rCL_)
     liftShiftCL(*mc, addr, out, tempId, ignil::Opcode::SHR);
+  else if (opc == opShr32mCL_)
+    liftShiftCL(*mc, addr, out, tempId, ignil::Opcode::SHR, 32);
   else if (opc == opSar8rCL_ || opc == opSar16rCL_ || opc == opSar32rCL_ ||
            opc == opSar64rCL_)
     liftShiftCL(*mc, addr, out, tempId, ignil::Opcode::SAR);
@@ -3195,28 +3198,38 @@ void dragon::x86::X86IGNILLifter::liftNot(const llvm::MCInst &mc,
   out.append({ignil::Opcode::COPY, *dst, {result}, addr});
 }
 
-void dragon::x86::X86IGNILLifter::liftShiftCL(const llvm::MCInst &mc,
-                                              std::uint64_t addr,
-                                              ignil::Block &out,
-                                              std::uint32_t &tmp,
-                                              ignil::Opcode shift) const {
-  auto dst = toReg(mc.getOperand(0).getReg());
-  if (!dst) {
-    logger_.log("Error liftShiftCL in addr {:#x} no dst", addr);
-    return;
+void dragon::x86::X86IGNILLifter::liftShiftCL(
+        const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+        std::uint32_t &tmp, ignil::Opcode shift,
+        std::optional<ignil::Width> memWidth) const {
+  std::optional<ignil::Reg> dst, src;
+  std::optional<ignil::Temp> memAddr;
+  if (memWidth) {
+    const ignil::Width ptrWidth =
+            (architecture_ == Architecture::X86_64) ? 64 : 32;
+    memAddr = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
+  } else {
+    dst = toReg(mc.getOperand(0).getReg());
+    if (!dst) {
+      logger_.log("Error liftShiftCL in addr {:#x} no dst", addr);
+      return;
+    }
+    src = toReg(mc.getOperand(1).getReg());
+    if (!src) {
+      logger_.log("Error liftShiftCL in addr {:#x} no src", addr);
+      emitUndef(*dst, addr, out);
+      return;
+    }
   }
-  auto src = toReg(mc.getOperand(1).getReg());
-  if (!src) {
-    logger_.log("Error liftShiftCL in addr {:#x} no src", addr);
-    emitUndef(*dst, addr, out);
-    return;
-  }
-  const ignil::Width w = dst->width;
+  const ignil::Width w = memWidth ? *memWidth : dst->width;
   const std::uint64_t W = w;
   const std::uint64_t countMask = (w == 64) ? 63 : 31;
 
   auto lhs = newTemp(tmp, w);
-  out.append({ignil::Opcode::COPY, lhs, {*src}, addr});
+  if (memAddr)
+    out.append({ignil::Opcode::LOAD, lhs, {*memAddr}, addr});
+  else
+    out.append({ignil::Opcode::COPY, lhs, {*src}, addr});
   auto cnt8 = newTemp(tmp, 8);
   out.append({ignil::Opcode::AND,
               cnt8,
@@ -3229,7 +3242,10 @@ void dragon::x86::X86IGNILLifter::liftShiftCL(const llvm::MCInst &mc,
     out.append({ignil::Opcode::ZEXT, cnt, {ignil::Value{cnt8}}, addr});
   auto result = newTemp(tmp, w);
   out.append({shift, result, {ignil::Value{lhs}, ignil::Value{cnt}}, addr});
-  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
+  if (memAddr)
+    out.append({ignil::Opcode::STORE, std::nullopt, {*memAddr, result}, addr});
+  else
+    out.append({ignil::Opcode::COPY, *dst, {result}, addr});
 
   emitGatedShiftFlags(addr, out, tmp, lhs, cnt, result,
                       shift == ignil::Opcode::SHL);

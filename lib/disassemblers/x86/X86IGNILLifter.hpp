@@ -307,10 +307,10 @@ class X86IGNILLifter {
   // op[1]=src(tied=dst); the count is CL masked to 5 bits (6 for 64-bit).
   // A zero count leaves every flag untouched, so CF/ZF/SF are merged with
   // their old value under an isZero mask; OF (count==1 only), PF and AF are
-  // UNDEF.
+  // UNDEF. With memWidth the destination is memory (op[0..4]).
   void liftShiftCL(const llvm::MCInst &mc, std::uint64_t addr,
-                   ignil::Block &out, std::uint32_t &tmp,
-                   ignil::Opcode shift) const;
+                   ignil::Block &out, std::uint32_t &tmp, ignil::Opcode shift,
+                   std::optional<ignil::Width> memWidth = std::nullopt) const;
   // CBW/CWDE/CDQE sign-extend within RAX; CWD/CDQ/CQO sign-fill (R/E)DX
   // from the top bit of (R/E)AX. No operands, no flags.
   void liftAccExtend(std::uint64_t addr, ignil::Block &out,
@@ -636,6 +636,7 @@ class X86IGNILLifter {
           opSar16r1_{};
   unsigned opShl8rCL_{}, opShl16rCL_{}, opShl32rCL_{}, opShl64rCL_{};
   unsigned opShr8rCL_{}, opShr16rCL_{}, opShr32rCL_{}, opShr64rCL_{};
+  unsigned opShr32mCL_{};
   unsigned opSar8rCL_{}, opSar16rCL_{}, opSar32rCL_{}, opSar64rCL_{};
   unsigned opCbw_{}, opCwde_{}, opCdqe_{}, opCwd_{}, opCdq_{}, opCqo_{};
   unsigned opStc_{}, opClc_{}, opCmc_{}, opCld_{};
