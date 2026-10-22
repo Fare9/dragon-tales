@@ -159,6 +159,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"OR32ri8", &X86IGNILLifter::opOr32ri8_},
           {"PUSH64r", &X86IGNILLifter::opPush64r_},
           {"PUSH32r", &X86IGNILLifter::opPush32r_},
+          {"PUSH32rmm", &X86IGNILLifter::opPush32rmm_},
           {"POP64r", &X86IGNILLifter::opPop64r_},
           {"POP32r", &X86IGNILLifter::opPop32r_},
           {"POPF64", &X86IGNILLifter::opPopf64_},
@@ -888,6 +889,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftOr(*mc, addr, out, tempId);
   else if (opc == opPush64r_ || opc == opPush32r_)
     liftPush(*mc, addr, out, tempId);
+  else if (opc == opPush32rmm_)
+    liftPushMem(*mc, addr, out, tempId);
   else if (opc == opPop64r_ || opc == opPop32r_)
     liftPop(*mc, addr, out, tempId);
   else if (opc == opPopf64_ || opc == opPopf32_)
@@ -1663,6 +1666,28 @@ void dragon::x86::X86IGNILLifter::liftPush(const llvm::MCInst &mc,
 
   // memory[RSP] = src
   out.append({ignil::Opcode::STORE, std::nullopt, {sp, *src}, addr});
+}
+void dragon::x86::X86IGNILLifter::liftPushMem(const llvm::MCInst &mc,
+                                              std::uint64_t addr,
+                                              ignil::Block &out,
+                                              std::uint32_t &tmp) const {
+  // op[0..4]=mem, read before SP moves (`push [esp+4]`).
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+  ignil::Reg sp = (architecture_ == Architecture::X86_64) ? regRSP_ : regESP_;
+
+  auto addrTemp = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
+  auto value = newTemp(tmp, ptrWidth);
+  out.append({ignil::Opcode::LOAD, value, {addrTemp}, addr});
+
+  auto newSP = newTemp(tmp, ptrWidth);
+  out.append({ignil::Opcode::SUB,
+              newSP,
+              {sp, ignil::Const{static_cast<std::uint64_t>(ptrWidth / 8),
+                                ptrWidth}},
+              addr});
+  out.append({ignil::Opcode::COPY, sp, {newSP}, addr});
+  out.append({ignil::Opcode::STORE, std::nullopt, {sp, value}, addr});
 }
 void dragon::x86::X86IGNILLifter::liftPop(const llvm::MCInst &mc,
                                           std::uint64_t addr, ignil::Block &out,

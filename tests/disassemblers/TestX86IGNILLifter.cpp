@@ -2192,3 +2192,27 @@ TEST_CASE("IGNIL lifting - i386 and [mem], reg (AND32mr)", "[ignil][x86_32]") {
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::AND));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
 }
+
+TEST_CASE("IGNIL lifting - i386 push [mem] (PUSH32rmm)", "[ignil][x86_32]") {
+  // push dword [edx]; ret
+  const std::vector<std::uint8_t> bytes = {0xff, 0x32, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  // The operand is read before ESP moves.
+  const auto &ops = ib->ops();
+  auto loadIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::LOAD;
+  });
+  auto subIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::SUB;
+  });
+  REQUIRE(loadIt != ops.end());
+  REQUIRE(subIt != ops.end());
+  REQUIRE(loadIt < subIt);
+}
