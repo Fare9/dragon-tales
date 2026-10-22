@@ -3668,19 +3668,30 @@ void dragon::x86::X86IGNILLifter::liftRotate(
   // The effective rotation amount, masked to W-1. x86 masks the raw count to
   // 5 bits (6 for 64-bit) then takes it mod the width; for every width that
   // is exactly `count & (W-1)`.
+  // The flags are gated on the 5/6-bit count alone: an 8/16-bit rotate by a
+  // multiple of its width still writes CF.
+  const std::uint64_t countMask = (w == 64) ? 63 : 31;
+  ignil::Value rawCount = ignil::Const{1, 8};
   auto cnt = newTemp(tmp, w);
   switch (count) {
     case ShiftCount::Imm: {
       const auto imm = static_cast<std::uint64_t>(
-                               mc.getOperand(memWidth ? 5 : 2).getImm()) &
-                       mask;
-      out.append({ignil::Opcode::COPY, cnt, {ignil::Const{imm, w}}, addr});
+              mc.getOperand(memWidth ? 5 : 2).getImm());
+      rawCount = ignil::Const{imm & countMask, 8};
+      out.append(
+              {ignil::Opcode::COPY, cnt, {ignil::Const{imm & mask, w}}, addr});
       break;
     }
     case ShiftCount::One:
       out.append({ignil::Opcode::COPY, cnt, {ignil::Const{1 & mask, w}}, addr});
       break;
     case ShiftCount::CL: {
+      auto raw = newTemp(tmp, 8);
+      out.append({ignil::Opcode::AND,
+                  raw,
+                  {regCL_, ignil::Const{countMask, 8}},
+                  addr});
+      rawCount = raw;
       auto cl = newTemp(tmp, 8);
       out.append({ignil::Opcode::AND, cl, {regCL_, ignil::Const{mask, 8}}, addr});
       if (w == 8)
@@ -3720,8 +3731,7 @@ void dragon::x86::X86IGNILLifter::liftRotate(
   // ROR the new bit W-1. A zero count leaves CF (and OF) unchanged, so CF is
   // merged with its old value under an 8-bit mask, as the gated shifts do.
   auto isZero = newTemp(tmp, 1);
-  out.append({ignil::Opcode::EQ, isZero, {ignil::Value{cnt}, ignil::Const{0, w}},
-              addr});
+  out.append({ignil::Opcode::EQ, isZero, {rawCount, ignil::Const{0, 8}}, addr});
   auto z8 = newTemp(tmp, 8);
   out.append({ignil::Opcode::ZEXT, z8, {ignil::Value{isZero}}, addr});
   auto nz8 = newTemp(tmp, 8);

@@ -1135,6 +1135,30 @@ TEST_CASE("Semantic round-trip - i386 ror [mem], cl", "[semantic][x86_32]") {
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
 
+TEST_CASE("Semantic round-trip - i386 ror al, cl by a multiple of 8 sets CF",
+          "[semantic][x86_32]") {
+  // AL is unchanged, but the count is not 0, so CF is written.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb0, 0x81, // mov al, 0x81
+          0xb1, 0x08, // mov cl, 8
+          0xd2, 0xc8, // ror al, cl
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 0x81);
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
 TEST_CASE("Semantic round-trip - i386 shr [mem], cl", "[semantic][x86_32]") {
   // A 1-bit shift, so OF is defined.
   const std::vector<std::uint8_t> code = {
