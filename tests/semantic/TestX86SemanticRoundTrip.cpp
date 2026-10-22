@@ -663,3 +663,29 @@ TEST_CASE("Semantic round-trip - i386 popfd loads flags from the stack",
   REQUIRE(actual.regs[x86off::OF] == 1);
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
+
+TEST_CASE("Semantic round-trip - i386 pushad stores all eight registers",
+          "[semantic][x86_32]") {
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x60, // pushad
+          0x83, 0xc4, 0x20, // add esp, 32
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  setReg64(initialRegs, x86off::RAX, 0x11111111);
+  setReg64(initialRegs, x86off::RCX, 0x22222222);
+  setReg64(initialRegs, x86off::RDX, 0x33333333);
+  setReg64(initialRegs, x86off::RBX, 0x44444444);
+  setReg64(initialRegs, x86off::RSI, 0x77777777);
+  setReg64(initialRegs, x86off::RDI, 0x88888888);
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}

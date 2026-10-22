@@ -81,6 +81,8 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   regEDX_ = findGprReg("EDX");
   regEBX_ = findGprReg("EBX");
   regECX_ = findGprReg("ECX");
+  regESI_ = findGprReg("ESI");
+  regEDI_ = findGprReg("EDI");
   regRDX_ = findGprReg("RDX");
 
   // Scan opcodes by name: map LLVM mnemonic string -> pointer-to-member field.
@@ -157,6 +159,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"POPF32", &X86IGNILLifter::opPopf32_},
           {"PUSHF64", &X86IGNILLifter::opPushf64_},
           {"PUSHF32", &X86IGNILLifter::opPushf32_},
+          {"PUSHA32", &X86IGNILLifter::opPusha32_},
           {"CMP64rr", &X86IGNILLifter::opCmp64rr_},
           {"CMP32rr", &X86IGNILLifter::opCmp32rr_},
           {"CMP64ri32", &X86IGNILLifter::opCmp64ri_},
@@ -871,6 +874,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftPopf(*mc, addr, out, tempId);
   else if (opc == opPushf64_ || opc == opPushf32_)
     liftPushf(*mc, addr, out, tempId);
+  else if (opc == opPusha32_)
+    liftPusha(*mc, addr, out, tempId);
   else if (opc == opLea64r_ || opc == opLea32r_)
     liftLea(*mc, addr, out, tempId);
   else if (opc == opCmp64rr_ || opc == opCmp32rr_ || opc == opCmp64ri_ ||
@@ -1662,6 +1667,28 @@ void dragon::x86::X86IGNILLifter::liftPushf(const llvm::MCInst & /*mc*/,
               addr});
   out.append({ignil::Opcode::COPY, sp, {newSP}, addr});
   out.append({ignil::Opcode::STORE, std::nullopt, {sp, acc}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftPusha(const llvm::MCInst & /*mc*/,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  // Every slot is addressed from the original ESP, which is also what is saved.
+  const std::array<ignil::Reg, 8> regs = {regEAX_, regECX_, regEDX_, regEBX_,
+                                          regESP_, regEBP_, regESI_, regEDI_};
+  for (std::size_t i = 0; i < regs.size(); ++i) {
+    auto slot = newTemp(tmp, 32);
+    out.append({ignil::Opcode::SUB,
+                slot,
+                {regESP_, ignil::Const{4 * (i + 1), 32}},
+                addr});
+    out.append({ignil::Opcode::STORE, std::nullopt, {slot, regs[i]}, addr});
+  }
+
+  auto newSP = newTemp(tmp, 32);
+  out.append(
+          {ignil::Opcode::SUB, newSP, {regESP_, ignil::Const{32, 32}}, addr});
+  out.append({ignil::Opcode::COPY, regESP_, {newSP}, addr});
 }
 
 void dragon::x86::X86IGNILLifter::liftLea(const llvm::MCInst &mc,

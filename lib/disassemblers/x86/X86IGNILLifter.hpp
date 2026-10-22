@@ -143,6 +143,9 @@ class X86IGNILLifter {
                 std::uint32_t &tmp) const;
   void liftPushf(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                  std::uint32_t &tmp) const;
+  // PUSHAD: push EAX, ECX, EDX, EBX, the original ESP, EBP, ESI and EDI.
+  void liftPusha(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                 std::uint32_t &tmp) const;
   void liftLea(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftCmp(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -565,6 +568,7 @@ class X86IGNILLifter {
   unsigned opPush64r_{}, opPop64r_{};
   unsigned opPush32r_{}, opPop32r_{};
   unsigned opPopf64_{}, opPopf32_{}, opPushf64_{}, opPushf32_{};
+  unsigned opPusha32_{};
   unsigned opCmp64rr_{}, opCmp32rr_{};
   unsigned opCmp64ri_{}, opCmp32ri_{}, opCmp64ri8_{}, opCmp32ri8_{};
   unsigned opCmp64rm_{}, opCmp32rm_{};
@@ -726,6 +730,8 @@ class X86IGNILLifter {
           regEDX_{}, regRDX_{};
   // CPUID/RDTSCP also define EBX and ECX.
   ignil::Reg regEBX_{}, regECX_{};
+  // PUSHAD/POPAD also save and restore ESI and EDI.
+  ignil::Reg regESI_{}, regEDI_{};
 };
 
 } // namespace x86
