@@ -379,6 +379,22 @@ const std::vector<Inputs> &arithmeticInputs() {
   return v;
 }
 
+// The same edge cases, as 32-bit values.
+const std::vector<Inputs> &arithmeticInputs32() {
+  static const std::vector<Inputs> v = [] {
+    const std::uint64_t edge[] = {0,          1,          0x7f,
+                                  0x80,       0xff,       0x7fffffff,
+                                  0x80000000, 0xffffffff, 0x12345678};
+    std::vector<Inputs> out;
+    for (std::uint64_t a: edge)
+      for (std::uint64_t b: edge)
+        for (bool c: {false, true})
+          out.push_back({a, b, /*rcx=*/b & 31, /*rdx=*/0x5555aaaa, c});
+    return out;
+  }();
+  return v;
+}
+
 // Dividends that cannot raise #DE for a divisor in BX/EBX: the high half
 // (DX/EDX) stays well below the divisor.
 const std::vector<Inputs> &divisionInputs() {
@@ -394,9 +410,12 @@ const std::vector<Inputs> &divisionInputs() {
   return v;
 }
 
-void sweep(const Form &form) {
+void sweep(const Form &form,
+           dragon::Architecture arch = dragon::Architecture::X86_64) {
   // push rbp ; mov rbp, rsp ; <instruction> ; pop rbp ; ret
   std::vector<std::uint8_t> code = {0x55, 0x48, 0x89, 0xe5};
+  if (arch == dragon::Architecture::X86_32)
+    code = {0x55, 0x89, 0xe5}; // no REX.W on the mov
   code.insert(code.end(), form.bytes.begin(), form.bytes.end());
   code.push_back(0x5d);
   code.push_back(0xc3);
@@ -416,8 +435,8 @@ void sweep(const Form &form) {
     regs[x86off::CF] = in.carry ? 1 : 0;
     std::vector<std::uint8_t> mem;
 
-    const auto expected = runUnicorn(code, regs, mem);
-    const auto actual = runLifted(code, regs, mem);
+    const auto expected = runUnicorn(code, regs, mem, arch);
+    const auto actual = runLifted(code, regs, mem, kCodeBase, arch);
 
     INFO(form.name << "  rax=0x" << std::hex << in.rax << " rbx=0x" << in.rbx
                    << " rcx=0x" << in.rcx << " rdx=0x" << in.rdx << " cf=" << in.carry);
@@ -583,6 +602,43 @@ TEST_CASE("Semantic round-trip - shifts/rotates by CL: OF modelled, not UNDEF",
   };
   for (const Form &f: undefinedOF)
     sweep(f);
+}
+
+// i386 sweeps of forms first written for x64.
+TEST_CASE("Semantic round-trip - i386 32-bit ALU and moves",
+          "[semantic][x86_32][.][expensive]") {
+  const auto &in = arithmeticInputs32();
+  for (const Form &form: std::vector<Form>{
+               {"add eax, ebx", {0x01, 0xd8}, kAll, in},
+               {"add ebx, 0x12345678 (ADD32ri)",
+                {0x81, 0xc3, 0x78, 0x56, 0x34, 0x12},
+                kAll,
+                in},
+               {"sub eax, ebx", {0x29, 0xd8}, kAll, in},
+               {"sub ebx, 0x80000000 (SUB32ri)",
+                {0x81, 0xeb, 0x00, 0x00, 0x00, 0x80},
+                kAll,
+                in},
+               {"adc eax, ebx", {0x11, 0xd8}, kAll, in},
+               {"neg eax", {0xf7, 0xd8}, kAll, in},
+               {"xor eax, ebx", {0x31, 0xd8}, kLogic, in},
+               {"xor ebx, 0x38 (XOR32ri)",
+                {0x81, 0xf3, 0x38, 0x00, 0x00, 0x00},
+                kLogic,
+                in},
+               {"and ebx, 0xff (AND32ri)",
+                {0x81, 0xe3, 0xff, 0x00, 0x00, 0x00},
+                kLogic,
+                in},
+               {"mov eax, ebx", {0x89, 0xd8}, kNone, in},
+               {"mov eax, 0xfffffffc",
+                {0xb8, 0xfc, 0xff, 0xff, 0xff},
+                kNone,
+                in},
+               {"lea eax, [ebx+4*edx]", {0x8d, 0x04, 0x93}, kNone, in},
+               {"movzx edx, al", {0x0f, 0xb6, 0xd0}, kNone, in},
+       })
+    sweep(form, dragon::Architecture::X86_32);
 }
 
 // -----------------------------------------------------------------------
