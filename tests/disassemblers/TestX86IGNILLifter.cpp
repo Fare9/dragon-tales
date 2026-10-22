@@ -1967,3 +1967,25 @@ TEST_CASE("IGNIL lifting - i386 pushad (PUSHA32)", "[ignil][x86_32]") {
     return value && value->name == "ESP";
   }));
 }
+
+TEST_CASE("IGNIL lifting - i386 popad (POPA32)", "[ignil][x86_32]") {
+  // popad; ret
+  const std::vector<std::uint8_t> bytes = {0x61, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  const auto &ops = ib->ops();
+  REQUIRE(std::count_if(ops.begin(), ops.end(), [](const auto &op) {
+            return op.opcode == dragon::ignil::Opcode::LOAD;
+          }) == 7);
+  // The saved ESP is discarded.
+  REQUIRE(std::count_if(ops.begin(), ops.end(), [](const auto &op) {
+            const auto *dst = op.dst ? std::get_if<dragon::ignil::Reg>(&*op.dst)
+                                     : nullptr;
+            return dst && dst->name == "ESP";
+          }) == 1);
+}

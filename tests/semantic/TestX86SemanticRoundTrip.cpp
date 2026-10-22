@@ -689,3 +689,34 @@ TEST_CASE("Semantic round-trip - i386 pushad stores all eight registers",
 
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
+
+TEST_CASE("Semantic round-trip - i386 popad loads all but ESP",
+          "[semantic][x86_32]") {
+  // popad's EBP is stored before pop ebp overwrites it.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x11, 0x11, 0x11, 0x11, // push 0x11111111 (eax)
+          0x68, 0x22, 0x22, 0x22, 0x22, // push 0x22222222 (ecx)
+          0x68, 0x33, 0x33, 0x33, 0x33, // push 0x33333333 (edx)
+          0x68, 0x44, 0x44, 0x44, 0x44, // push 0x44444444 (ebx)
+          0x68, 0xef, 0xbe, 0xad, 0xde, // push 0xDEADBEEF (esp, skipped)
+          0x68, 0x66, 0x66, 0x66, 0x66, // push 0x66666666 (ebp)
+          0x68, 0x77, 0x77, 0x77, 0x77, // push 0x77777777 (esi)
+          0x68, 0x88, 0x88, 0x88, 0x88, // push 0x88888888 (edi)
+          0x61, // popad
+          0x89, 0x6c, 0x24, 0xfc, // mov [esp-4], ebp
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 0x11111111);
+  REQUIRE(getReg64(actual.regs, x86off::RDI) == 0x88888888);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}

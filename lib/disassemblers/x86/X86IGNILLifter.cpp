@@ -160,6 +160,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"PUSHF64", &X86IGNILLifter::opPushf64_},
           {"PUSHF32", &X86IGNILLifter::opPushf32_},
           {"PUSHA32", &X86IGNILLifter::opPusha32_},
+          {"POPA32", &X86IGNILLifter::opPopa32_},
           {"CMP64rr", &X86IGNILLifter::opCmp64rr_},
           {"CMP32rr", &X86IGNILLifter::opCmp32rr_},
           {"CMP64ri32", &X86IGNILLifter::opCmp64ri_},
@@ -876,6 +877,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftPushf(*mc, addr, out, tempId);
   else if (opc == opPusha32_)
     liftPusha(*mc, addr, out, tempId);
+  else if (opc == opPopa32_)
+    liftPopa(*mc, addr, out, tempId);
   else if (opc == opLea64r_ || opc == opLea32r_)
     liftLea(*mc, addr, out, tempId);
   else if (opc == opCmp64rr_ || opc == opCmp32rr_ || opc == opCmp64ri_ ||
@@ -1688,6 +1691,32 @@ void dragon::x86::X86IGNILLifter::liftPusha(const llvm::MCInst & /*mc*/,
   auto newSP = newTemp(tmp, 32);
   out.append(
           {ignil::Opcode::SUB, newSP, {regESP_, ignil::Const{32, 32}}, addr});
+  out.append({ignil::Opcode::COPY, regESP_, {newSP}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftPopa(const llvm::MCInst & /*mc*/,
+                                           std::uint64_t addr,
+                                           ignil::Block &out,
+                                           std::uint32_t &tmp) const {
+  // EAX is at ESP+28, down to EDI at ESP+0.
+  const std::array<ignil::Reg, 8> regs = {regEAX_, regECX_, regEDX_, regEBX_,
+                                          regESP_, regEBP_, regESI_, regEDI_};
+  for (std::size_t i = 0; i < regs.size(); ++i) {
+    if (i == 4) // the saved ESP is discarded
+      continue;
+    auto slot = newTemp(tmp, 32);
+    out.append({ignil::Opcode::ADD,
+                slot,
+                {regESP_, ignil::Const{28 - 4 * i, 32}},
+                addr});
+    auto loaded = newTemp(tmp, 32);
+    out.append({ignil::Opcode::LOAD, loaded, {slot}, addr});
+    out.append({ignil::Opcode::COPY, regs[i], {loaded}, addr});
+  }
+
+  auto newSP = newTemp(tmp, 32);
+  out.append(
+          {ignil::Opcode::ADD, newSP, {regESP_, ignil::Const{32, 32}}, addr});
   out.append({ignil::Opcode::COPY, regESP_, {newSP}, addr});
 }
 

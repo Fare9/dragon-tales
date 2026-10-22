@@ -146,6 +146,9 @@ class X86IGNILLifter {
   // PUSHAD: push EAX, ECX, EDX, EBX, the original ESP, EBP, ESI and EDI.
   void liftPusha(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                  std::uint32_t &tmp) const;
+  // POPAD: pop them back in reverse, skipping the saved ESP.
+  void liftPopa(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                std::uint32_t &tmp) const;
   void liftLea(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftCmp(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -568,7 +571,7 @@ class X86IGNILLifter {
   unsigned opPush64r_{}, opPop64r_{};
   unsigned opPush32r_{}, opPop32r_{};
   unsigned opPopf64_{}, opPopf32_{}, opPushf64_{}, opPushf32_{};
-  unsigned opPusha32_{};
+  unsigned opPusha32_{}, opPopa32_{};
   unsigned opCmp64rr_{}, opCmp32rr_{};
   unsigned opCmp64ri_{}, opCmp32ri_{}, opCmp64ri8_{}, opCmp32ri8_{};
   unsigned opCmp64rm_{}, opCmp32rm_{};
