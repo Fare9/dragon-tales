@@ -680,6 +680,32 @@ TEST_CASE("Semantic round-trip - i386 8-bit ALU and moves",
     sweep(form, dragon::Architecture::X86_32);
 }
 
+TEST_CASE("Semantic round-trip - i386 accumulator short forms",
+          "[semantic][x86_32][.][expensive]") {
+  const auto &in = arithmeticInputs32();
+  for (const Form &form: std::vector<Form>{
+               {"xor al, 0x44 (XOR8i8)", {0x34, 0x44}, kLogic, in},
+               {"sub al, 0xed (SUB8i8)", {0x2c, 0xed}, kAll, in},
+               {"and eax, 0xffffffdf (AND32i32)",
+                {0x25, 0xdf, 0xff, 0xff, 0xff},
+                kLogic,
+                in},
+               {"xor eax, 0x26 (XOR32i32)",
+                {0x35, 0x26, 0x00, 0x00, 0x00},
+                kLogic,
+                in},
+               {"sub eax, 0xbe (SUB32i32)",
+                {0x2d, 0xbe, 0x00, 0x00, 0x00},
+                kAll,
+                in},
+               {"add eax, 4 (ADD32i32)",
+                {0x05, 0x04, 0x00, 0x00, 0x00},
+                kAll,
+                in},
+       })
+    sweep(form, dragon::Architecture::X86_32);
+}
+
 // -----------------------------------------------------------------------
 // i386 baseline: instructions that already lift, to check the harness.
 // -----------------------------------------------------------------------
