@@ -975,3 +975,30 @@ TEST_CASE("Semantic round-trip - i386 push [esp+4] reads the old stack",
   REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x11111111);
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
+
+TEST_CASE("Semantic round-trip - i386 pop [esp+4] uses the new ESP",
+          "[semantic][x86_32]") {
+  // The old ESP would give ECX = C and EDX = A.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0xaa, 0xaa, 0xaa, 0xaa, // push 0xAAAAAAAA
+          0x68, 0xbb, 0xbb, 0xbb, 0xbb, // push 0xBBBBBBBB
+          0x68, 0xcc, 0xcc, 0xcc, 0xcc, // push 0xCCCCCCCC
+          0x8f, 0x44, 0x24, 0x04, // pop dword [esp+4]
+          0x59, // pop ecx
+          0x5a, // pop edx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0xbbbbbbbb);
+  REQUIRE(getReg64(actual.regs, x86off::RDX) == 0xcccccccc);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
