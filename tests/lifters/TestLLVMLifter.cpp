@@ -4,8 +4,11 @@
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 
+#include <llvm/IR/Verifier.h>
+
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 // -----------------------------------------------------------------------
@@ -77,4 +80,32 @@ TEST_CASE("LLVMLifter - lift() refuses a function with no blocks",
   REQUIRE(real != nullptr);
   REQUIRE(real->isValid());
   REQUIRE(llvml.lift(*real, g));
+}
+
+static std::optional<dragon::Function>
+disassembleI386(const std::vector<std::uint8_t> &bytes, dragon::Graph &g) {
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::LINEAR_SWEEP;
+  dragon::Disassembler dis(dragon::Architecture::X86_32, cfg);
+  dis.disassemble(bytes, 0x1000, g);
+  const auto funcs = g.functions();
+  if (const dragon::Function *fn = findFunction(funcs, 0x1000))
+    return *fn;
+  return std::nullopt;
+}
+
+TEST_CASE("LLVMLifter - i386 addresses are zero-extended", "[llvm][lifter]") {
+  // mov eax, [ebx]; ret
+  const std::vector<std::uint8_t> bytes = {0x8b, 0x03, 0xc3};
+  dragon::Graph g(dragon::Architecture::X86_32, dragon::Configuration{});
+  const auto fn = disassembleI386(bytes, g);
+  REQUIRE(fn);
+
+  dragon::llvmlifter::LLVMLifter llvml{dragon::Architecture::X86_32};
+  REQUIRE(llvml.lift(*fn, g));
+  REQUIRE_FALSE(llvm::verifyModule(llvml.module(), &llvm::errs()));
+  // A sign-extended index would put [0x80000000] 2 GB below the memory base.
+  const std::string ir = llvml.ir();
+  REQUIRE(ir.find("zext i32") != std::string::npos);
+  REQUIRE(ir.find("sext") == std::string::npos);
 }

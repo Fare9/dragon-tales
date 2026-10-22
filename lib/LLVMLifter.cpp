@@ -308,6 +308,12 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
                    ? v
                    : builder.CreateBitCast(v, builder.getDoubleTy());
   };
+  // A 32-bit address is unsigned, but a GEP sign-extends its index.
+  auto memAddress = [&](llvm::Value *addr) {
+    auto *indexTy = module_->getDataLayout().getIndexType(memPtr->getType());
+    return builder.CreateGEP(builder.getInt8Ty(), memPtr,
+                             builder.CreateZExtOrBitCast(addr, indexTy));
+  };
 
   switch (op.opcode) {
     // --- Data movement ---
@@ -315,16 +321,12 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       emit(r0());
       break;
 
-    case ignil::Opcode::LOAD: {
-      auto *ptr = builder.CreateGEP(builder.getInt8Ty(), memPtr, r0());
-      emit(builder.CreateLoad(dstTy(), ptr));
+    case ignil::Opcode::LOAD:
+      emit(builder.CreateLoad(dstTy(), memAddress(r0())));
       break;
-    }
-    case ignil::Opcode::STORE: {
-      auto *ptr = builder.CreateGEP(builder.getInt8Ty(), memPtr, r0());
-      builder.CreateStore(r1(), ptr);
+    case ignil::Opcode::STORE:
+      builder.CreateStore(r1(), memAddress(r0()));
       break;
-    }
 
     // --- Arithmetic ---
     case ignil::Opcode::ADD:
