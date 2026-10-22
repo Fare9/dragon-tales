@@ -429,6 +429,9 @@ class X86IGNILLifter {
   // registers (LLVM lists both as defs, the tied uses follow).
   void liftXchg(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                 std::uint32_t &tmp) const;
+  // XCHG [mem], r: swap a register with memory (no flags).
+  void liftXchgMem(const llvm::MCInst &mc, std::uint64_t addr,
+                   ignil::Block &out, std::uint32_t &tmp) const;
   // BSWAP r32/r64: reverse the byte order (no flags). Built from
   // shift/and/or since IGNIL has no byte-swap primitive.
   void liftBswap(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -695,6 +698,7 @@ class X86IGNILLifter {
   unsigned opTest8rr_{}, opTest16rr_{}, opTest8ri_{}, opTest16ri_{};
   unsigned opInc8r_{}, opInc16r_{}, opDec8r_{}, opDec16r_{};
   unsigned opXchg8rr_{}, opXchg16rr_{}, opXchg32rr_{}, opXchg64rr_{};
+  unsigned opXchg32rm_{};
   unsigned opBswap32r_{}, opBswap64r_{};
   unsigned opShld16rrCL_{}, opShld32rrCL_{}, opShld64rrCL_{}, opShrd16rrCL_{},
           opShrd32rrCL_{}, opShrd64rrCL_{};

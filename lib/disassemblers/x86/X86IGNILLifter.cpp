@@ -431,6 +431,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"XCHG8rr", &X86IGNILLifter::opXchg8rr_},
           {"XCHG16rr", &X86IGNILLifter::opXchg16rr_},
           {"XCHG32rr", &X86IGNILLifter::opXchg32rr_},
+          {"XCHG32rm", &X86IGNILLifter::opXchg32rm_},
           {"XCHG64rr", &X86IGNILLifter::opXchg64rr_},
           {"BSWAP32r", &X86IGNILLifter::opBswap32r_},
           {"BSWAP64r", &X86IGNILLifter::opBswap64r_},
@@ -995,6 +996,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opXchg8rr_ || opc == opXchg16rr_ || opc == opXchg32rr_ ||
            opc == opXchg64rr_)
     liftXchg(*mc, addr, out, tempId);
+  else if (opc == opXchg32rm_)
+    liftXchgMem(*mc, addr, out, tempId);
   else if (opc == opBswap32r_ || opc == opBswap64r_)
     liftBswap(*mc, addr, out, tempId);
   else if (opc == opShld16rrCL_ || opc == opShld32rrCL_ || opc == opShld64rrCL_)
@@ -4449,6 +4452,27 @@ void dragon::x86::X86IGNILLifter::liftXchg(const llvm::MCInst &mc,
   out.append({ignil::Opcode::COPY, tb, {*b}, addr});
   out.append({ignil::Opcode::COPY, *a, {ignil::Value{tb}}, addr});
   out.append({ignil::Opcode::COPY, *b, {ignil::Value{ta}}, addr});
+}
+
+void dragon::x86::X86IGNILLifter::liftXchgMem(const llvm::MCInst &mc,
+                                              std::uint64_t addr,
+                                              ignil::Block &out,
+                                              std::uint32_t &tmp) const {
+  // op[0]=reg(out), op[1]=reg(tied), op[2..6]=mem. Both are read before the
+  // register is written (`xchg [esi], esp`).
+  auto reg = toReg(mc.getOperand(0).getReg());
+  if (!reg) {
+    logger_.log("Error liftXchgMem in addr {:#x} no reg", addr);
+    return;
+  }
+
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+  auto addrTemp = emitAddress(mc, 2, ptrWidth, addr, out, tmp);
+  auto memValue = newTemp(tmp, reg->width);
+  out.append({ignil::Opcode::LOAD, memValue, {addrTemp}, addr});
+  out.append({ignil::Opcode::STORE, std::nullopt, {addrTemp, *reg}, addr});
+  out.append({ignil::Opcode::COPY, *reg, {memValue}, addr});
 }
 
 void dragon::x86::X86IGNILLifter::liftBswap(const llvm::MCInst &mc,
