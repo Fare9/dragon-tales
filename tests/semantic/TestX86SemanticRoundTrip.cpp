@@ -720,3 +720,26 @@ TEST_CASE("Semantic round-trip - i386 popad loads all but ESP",
   REQUIRE(getReg64(actual.regs, x86off::RDI) == 0x88888888);
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
+
+TEST_CASE("Semantic round-trip - i386 push ss moves ESP by 4",
+          "[semantic][x86_32]") {
+  // The UNDEF selector is overwritten before it is read.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x16, // push ss
+          0xc7, 0x04, 0x24, 0x78, 0x56, 0x34, 0x12, // mov [esp], 0x12345678
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x12345678);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}

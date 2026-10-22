@@ -1989,3 +1989,28 @@ TEST_CASE("IGNIL lifting - i386 popad (POPA32)", "[ignil][x86_32]") {
             return dst && dst->name == "ESP";
           }) == 1);
 }
+
+TEST_CASE("IGNIL lifting - i386 push ss (PUSHSS32)", "[ignil][x86_32]") {
+  // push ss; ret
+  const std::vector<std::uint8_t> bytes = {0x16, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::UNDEF));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  const auto &ops = ib->ops();
+  auto subIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::SUB;
+  });
+  REQUIRE(subIt != ops.end());
+  const auto *sp = std::get_if<dragon::ignil::Reg>(&subIt->srcs[0]);
+  REQUIRE(sp != nullptr);
+  REQUIRE(sp->name == "ESP");
+  const auto *size = std::get_if<dragon::ignil::Const>(&subIt->srcs[1]);
+  REQUIRE(size != nullptr);
+  REQUIRE(size->value == 4);
+}

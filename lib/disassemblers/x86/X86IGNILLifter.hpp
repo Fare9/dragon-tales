@@ -149,6 +149,9 @@ class X86IGNILLifter {
   // POPAD: pop them back in reverse, skipping the saved ESP.
   void liftPopa(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                 std::uint32_t &tmp) const;
+  // PUSH of a segment register (32-bit), e.g. `push ss`.
+  void liftPushSeg(const llvm::MCInst &mc, std::uint64_t addr,
+                   ignil::Block &out, std::uint32_t &tmp) const;
   void liftLea(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftCmp(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -572,6 +575,7 @@ class X86IGNILLifter {
   unsigned opPush32r_{}, opPop32r_{};
   unsigned opPopf64_{}, opPopf32_{}, opPushf64_{}, opPushf32_{};
   unsigned opPusha32_{}, opPopa32_{};
+  unsigned opPushSS32_{};
   unsigned opCmp64rr_{}, opCmp32rr_{};
   unsigned opCmp64ri_{}, opCmp32ri_{}, opCmp64ri8_{}, opCmp32ri8_{};
   unsigned opCmp64rm_{}, opCmp32rm_{};
