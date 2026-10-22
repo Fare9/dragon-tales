@@ -113,6 +113,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"ADD32ri8", &X86IGNILLifter::opAdd32ri8_},
           {"ADD64mr", &X86IGNILLifter::opAdd64mr_},
           {"ADD32mr", &X86IGNILLifter::opAdd32mr_},
+          {"ADD8mr", &X86IGNILLifter::opAdd8mr_},
           {"ADD64mi32", &X86IGNILLifter::opAdd64mi_},
           {"ADD64mi8", &X86IGNILLifter::opAdd64mi8_},
           {"ADD32mi", &X86IGNILLifter::opAdd32mi_},
@@ -849,8 +850,9 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opAdd64rr_ || opc == opAdd32rr_ || opc == opAdd64ri_ ||
            opc == opAdd32ri_ || opc == opAdd64ri8_ || opc == opAdd32ri8_)
     liftAdd(*mc, addr, out, tempId);
-  else if (opc == opAdd64mr_ || opc == opAdd32mr_ || opc == opAdd64mi_ ||
-           opc == opAdd32mi_ || opc == opAdd64mi8_ || opc == opAdd32mi8_)
+  else if (opc == opAdd64mr_ || opc == opAdd32mr_ || opc == opAdd8mr_ ||
+           opc == opAdd64mi_ || opc == opAdd32mi_ || opc == opAdd64mi8_ ||
+           opc == opAdd32mi8_)
     liftAddMem(*mc, addr, out, tempId);
   else if (opc == opAdd64rm_ || opc == opAdd32rm_)
     liftAddRegMem(*mc, addr, out, tempId);
@@ -1243,13 +1245,12 @@ void dragon::x86::X86IGNILLifter::liftAddMem(const llvm::MCInst &mc,
   const ignil::Width ptrWidth =
           (architecture_ == Architecture::X86_64) ? 64 : 32;
   const unsigned opc = mc.getOpcode();
-  const ignil::Width opWidth =
-          (opc == opAdd64mr_ || opc == opAdd64mi_ || opc == opAdd64mi8_) ? 64
-                                                                          : 32;
 
   ignil::Value addend;
+  ignil::Width opWidth;
   const auto &srcOp = mc.getOperand(5);
   if (srcOp.isImm()) {
+    opWidth = (opc == opAdd64mi_ || opc == opAdd64mi8_) ? 64 : 32;
     addend = ignil::Const{static_cast<std::uint64_t>(srcOp.getImm()),
                           opWidth};
   } else {
@@ -1258,6 +1259,8 @@ void dragon::x86::X86IGNILLifter::liftAddMem(const llvm::MCInst &mc,
       logger_.log("Error liftAddMem in addr {:#x} no src", addr);
       return;
     }
+    // The register is as wide as the memory operand (AL for ADD8mr).
+    opWidth = srcReg->width;
     addend = *srcReg;
   }
 

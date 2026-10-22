@@ -788,3 +788,28 @@ TEST_CASE("Semantic round-trip - i386 cld clears DF", "[semantic][x86_32]") {
   REQUIRE(actual.regs[x86off::DF] == 0);
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
+
+TEST_CASE("Semantic round-trip - i386 add byte [mem], reg",
+          "[semantic][x86_32]") {
+  // A 32-bit add would give 0x11223434 with CF clear.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x44, 0x33, 0x22, 0x11, // push 0x11223344
+          0xb0, 0xf0, // mov al, 0xF0
+          0x00, 0x04, 0x24, // add byte [esp], al
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x11223334);
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}

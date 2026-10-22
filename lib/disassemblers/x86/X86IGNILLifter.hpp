@@ -559,7 +559,7 @@ class X86IGNILLifter {
   unsigned opLea64r_{}, opLea32r_{};
   unsigned opAdd64rr_{}, opAdd32rr_{};
   unsigned opAdd64ri_{}, opAdd32ri_{}, opAdd64ri8_{}, opAdd32ri8_{};
-  unsigned opAdd64mr_{}, opAdd32mr_{};
+  unsigned opAdd64mr_{}, opAdd32mr_{}, opAdd8mr_{};
   unsigned opAdd64mi_{}, opAdd32mi_{}, opAdd64mi8_{}, opAdd32mi8_{};
   unsigned opAdd64rm_{}, opAdd32rm_{};
   unsigned opSub64rr_{}, opSub32rr_{};
