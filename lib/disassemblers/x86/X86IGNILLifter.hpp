@@ -698,7 +698,7 @@ class X86IGNILLifter {
   unsigned opTest8rr_{}, opTest16rr_{}, opTest8ri_{}, opTest16ri_{};
   unsigned opInc8r_{}, opInc16r_{}, opDec8r_{}, opDec16r_{};
   unsigned opXchg8rr_{}, opXchg16rr_{}, opXchg32rr_{}, opXchg64rr_{};
-  unsigned opXchg32rm_{};
+  unsigned opXchg32rm_{}, opXchg8rm_{};
   unsigned opBswap32r_{}, opBswap64r_{};
   unsigned opShld16rrCL_{}, opShld32rrCL_{}, opShld64rrCL_{}, opShrd16rrCL_{},
           opShrd32rrCL_{}, opShrd64rrCL_{};

@@ -2257,3 +2257,23 @@ TEST_CASE("IGNIL lifting - i386 xchg [mem], reg (XCHG32rm)",
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
 }
+
+TEST_CASE("IGNIL lifting - i386 xchg byte [mem], reg (XCHG8rm)",
+          "[ignil][x86_32]") {
+  // xchg byte [edx], al; ret
+  const std::vector<std::uint8_t> bytes = {0x86, 0x02, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  const auto &ops = ib->ops();
+  auto loadIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::LOAD;
+  });
+  REQUIRE(loadIt != ops.end());
+  REQUIRE(dragon::ignil::widthOf(*loadIt->dst) == 8);
+}

@@ -432,6 +432,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"XCHG16rr", &X86IGNILLifter::opXchg16rr_},
           {"XCHG32rr", &X86IGNILLifter::opXchg32rr_},
           {"XCHG32rm", &X86IGNILLifter::opXchg32rm_},
+          {"XCHG8rm", &X86IGNILLifter::opXchg8rm_},
           {"XCHG64rr", &X86IGNILLifter::opXchg64rr_},
           {"BSWAP32r", &X86IGNILLifter::opBswap32r_},
           {"BSWAP64r", &X86IGNILLifter::opBswap64r_},
@@ -996,7 +997,7 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opXchg8rr_ || opc == opXchg16rr_ || opc == opXchg32rr_ ||
            opc == opXchg64rr_)
     liftXchg(*mc, addr, out, tempId);
-  else if (opc == opXchg32rm_)
+  else if (opc == opXchg32rm_ || opc == opXchg8rm_)
     liftXchgMem(*mc, addr, out, tempId);
   else if (opc == opBswap32r_ || opc == opBswap64r_)
     liftBswap(*mc, addr, out, tempId);
