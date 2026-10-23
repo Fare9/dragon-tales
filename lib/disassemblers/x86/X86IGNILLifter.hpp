@@ -182,6 +182,10 @@ class X86IGNILLifter {
                   ignil::Block &out, std::uint32_t &tmp) const;
   void liftTest(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                 std::uint32_t &tmp) const;
+  // The target of a branch `offset` bytes past the end of the instruction at
+  // `addr`, wrapped to 32 bits outside 64-bit mode.
+  std::uint64_t pcRelTarget(std::uint64_t addr, std::uint8_t insnSize,
+                            std::int64_t offset) const;
   void liftJcc(const llvm::MCInst &mc, std::uint64_t addr,
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;

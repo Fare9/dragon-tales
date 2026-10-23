@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <iostream>
 #include <set>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -2070,6 +2071,38 @@ TEST_CASE("IGNIL lifting - i386 inc/dec reg short forms (INC32r_alt, "
     REQUIRE(ib != nullptr);
     REQUIRE(ib->unlifted().empty());
     REQUIRE(hasOpcode(*ib, opcode));
+  }
+}
+
+TEST_CASE("IGNIL lifting - i386 branch targets wrap at 4 GB",
+          "[ignil][x86_32]") {
+  // call -0x2000 at 0x1000 lands at 0xfffff005, not 0xfffffffffffff005.
+  const std::vector<std::uint8_t> callBytes = {0xe8, 0x00, 0xe0, 0xff, 0xff,
+                                               0xc3};
+  // je -0x2000 at 0x1000 (JCC_4).
+  const std::vector<std::uint8_t> jccBytes = {0x0f, 0x84, 0x00, 0xe0,
+                                              0xff, 0xff, 0xc3};
+  for (const auto &[bytes, opcode, target]:
+       std::vector<std::tuple<std::vector<std::uint8_t>, dragon::ignil::Opcode,
+                              std::uint64_t>>{
+               {callBytes, dragon::ignil::Opcode::CALL, 0xfffff005},
+               {jccBytes, dragon::ignil::Opcode::CJMP, 0xfffff006},
+       }) {
+    auto dis = makeDisassembler(dragon::Architecture::X86_32);
+    auto g = makeGraph(dragon::Architecture::X86_32);
+    dis.disassemble(bytes, 0x1000, g);
+
+    const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+    REQUIRE(ib != nullptr);
+    const auto &ops = ib->ops();
+    const auto it = std::find_if(ops.begin(), ops.end(), [&](const auto &op) {
+      return op.opcode == opcode;
+    });
+    REQUIRE(it != ops.end());
+    const auto &dst = it->srcs[opcode == dragon::ignil::Opcode::CALL ? 0 : 1];
+    const auto *c = std::get_if<dragon::ignil::Const>(&dst);
+    REQUIRE(c != nullptr);
+    REQUIRE(c->value == target);
   }
 }
 

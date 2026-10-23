@@ -2097,6 +2097,15 @@ void dragon::x86::X86IGNILLifter::liftTest(const llvm::MCInst &mc,
                          {X86Flag::OF, ofAlwaysZero(addr)},
                  });
 }
+std::uint64_t dragon::x86::X86IGNILLifter::pcRelTarget(
+        std::uint64_t addr, std::uint8_t insnSize, std::int64_t offset) const {
+  const auto target = static_cast<std::uint64_t>(
+          static_cast<std::int64_t>(addr) + insnSize + offset);
+  // EIP wraps at 4 GB.
+  return (architecture_ == Architecture::X86_64) ? target
+                                                 : (target & 0xffffffffULL);
+}
+
 void dragon::x86::X86IGNILLifter::liftJcc(const llvm::MCInst &mc,
                                           std::uint64_t addr,
                                           std::uint8_t insnSize,
@@ -2105,10 +2114,9 @@ void dragon::x86::X86IGNILLifter::liftJcc(const llvm::MCInst &mc,
   // LLVM 15+ unifies all Jcc into JCC_1/JCC_4 with layout:
   //   op[0] = signed PC-relative offset (imm)
   //   op[1] = condition code (imm, LLVM x86 CondCode enum 0-15)
-  const std::int64_t offset = mc.getOperand(0).getImm();
-  const auto taken = static_cast<std::uint64_t>(
-          static_cast<std::int64_t>(addr) + insnSize + offset);
-  const std::uint64_t fallthrough = addr + insnSize;
+  const std::uint64_t taken =
+          pcRelTarget(addr, insnSize, mc.getOperand(0).getImm());
+  const std::uint64_t fallthrough = pcRelTarget(addr, insnSize, 0);
 
   unsigned condCode = (mc.getNumOperands() >= 2 && mc.getOperand(1).isImm())
                               ? static_cast<unsigned>(mc.getOperand(1).getImm())
@@ -2127,10 +2135,9 @@ void dragon::x86::X86IGNILLifter::liftLoop(const llvm::MCInst &mc,
                                            ignil::Block &out,
                                            std::uint32_t &tmp) const {
   // op[0] = signed PC-relative offset. No flags are touched.
-  const std::int64_t offset = mc.getOperand(0).getImm();
-  const auto taken = static_cast<std::uint64_t>(
-          static_cast<std::int64_t>(addr) + insnSize + offset);
-  const std::uint64_t fallthrough = addr + insnSize;
+  const std::uint64_t taken =
+          pcRelTarget(addr, insnSize, mc.getOperand(0).getImm());
+  const std::uint64_t fallthrough = pcRelTarget(addr, insnSize, 0);
   const ignil::Reg counter =
           (architecture_ == Architecture::X86_64) ? regRCX_ : regECX_;
 
@@ -2157,8 +2164,7 @@ void dragon::x86::X86IGNILLifter::liftJmp(const llvm::MCInst &mc,
                                           ignil::Block &out,
                                           std::uint32_t &tmp) const {
   if (const auto &op = mc.getOperand(0); op.isImm()) {
-    const auto target = static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(addr) + insnSize + op.getImm());
+    const std::uint64_t target = pcRelTarget(addr, insnSize, op.getImm());
     out.append({ignil::Opcode::JMP,
                 std::nullopt,
                 {ignil::Const{target, 64}},
@@ -2207,8 +2213,7 @@ void dragon::x86::X86IGNILLifter::liftCall(const llvm::MCInst &mc,
                                            std::uint32_t &tmp) const {
   if (const auto &op = mc.getOperand(0); op.isImm()) {
     // Direct call: pc-relative offset from end of instruction
-    const auto target = static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(addr) + insnSize + op.getImm());
+    const std::uint64_t target = pcRelTarget(addr, insnSize, op.getImm());
     out.append({ignil::Opcode::CALL,
                 std::nullopt,
                 {ignil::Const{target, 64}},
