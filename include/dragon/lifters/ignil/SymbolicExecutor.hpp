@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 /// Symbolic execution of IGNIL over Z3 bitvectors.
@@ -494,6 +495,29 @@ class SymbolicExecutor {
   /// from a trace.
   void assume(const z3::expr &c);
 
+  /// Make an OPAQUE op return concrete results instead of a symbol / an
+  /// uninterpreted function, so a concolic trace stays fully concrete through
+  /// an anti-tamper CPUID (whose symbolic result otherwise flows into a VM's
+  /// dispatch key and strands execution on the solver). An op is concretised
+  /// only when its kind and its operands match a registration; everything else
+  /// keeps the default symbolic behaviour, so a deliberately-symbolic RDTSC is
+  /// untouched unless it is registered too.
+  ///
+  /// `selector` identifies which invocation to concretise from its operands.
+  /// For CPUID (operands leaf, subleaf) it is packed leaf/subleaf, which
+  /// packConcreteOpaqueSelector() builds; for RDTSC / RDTSCP (no operands) it
+  /// is 0. `results` are the per-result-index values in the kind's own order
+  /// (CPUID: EAX, EBX, ECX, EDX; RDTSC: EAX-low, EDX-high); indices past the
+  /// end keep the default behaviour.
+  void setConcreteOpaque(OpaqueKind kind, std::uint64_t selector,
+                         std::vector<std::uint64_t> results);
+
+  /// Pack a CPUID leaf and subleaf into a setConcreteOpaque() selector.
+  [[nodiscard]] static constexpr std::uint64_t
+  packConcreteOpaqueSelector(std::uint64_t leaf, std::uint64_t subleaf) {
+    return (leaf << 32) | (subleaf & 0xffffffffULL);
+  }
+
   /// Suffix for the symbols run() invents for unresolved loads. They are named
   /// after the op's address and its position in the run, so running the same
   /// block twice hands out the same names - and the two loads, which may well
@@ -602,6 +626,11 @@ class SymbolicExecutor {
   std::size_t assertedConstraints_ = 0;
 
   std::string freshTag_;
+
+  // Concrete overrides for OPAQUE ops, keyed by (kind, operand selector).
+  // Empty in the common case, so opaqueValue() pays nothing for it.
+  std::map<std::pair<OpaqueKind, std::uint64_t>, std::vector<std::uint64_t>>
+      concreteOpaque_;
 };
 
 } // namespace dragon::ignil

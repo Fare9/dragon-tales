@@ -2050,6 +2050,27 @@ class SymbolicExecutor:
         context to keep them apart; '' restores the untagged names."""
         lib.dragon_symexec_set_fresh_tag(self._handle(), (tag or '').encode())
 
+    # OPAQUE kinds, matching dragon::ignil::OpaqueKind.
+    OPAQUE_CPUID = 0
+    OPAQUE_RDTSC = 1
+    OPAQUE_RDTSCP = 2
+
+    def set_concrete_opaque(self, kind, selector, results):
+        """Make an OPAQUE op return concrete `results` (a list of ints) instead
+        of a symbol, so a concolic trace stays concrete through an anti-tamper
+        CPUID. `kind` is one of OPAQUE_*; `selector` identifies the invocation
+        from its operands (for CPUID use set_concrete_cpuid)."""
+        buf = ffi.new('uint64_t[]', [int(v) & 0xFFFFFFFFFFFFFFFF for v in results])
+        lib.dragon_symexec_set_concrete_opaque(self._handle(), int(kind),
+                                               int(selector) & 0xFFFFFFFFFFFFFFFF,
+                                               buf, len(results))
+
+    def set_concrete_cpuid(self, leaf, sub, eax, ebx, ecx, edx):
+        """Make CPUID(leaf, sub) return the given EAX/EBX/ECX/EDX as literals,
+        so the VM's anti-tamper CPUID never turns the dispatch key symbolic."""
+        selector = ((int(leaf) & 0xFFFFFFFF) << 32) | (int(sub) & 0xFFFFFFFF)
+        self.set_concrete_opaque(self.OPAQUE_CPUID, selector, [eax, ebx, ecx, edx])
+
     def concrete_register(self, reg):
         """The register's value if it is a literal, else None. The cheap form
         of evaluate(read_register(reg)) for a register expected to be

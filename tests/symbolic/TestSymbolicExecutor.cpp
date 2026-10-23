@@ -802,6 +802,40 @@ TEST_CASE("SymbolicExecutor - OPAQUE rejects a result index the kind has not got
   REQUIRE(exec.run(block).status == ExecStatus::MalformedOp);
 }
 
+TEST_CASE("SymbolicExecutor - a registered concrete OPAQUE returns literals",
+          "[ignil][symbolic][opaque]") {
+  // setConcreteOpaque makes a CPUID with a matching leaf/subleaf return fixed
+  // literals, so a concolic trace never goes symbolic on an anti-tamper CPUID.
+  // The four results land in EAX/EBX/ECX/EDX by result index.
+  Block block{kAddr};
+  const std::uint64_t leaf = 1, sub = 0;
+  for (unsigned i = 0; i < 4; ++i)
+    block.append({Opcode::OPAQUE,
+                  Value{i == 0 ? x86::EAX : i == 1 ? x86::EBX
+                               : i == 2 ? x86::ECX : x86::EDX},
+                  {Value{Const{leaf, 32}}, Value{Const{sub, 32}}}, kAddr + 2 * i,
+                  makeOpaqueAux(OpaqueKind::CPUID, i)});
+  // A second, unregistered leaf must stay symbolic (falls through).
+  block.append({Opcode::OPAQUE, Value{x86::ESI}, {Value{Const{7, 32}}, Value{Const{0, 32}}},
+                kAddr + 8, makeOpaqueAux(OpaqueKind::CPUID, 0)});
+
+  SymbolicExecutor exec;
+  exec.setConcreteOpaque(
+      OpaqueKind::CPUID,
+      SymbolicExecutor::packConcreteOpaqueSelector(leaf, sub),
+      {0x000906E9, 0x00100800, 0x7FFAFBFF, 0xBFEBFBFF});
+  REQUIRE(exec.run(block).ok());
+
+  // Each registered lane is a forced literal - evaluate() returns exactly one
+  // value, which is the "did the obfuscation compute a constant?" query.
+  REQUIRE(exec.evaluate(exec.readRegister(x86::EAX)) == 0x000906E9u);
+  REQUIRE(exec.evaluate(exec.readRegister(x86::EBX)) == 0x00100800u);
+  REQUIRE(exec.evaluate(exec.readRegister(x86::ECX)) == 0x7FFAFBFFu);
+  REQUIRE(exec.evaluate(exec.readRegister(x86::EDX)) == 0xBFEBFBFFu);
+  // The unregistered leaf has no single forced value.
+  REQUIRE_FALSE(exec.evaluate(exec.readRegister(x86::ESI)).has_value());
+}
+
 TEST_CASE("SymbolicExecutor - a restored snapshot is equivalent to a fresh "
           "executor, not merely similar",
           "[ignil][symbolic][diff]") {
