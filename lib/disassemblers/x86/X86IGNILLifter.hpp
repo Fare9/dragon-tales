@@ -190,9 +190,12 @@ class X86IGNILLifter {
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;
   // LOOP: ECX (RCX in 64-bit mode) -= 1, then CJMP while it is non-zero.
+  // With an address-size prefix the counter is CX (ECX in 64-bit mode).
   void liftLoop(const llvm::MCInst &mc, std::uint64_t addr,
-                std::uint8_t insnSize, ignil::Block &out,
-                std::uint32_t &tmp) const;
+                std::uint8_t insnSize, bool addressSizePrefix,
+                ignil::Block &out, std::uint32_t &tmp) const;
+  // Whether `insn` carries a 0x67 among its legacy prefixes.
+  static bool hasAddressSizePrefix(const Instruction &insn);
   void liftJmp(const llvm::MCInst &mc, std::uint64_t addr,
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;
@@ -782,8 +785,8 @@ class X86IGNILLifter {
   ignil::Reg regEBX_{}, regECX_{};
   // PUSHAD/POPAD also save and restore ESI and EDI.
   ignil::Reg regESI_{}, regEDI_{};
-  // LOOP's counter in 64-bit mode.
-  ignil::Reg regRCX_{};
+  // LOOP's counter in 64-bit mode, and with an address-size prefix.
+  ignil::Reg regRCX_{}, regCX_{};
 };
 
 } // namespace x86

@@ -82,6 +82,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   regEDX_ = findGprReg("EDX");
   regEBX_ = findGprReg("EBX");
   regECX_ = findGprReg("ECX");
+  regCX_ = findGprReg("CX");
   regESI_ = findGprReg("ESI");
   regEDI_ = findGprReg("EDI");
   regRCX_ = findGprReg("RCX");
@@ -953,7 +954,7 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
            opc == opCall32r_)
     liftCall(*mc, addr, insn.size(), out, tempId);
   else if (opc == opLoop_)
-    liftLoop(*mc, addr, insn.size(), out, tempId);
+    liftLoop(*mc, addr, insn.size(), hasAddressSizePrefix(insn), out, tempId);
   else if (opc == opRet64_ || opc == opRet32_ || opc == opRetI64_ ||
            opc == opRetI32_)
     liftRet(*mc, addr, out, tempId);
@@ -2129,17 +2130,36 @@ void dragon::x86::X86IGNILLifter::liftJcc(const llvm::MCInst &mc,
               addr});
 }
 
+bool dragon::x86::X86IGNILLifter::hasAddressSizePrefix(
+        const Instruction &insn) {
+  for (const std::uint8_t b: insn.bytes()) {
+    switch (b) {
+      case 0x67:
+        return true;
+      case 0x26: case 0x2e: case 0x36: case 0x3e: case 0x64: case 0x65:
+      case 0x66: case 0xf0: case 0xf2: case 0xf3:
+        continue; // another legacy prefix
+      default:
+        return false;
+    }
+  }
+  return false;
+}
+
 void dragon::x86::X86IGNILLifter::liftLoop(const llvm::MCInst &mc,
                                            std::uint64_t addr,
                                            std::uint8_t insnSize,
+                                           bool addressSizePrefix,
                                            ignil::Block &out,
                                            std::uint32_t &tmp) const {
   // op[0] = signed PC-relative offset. No flags are touched.
   const std::uint64_t taken =
           pcRelTarget(addr, insnSize, mc.getOperand(0).getImm());
   const std::uint64_t fallthrough = pcRelTarget(addr, insnSize, 0);
-  const ignil::Reg counter =
-          (architecture_ == Architecture::X86_64) ? regRCX_ : regECX_;
+  // The counter is as wide as the address size: 0x67 halves it.
+  const bool is64 = architecture_ == Architecture::X86_64;
+  const ignil::Reg counter = is64 ? (addressSizePrefix ? regECX_ : regRCX_)
+                                  : (addressSizePrefix ? regCX_ : regECX_);
 
   auto next = newTemp(tmp, counter.width);
   out.append({ignil::Opcode::SUB,
