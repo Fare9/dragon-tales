@@ -970,6 +970,37 @@ TEST_CASE("Semantic round-trip - i386 dec reg short form overflows",
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
 
+TEST_CASE("Semantic round-trip - a sub-register read sees the parent's write",
+          "[semantic][x86_64]") {
+  // Each width has its own slot in LLVMLifter: writing ECX has to refresh
+  // CX and CL, and writing RDX has to refresh EDX.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push rbp
+          0x48, 0x89, 0xe5, // mov rbp, rsp
+          0x66, 0x41, 0x89, 0xc8, // mov r8w, cx (reads CX before the write)
+          0xb9, 0x34, 0x12, 0x00, 0x00, // mov ecx, 0x1234
+          0x88, 0xc8, // mov al, cl
+          0x66, 0x89, 0xcb, // mov bx, cx
+          0x48, 0xba, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22,
+          0x11, // mov rdx, 0x1122334455667788
+          0x89, 0xd6, // mov esi, edx
+          0x5d, // pop rbp
+          0xc3, // ret
+  };
+  auto initialRegs = defaultInitialRegs();
+  setReg64(initialRegs, x86off::RCX, 0xaaaaaaaabbbbccccULL);
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem);
+  auto actual = runLifted(code, initialRegs, initialMem);
+
+  REQUIRE((getReg64(actual.regs, x86off::RAX) & 0xff) == 0x34);
+  REQUIRE((getReg64(actual.regs, x86off::RBX) & 0xffff) == 0x1234);
+  REQUIRE((getReg64(actual.regs, x86off::R8) & 0xffff) == 0xcccc);
+  REQUIRE(getReg64(actual.regs, x86off::RSI) == 0x55667788);
+  requireStatesMatch(expected, actual, initialRegs);
+}
+
 TEST_CASE("Semantic round-trip - i386 cld clears DF", "[semantic][x86_32]") {
   // popfd sets DF only.
   const std::vector<std::uint8_t> code = {

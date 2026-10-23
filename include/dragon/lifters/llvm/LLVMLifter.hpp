@@ -130,7 +130,8 @@ class LLVMLifter {
                        const TempMap &temps, llvm::IRBuilder<> &builder) const;
 
   // After writing `value` (of `width` bits) to `offset`, propagate
-  // into every wider alloca that exists at the same offset.
+  // into every other alloca that exists at the same offset: merged into
+  // the wider ones, truncated into the narrower ones.
   void mergeIntoParent(std::uint32_t offset, ignil::Width width,
                        llvm::Value *value, RegFile &regs,
                        llvm::IRBuilder<> &builder);

@@ -608,8 +608,17 @@ void dragon::llvmlifter::LLVMLifter::mergeIntoParent(
     return;
 
   for (auto &[bigWidth, slot]: it->second) {
-    if (bigWidth <= width)
+    if (bigWidth == width)
       continue;
+
+    // A narrower slot is the low bits of the new value (`mov ecx, 0xffff`
+    // then `inc cx` must read CX = 0xffff, not the stale CX slot).
+    if (bigWidth < width) {
+      builder.CreateStore(
+              builder.CreateTrunc(value, llvm::IntegerType::get(*ctx_, bigWidth)),
+              slot);
+      continue;
+    }
 
     auto *bigTy = llvm::IntegerType::get(*ctx_, bigWidth);
 
