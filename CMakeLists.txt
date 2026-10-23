@@ -69,10 +69,16 @@ if(DRAGON_USE_Z3)
         if(WIN32)
             get_filename_component(_z3_lib_dir "${Z3_LIBRARIES}" DIRECTORY)
             get_filename_component(_z3_lib_name "${Z3_LIBRARIES}" NAME_WE)
+            # Z3_DLL is cached: look again once Z3_LIBRARIES points elsewhere,
+            # or a new import library would be paired with the old DLL.
+            if(NOT "${Z3_LIBRARIES}" STREQUAL "${_DRAGON_Z3_DLL_FOR}")
+                unset(Z3_DLL CACHE)
+            endif()
             find_file(Z3_DLL "${_z3_lib_name}.dll"
                 PATHS "${_z3_lib_dir}/../bin" "${_z3_lib_dir}"
                 NO_DEFAULT_PATH
             )
+            set(_DRAGON_Z3_DLL_FOR "${Z3_LIBRARIES}" CACHE INTERNAL "")
         endif()
         if(Z3_DLL)
             add_library(z3::libz3 SHARED IMPORTED)
