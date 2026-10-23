@@ -22,7 +22,7 @@ target_compile_features(libdragon PUBLIC cxx_std_20)
 target_include_directories(libdragon
         PUBLIC
         $<INSTALL_INTERFACE:include>
-        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
         ${LLVM_INCLUDE_DIRS}
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}

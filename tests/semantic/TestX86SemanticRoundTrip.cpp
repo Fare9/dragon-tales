@@ -8,13 +8,15 @@ using namespace dragon::test;
 
 // Compares real (Unicorn) vs lifted (JIT) final state, ignoring the flags
 // X86IGNILLifter doesn't model (see maskUnmodeledFlags in the fixture).
-static void requireStatesMatch(RoundTripResult expected, RoundTripResult actual,
-                               const RegBuf &initialRegs) {
+static void
+requireStatesMatch(RoundTripResult expected, RoundTripResult actual,
+                   const RegBuf &initialRegs,
+                   dragon::Architecture arch = dragon::Architecture::X86_64) {
   maskUnmodeledFlags(expected.regs);
   maskUnmodeledFlags(actual.regs);
   REQUIRE(expected.regs == actual.regs);
-  maskSentinelSlot(expected.mem, initialRegs);
-  maskSentinelSlot(actual.mem, initialRegs);
+  maskSentinelSlot(expected.mem, initialRegs, arch);
+  maskSentinelSlot(actual.mem, initialRegs, arch);
   if (expected.mem != actual.mem) {
     for (std::size_t i = 0; i < expected.mem.size(); ++i) {
       if (expected.mem[i] != actual.mem[i])
@@ -377,6 +379,22 @@ const std::vector<Inputs> &arithmeticInputs() {
   return v;
 }
 
+// The same edge cases, as 32-bit values.
+const std::vector<Inputs> &arithmeticInputs32() {
+  static const std::vector<Inputs> v = [] {
+    const std::uint64_t edge[] = {0,          1,          0x7f,
+                                  0x80,       0xff,       0x7fffffff,
+                                  0x80000000, 0xffffffff, 0x12345678};
+    std::vector<Inputs> out;
+    for (std::uint64_t a: edge)
+      for (std::uint64_t b: edge)
+        for (bool c: {false, true})
+          out.push_back({a, b, /*rcx=*/b & 31, /*rdx=*/0x5555aaaa, c});
+    return out;
+  }();
+  return v;
+}
+
 // Dividends that cannot raise #DE for a divisor in BX/EBX: the high half
 // (DX/EDX) stays well below the divisor.
 const std::vector<Inputs> &divisionInputs() {
@@ -392,9 +410,12 @@ const std::vector<Inputs> &divisionInputs() {
   return v;
 }
 
-void sweep(const Form &form) {
+void sweep(const Form &form,
+           dragon::Architecture arch = dragon::Architecture::X86_64) {
   // push rbp ; mov rbp, rsp ; <instruction> ; pop rbp ; ret
   std::vector<std::uint8_t> code = {0x55, 0x48, 0x89, 0xe5};
+  if (arch == dragon::Architecture::X86_32)
+    code = {0x55, 0x89, 0xe5}; // no REX.W on the mov
   code.insert(code.end(), form.bytes.begin(), form.bytes.end());
   code.push_back(0x5d);
   code.push_back(0xc3);
@@ -414,8 +435,8 @@ void sweep(const Form &form) {
     regs[x86off::CF] = in.carry ? 1 : 0;
     std::vector<std::uint8_t> mem;
 
-    const auto expected = runUnicorn(code, regs, mem);
-    const auto actual = runLifted(code, regs, mem);
+    const auto expected = runUnicorn(code, regs, mem, arch);
+    const auto actual = runLifted(code, regs, mem, kCodeBase, arch);
 
     INFO(form.name << "  rax=0x" << std::hex << in.rax << " rbx=0x" << in.rbx
                    << " rcx=0x" << in.rcx << " rdx=0x" << in.rdx << " cf=" << in.carry);
@@ -581,4 +602,865 @@ TEST_CASE("Semantic round-trip - shifts/rotates by CL: OF modelled, not UNDEF",
   };
   for (const Form &f: undefinedOF)
     sweep(f);
+}
+
+// i386 sweeps of forms first written for x64.
+TEST_CASE("Semantic round-trip - i386 32-bit ALU and moves",
+          "[semantic][x86_32][.][expensive]") {
+  const auto &in = arithmeticInputs32();
+  for (const Form &form: std::vector<Form>{
+               {"add eax, ebx", {0x01, 0xd8}, kAll, in},
+               {"add ebx, 0x12345678 (ADD32ri)",
+                {0x81, 0xc3, 0x78, 0x56, 0x34, 0x12},
+                kAll,
+                in},
+               {"sub eax, ebx", {0x29, 0xd8}, kAll, in},
+               {"sub ebx, 0x80000000 (SUB32ri)",
+                {0x81, 0xeb, 0x00, 0x00, 0x00, 0x80},
+                kAll,
+                in},
+               {"adc eax, ebx", {0x11, 0xd8}, kAll, in},
+               {"neg eax", {0xf7, 0xd8}, kAll, in},
+               {"xor eax, ebx", {0x31, 0xd8}, kLogic, in},
+               {"xor ebx, 0x38 (XOR32ri)",
+                {0x81, 0xf3, 0x38, 0x00, 0x00, 0x00},
+                kLogic,
+                in},
+               {"and ebx, 0xff (AND32ri)",
+                {0x81, 0xe3, 0xff, 0x00, 0x00, 0x00},
+                kLogic,
+                in},
+               {"mov eax, ebx", {0x89, 0xd8}, kNone, in},
+               {"mov eax, 0xfffffffc",
+                {0xb8, 0xfc, 0xff, 0xff, 0xff},
+                kNone,
+                in},
+               {"lea eax, [ebx+4*edx]", {0x8d, 0x04, 0x93}, kNone, in},
+               {"movzx edx, al", {0x0f, 0xb6, 0xd0}, kNone, in},
+       })
+    sweep(form, dragon::Architecture::X86_32);
+}
+
+TEST_CASE("Semantic round-trip - i386 shifts and rotates",
+          "[semantic][x86_32][.][expensive]") {
+  // CL = b & 31: counts 0, 1, 24 and 31. OF only for the by-1 forms.
+  const auto &in = arithmeticInputs32();
+  const unsigned shf = kCF | kPF | kZF | kSF;
+  for (const Form &form: std::vector<Form>{
+               {"shl eax, 16", {0xc1, 0xe0, 0x10}, shf, in},
+               {"shr ebx, 3", {0xc1, 0xeb, 0x03}, shf, in},
+               {"shl bl, 3", {0xc0, 0xe3, 0x03}, shf, in},
+               {"shr al, 3", {0xc0, 0xe8, 0x03}, shf, in},
+               {"shl ebx", {0xd1, 0xe3}, shf | kOF, in},
+               {"shr eax", {0xd1, 0xe8}, shf | kOF, in},
+               {"shl bl", {0xd0, 0xe3}, shf | kOF, in},
+               {"shr al", {0xd0, 0xe8}, shf | kOF, in},
+               {"shl eax, cl", {0xd3, 0xe0}, shf, in},
+               {"shr ebx, cl", {0xd3, 0xeb}, shf, in},
+               {"rol eax, 16", {0xc1, 0xc0, 0x10}, kCF, in},
+               {"ror ebx, 5", {0xc1, 0xcb, 0x05}, kCF, in},
+               {"ror eax, cl", {0xd3, 0xc8}, kCF, in},
+               {"ror al, cl", {0xd2, 0xc8}, kCF, in},
+               {"rol bl, cl", {0xd2, 0xc3}, kCF, in},
+       })
+    sweep(form, dragon::Architecture::X86_32);
+}
+
+TEST_CASE("Semantic round-trip - i386 8-bit ALU and moves",
+          "[semantic][x86_32][.][expensive]") {
+  const auto &in = arithmeticInputs32();
+  for (const Form &form: std::vector<Form>{
+               {"add al, bl", {0x00, 0xd8}, kAll, in},
+               {"sub al, bl", {0x28, 0xd8}, kAll, in},
+               {"sub bl, 1", {0x80, 0xeb, 0x01}, kAll, in},
+               {"xor bl, 0xf2", {0x80, 0xf3, 0xf2}, kLogic, in},
+               {"mov al, bl", {0x88, 0xd8}, kNone, in},
+               {"mov al, 0xea", {0xb0, 0xea}, kNone, in},
+       })
+    sweep(form, dragon::Architecture::X86_32);
+}
+
+TEST_CASE("Semantic round-trip - i386 accumulator short forms",
+          "[semantic][x86_32][.][expensive]") {
+  const auto &in = arithmeticInputs32();
+  for (const Form &form: std::vector<Form>{
+               {"xor al, 0x44 (XOR8i8)", {0x34, 0x44}, kLogic, in},
+               {"sub al, 0xed (SUB8i8)", {0x2c, 0xed}, kAll, in},
+               {"and eax, 0xffffffdf (AND32i32)",
+                {0x25, 0xdf, 0xff, 0xff, 0xff},
+                kLogic,
+                in},
+               {"xor eax, 0x26 (XOR32i32)",
+                {0x35, 0x26, 0x00, 0x00, 0x00},
+                kLogic,
+                in},
+               {"sub eax, 0xbe (SUB32i32)",
+                {0x2d, 0xbe, 0x00, 0x00, 0x00},
+                kAll,
+                in},
+               {"add eax, 4 (ADD32i32)",
+                {0x05, 0x04, 0x00, 0x00, 0x00},
+                kAll,
+                in},
+       })
+    sweep(form, dragon::Architecture::X86_32);
+}
+
+TEST_CASE("Semantic round-trip - i386 push/pop and xchg registers",
+          "[semantic][x86_32][.][expensive]") {
+  // Each push is paired with a pop.
+  const auto &in = arithmeticInputs32();
+  for (const Form &form: std::vector<Form>{
+               {"push eax ; pop ecx", {0x50, 0x59}, kNone, in},
+               {"push ebx ; pop eax", {0x53, 0x58}, kNone, in},
+               {"push 0x9095 ; pop edx",
+                {0x68, 0x95, 0x90, 0x00, 0x00, 0x5a},
+                kNone,
+                in},
+               {"xchg ebx, edx", {0x87, 0xda}, kNone, in},
+               {"xchg eax, ebx (XCHG32ar)", {0x93}, kNone, in},
+               {"xchg al, bl", {0x86, 0xd8}, kNone, in},
+       })
+    sweep(form, dragon::Architecture::X86_32);
+}
+
+TEST_CASE("Semantic round-trip - i386 memory operands",
+          "[semantic][x86_32][.][expensive]") {
+  // push ebx ; <op on [esp]> ; pop ecx: the result lands in ECX.
+  const auto &in = arithmeticInputs32();
+  const auto onStack = [](std::vector<std::uint8_t> op) {
+    op.insert(op.begin(), 0x53); // push ebx
+    op.push_back(0x59); // pop ecx
+    return op;
+  };
+  for (const Form &form: std::vector<Form>{
+               {"mov eax, [esp]", onStack({0x8b, 0x04, 0x24}), kNone, in},
+               {"mov [esp], eax", onStack({0x89, 0x04, 0x24}), kNone, in},
+               {"mov dword [esp], 0x2140ae2e",
+                onStack({0xc7, 0x04, 0x24, 0x2e, 0xae, 0x40, 0x21}), kNone, in},
+               {"mov al, [esp+1]", onStack({0x8a, 0x44, 0x24, 0x01}), kNone,
+                in},
+               {"movzx eax, word [esp]", onStack({0x0f, 0xb7, 0x04, 0x24}),
+                kNone, in},
+               {"add eax, [esp]", onStack({0x03, 0x04, 0x24}), kAll, in},
+               {"add [esp], eax", onStack({0x01, 0x04, 0x24}), kAll, in},
+               {"add dword [esp], 4 (ADD32mi)",
+                onStack({0x81, 0x04, 0x24, 0x04, 0x00, 0x00, 0x00}), kAll, in},
+               {"sub [esp], eax", onStack({0x29, 0x04, 0x24}), kAll, in},
+               {"sub dword [esp], 27 (SUB32mi)",
+                onStack({0x81, 0x2c, 0x24, 0x1b, 0x00, 0x00, 0x00}), kAll, in},
+               {"inc dword [esp]", onStack({0xff, 0x04, 0x24}), kAll, in},
+               {"dec byte [esp]", onStack({0xfe, 0x0c, 0x24}), kAll, in},
+               {"lock dec byte [esp]", onStack({0xf0, 0xfe, 0x0c, 0x24}), kAll,
+                in},
+               {"cmp dword [esp], 0x2140ae2e",
+                onStack({0x81, 0x3c, 0x24, 0x2e, 0xae, 0x40, 0x21}), kAll, in},
+               {"cmp [esp], eax", onStack({0x39, 0x04, 0x24}), kAll, in},
+       })
+    sweep(form, dragon::Architecture::X86_32);
+}
+
+TEST_CASE("Semantic round-trip - i386 branches",
+          "[semantic][x86_32][.][expensive]") {
+  // Each branch jumps over `mov ecx, 1`. `jmp reg` is not swept: LLVMLifter
+  // lowers an indirect JMP to unreachable.
+  const auto &in = arithmeticInputs32();
+  const auto overMovEcx = [](std::vector<std::uint8_t> branch) {
+    branch.insert(branch.end(), {0xb9, 0x01, 0x00, 0x00, 0x00});
+    return branch;
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  sweep({"jmp short", overMovEcx({0xeb, 0x05}), kNone, in}, arch);
+  sweep({"jmp near", overMovEcx({0xe9, 0x05, 0x00, 0x00, 0x00}), kNone, in},
+        arch);
+  sweep({"test eax, eax ; jns short", overMovEcx({0x85, 0xc0, 0x79, 0x05}),
+         kLogic, in},
+        arch);
+
+  // cmp eax, ebx ; jcc rel32, for all sixteen conditions.
+  const char *names[16] = {"jo", "jno", "jb", "jae", "je", "jne", "jbe", "ja",
+                           "js", "jns", "jp", "jnp", "jl", "jge", "jle", "jg"};
+  for (std::uint8_t cc = 0; cc < 16; ++cc)
+    sweep({names[cc],
+           overMovEcx({0x39, 0xd8, 0x0f, static_cast<std::uint8_t>(0x80 + cc),
+                       0x05, 0x00, 0x00, 0x00}),
+           kAll, in},
+          arch);
+}
+
+// -----------------------------------------------------------------------
+// i386 baseline: instructions that already lift, to check the harness.
+// -----------------------------------------------------------------------
+
+TEST_CASE("Semantic round-trip - i386 mov/add/push/pop registers",
+          "[semantic][x86_32]") {
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb8, 0x05, 0x00, 0x00, 0x00, // mov eax, 5
+          0xbb, 0x03, 0x00, 0x00, 0x00, // mov ebx, 3
+          0x01, 0xd8, // add eax, ebx
+          0x50, // push eax
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 8);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 pushfd stores the flags word",
+          "[semantic][x86_32]") {
+  // cmp 3, 7 sets CF, PF, AF and SF: 0x97 with the reserved bit 1.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb8, 0x03, 0x00, 0x00, 0x00, // mov eax, 3
+          0xbb, 0x07, 0x00, 0x00, 0x00, // mov ebx, 7
+          0x39, 0xd8, // cmp eax, ebx
+          0x9c, // pushfd
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x97);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 popfd loads flags from the stack",
+          "[semantic][x86_32]") {
+  // 0xCD5 sets CF, PF, AF, ZF, SF, DF and OF.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb8, 0xd5, 0x0c, 0x00, 0x00, // mov eax, 0xCD5
+          0x50, // push eax
+          0x9d, // popfd
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  REQUIRE(actual.regs[x86off::ZF] == 1);
+  REQUIRE(actual.regs[x86off::SF] == 1);
+  REQUIRE(actual.regs[x86off::OF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 pushad stores all eight registers",
+          "[semantic][x86_32]") {
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x60, // pushad
+          0x83, 0xc4, 0x20, // add esp, 32
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  setReg64(initialRegs, x86off::RAX, 0x11111111);
+  setReg64(initialRegs, x86off::RCX, 0x22222222);
+  setReg64(initialRegs, x86off::RDX, 0x33333333);
+  setReg64(initialRegs, x86off::RBX, 0x44444444);
+  setReg64(initialRegs, x86off::RSI, 0x77777777);
+  setReg64(initialRegs, x86off::RDI, 0x88888888);
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 popad loads all but ESP",
+          "[semantic][x86_32]") {
+  // popad's EBP is stored before pop ebp overwrites it.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x11, 0x11, 0x11, 0x11, // push 0x11111111 (eax)
+          0x68, 0x22, 0x22, 0x22, 0x22, // push 0x22222222 (ecx)
+          0x68, 0x33, 0x33, 0x33, 0x33, // push 0x33333333 (edx)
+          0x68, 0x44, 0x44, 0x44, 0x44, // push 0x44444444 (ebx)
+          0x68, 0xef, 0xbe, 0xad, 0xde, // push 0xDEADBEEF (esp, skipped)
+          0x68, 0x66, 0x66, 0x66, 0x66, // push 0x66666666 (ebp)
+          0x68, 0x77, 0x77, 0x77, 0x77, // push 0x77777777 (esi)
+          0x68, 0x88, 0x88, 0x88, 0x88, // push 0x88888888 (edi)
+          0x61, // popad
+          0x89, 0x6c, 0x24, 0xfc, // mov [esp-4], ebp
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 0x11111111);
+  REQUIRE(getReg64(actual.regs, x86off::RDI) == 0x88888888);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 push ss moves ESP by 4",
+          "[semantic][x86_32]") {
+  // The UNDEF selector is overwritten before it is read.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x16, // push ss
+          0xc7, 0x04, 0x24, 0x78, 0x56, 0x34, 0x12, // mov [esp], 0x12345678
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x12345678);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 dec reg short form overflows",
+          "[semantic][x86_32]") {
+  // INT_MIN - 1 sets OF.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xba, 0x00, 0x00, 0x00, 0x80, // mov edx, 0x80000000
+          0x4a, // dec edx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RDX) == 0x7fffffff);
+  REQUIRE(actual.regs[x86off::OF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - a sub-register read sees the parent's write",
+          "[semantic][x86_64]") {
+  // Each width has its own slot in LLVMLifter: writing ECX has to refresh
+  // CX and CL, and writing RDX has to refresh EDX.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push rbp
+          0x48, 0x89, 0xe5, // mov rbp, rsp
+          0x66, 0x41, 0x89, 0xc8, // mov r8w, cx (reads CX before the write)
+          0xb9, 0x34, 0x12, 0x00, 0x00, // mov ecx, 0x1234
+          0x88, 0xc8, // mov al, cl
+          0x66, 0x89, 0xcb, // mov bx, cx
+          0x48, 0xba, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22,
+          0x11, // mov rdx, 0x1122334455667788
+          0x89, 0xd6, // mov esi, edx
+          0x5d, // pop rbp
+          0xc3, // ret
+  };
+  auto initialRegs = defaultInitialRegs();
+  setReg64(initialRegs, x86off::RCX, 0xaaaaaaaabbbbccccULL);
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem);
+  auto actual = runLifted(code, initialRegs, initialMem);
+
+  REQUIRE((getReg64(actual.regs, x86off::RAX) & 0xff) == 0x34);
+  REQUIRE((getReg64(actual.regs, x86off::RBX) & 0xffff) == 0x1234);
+  REQUIRE((getReg64(actual.regs, x86off::R8) & 0xffff) == 0xcccc);
+  REQUIRE(getReg64(actual.regs, x86off::RSI) == 0x55667788);
+  requireStatesMatch(expected, actual, initialRegs);
+}
+
+TEST_CASE("Semantic round-trip - i386 inc/dec short forms",
+          "[semantic][x86_32]") {
+  // INC/DEC leave CF alone: stc first so a stray CF write shows up.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb8, 0xff, 0xff, 0xff, 0x7f, // mov eax, 0x7FFFFFFF
+          0xb9, 0xff, 0xff, 0x00, 0x00, // mov ecx, 0xFFFF
+          0x31, 0xd2, // xor edx, edx
+          0xf9, // stc
+          0x40, // inc eax (INC32r_alt): OF set
+          0x66, 0x41, // inc cx (INC16r_alt): wraps to 0
+          0x66, 0x4a, // dec dx (DEC16r_alt): 0xFFFF, SF set
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 0x80000000);
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0);
+  REQUIRE(getReg64(actual.regs, x86off::RDX) == 0xffff);
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 cld clears DF", "[semantic][x86_32]") {
+  // popfd sets DF only.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x00, 0x04, 0x00, 0x00, // push 0x400
+          0x9d, // popfd
+          0xfc, // cld
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(actual.regs[x86off::DF] == 0);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 add byte [mem], reg",
+          "[semantic][x86_32]") {
+  // A 32-bit add would give 0x11223434 with CF clear.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x44, 0x33, 0x22, 0x11, // push 0x11223344
+          0xb0, 0xf0, // mov al, 0xF0
+          0x00, 0x04, 0x24, // add byte [esp], al
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x11223334);
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 mov byte [mem], imm",
+          "[semantic][x86_32]") {
+  // LLVM sign-extends the 0xF0 immediate to -16.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x44, 0x33, 0x22, 0x11, // push 0x11223344
+          0xc6, 0x04, 0x24, 0xf0, // mov byte [esp], 0xF0
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x112233f0);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 cmp byte [mem], imm",
+          "[semantic][x86_32]") {
+  // A 32-bit compare would leave ZF clear.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x00, 0x33, 0x22, 0x11, // push 0x11223300
+          0x80, 0x3c, 0x24, 0x00, // cmp byte [esp], 0
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(actual.regs[x86off::ZF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 xor reg, [mem]", "[semantic][x86_32]") {
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x0f, 0x0f, 0x0f, 0x0f, // push 0x0F0F0F0F
+          0xb8, 0x00, 0x00, 0xff, 0xff, // mov eax, 0xFFFF0000
+          0x33, 0x04, 0x24, // xor eax, [esp]
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 0xf0f00f0f);
+  REQUIRE(actual.regs[x86off::SF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 xor [mem], imm", "[semantic][x86_32]") {
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x44, 0x33, 0x22, 0x11, // push 0x11223344
+          0x81, 0x34, 0x24, 0x01, 0x00, 0x00, 0x80, // xor [esp], 0x80000001
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x91223345);
+  REQUIRE(actual.regs[x86off::SF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 xor [mem], reg", "[semantic][x86_32]") {
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x44, 0x33, 0x22, 0x11, // push 0x11223344
+          0xb8, 0x44, 0x33, 0x22, 0x11, // mov eax, 0x11223344
+          0x31, 0x04, 0x24, // xor [esp], eax
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0);
+  REQUIRE(actual.regs[x86off::ZF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 and [mem], reg", "[semantic][x86_32]") {
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0xf0, 0xf0, 0xf0, 0xf0, // push 0xF0F0F0F0
+          0xb8, 0xff, 0xff, 0x00, 0x80, // mov eax, 0x8000FFFF
+          0x21, 0x04, 0x24, // and [esp], eax
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x8000f0f0);
+  REQUIRE(actual.regs[x86off::SF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 push [esp+4] reads the old stack",
+          "[semantic][x86_32]") {
+  // With the moved ESP, [esp+4] would be 0x22222222.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x11, 0x11, 0x11, 0x11, // push 0x11111111
+          0x68, 0x22, 0x22, 0x22, 0x22, // push 0x22222222
+          0xff, 0x74, 0x24, 0x04, // push dword [esp+4]
+          0x59, // pop ecx
+          0x83, 0xc4, 0x08, // add esp, 8
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x11111111);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 pop [esp+4] uses the new ESP",
+          "[semantic][x86_32]") {
+  // The old ESP would give ECX = C and EDX = A.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0xaa, 0xaa, 0xaa, 0xaa, // push 0xAAAAAAAA
+          0x68, 0xbb, 0xbb, 0xbb, 0xbb, // push 0xBBBBBBBB
+          0x68, 0xcc, 0xcc, 0xcc, 0xcc, // push 0xCCCCCCCC
+          0x8f, 0x44, 0x24, 0x04, // pop dword [esp+4]
+          0x59, // pop ecx
+          0x5a, // pop edx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0xbbbbbbbb);
+  REQUIRE(getReg64(actual.regs, x86off::RDX) == 0xcccccccc);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 xchg [mem], esp switches stacks",
+          "[semantic][x86_32]") {
+  // Switches to the stack whose top is at [esi], then back.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x83, 0xec, 0x20, // sub esp, 0x20
+          0x8d, 0x75, 0xf0, // lea esi, [ebp-0x10]
+          0x8d, 0x45, 0xc0, // lea eax, [ebp-0x40]
+          0x89, 0x06, // mov [esi], eax
+          0x87, 0x26, // xchg [esi], esp
+          0x68, 0x78, 0x56, 0x34, 0x12, // push 0x12345678
+          0x59, // pop ecx
+          0x87, 0x26, // xchg [esi], esp
+          0x89, 0xec, // mov esp, ebp
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x12345678);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 xchg byte [mem], reg",
+          "[semantic][x86_32]") {
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x44, 0x33, 0x22, 0x11, // push 0x11223344
+          0xb0, 0xaa, // mov al, 0xAA
+          0x86, 0x04, 0x24, // xchg byte [esp], al
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 0x44);
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x112233aa);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 ror [mem], cl", "[semantic][x86_32]") {
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x78, 0x56, 0x34, 0x12, // push 0x12345678
+          0xb1, 0x04, // mov cl, 4
+          0xd3, 0x0c, 0x24, // ror dword [esp], cl
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x81234567);
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 ror al, cl by a multiple of 8 sets CF",
+          "[semantic][x86_32]") {
+  // AL is unchanged, but the count is not 0, so CF is written.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb0, 0x81, // mov al, 0x81
+          0xb1, 0x08, // mov cl, 8
+          0xd2, 0xc8, // ror al, cl
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 0x81);
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 shr [mem], cl", "[semantic][x86_32]") {
+  // A 1-bit shift, so OF is defined.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0x01, 0x00, 0x00, 0x80, // push 0x80000001
+          0xb1, 0x01, // mov cl, 1
+          0xd3, 0x2c, 0x24, // shr dword [esp], cl
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x40000000);
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  REQUIRE(actual.regs[x86off::OF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 btr [mem], imm", "[semantic][x86_32]") {
+  // The index wraps at the operand width: 38 is bit 6.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0x68, 0xff, 0x00, 0x00, 0x00, // push 0xFF
+          0x0f, 0xba, 0x34, 0x24, 0x26, // btr dword [esp], 38
+          0x59, // pop ecx
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0xbf);
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 loop counts ECX down",
+          "[semantic][x86_32]") {
+  // loop leaves the last add's flags alone.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb9, 0x05, 0x00, 0x00, 0x00, // mov ecx, 5
+          0x31, 0xc0, // xor eax, eax
+          0x83, 0xc0, 0x02, // L: add eax, 2
+          0xe2, 0xfb, // loop L
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 10);
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
+TEST_CASE("Semantic round-trip - i386 loop with 0x67 counts CX down",
+          "[semantic][x86_32]") {
+  // Only CX takes part: 3 iterations, and ECX's upper half survives.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb9, 0x03, 0x00, 0x01, 0x00, // mov ecx, 0x10003
+          0x31, 0xc0, // xor eax, eax
+          0x83, 0xc0, 0x02, // L: add eax, 2
+          0x67, 0xe2, 0xfa, // loopw L
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 6);
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x10000);
+  requireStatesMatch(expected, actual, initialRegs, arch);
 }

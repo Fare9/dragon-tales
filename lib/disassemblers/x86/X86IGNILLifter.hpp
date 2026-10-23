@@ -27,8 +27,8 @@ enum class X86Flag : std::uint8_t { CF, PF, AF, ZF, SF, OF, DF };
 
 /// Accumulator sign-extension forms (no explicit operands, no flags).
 enum class AccExtend : std::uint8_t { CBW, CWDE, CDQE, CWD, CDQ, CQO };
-/// Carry-flag-only instructions.
-enum class CarryOp : std::uint8_t { STC, CLC, CMC };
+/// Single-flag instructions: STC/CLC/CMC on CF, CLD on DF.
+enum class CarryOp : std::uint8_t { STC, CLC, CMC, CLD };
 
 /// Where a rotate/shift gets its count: an explicit imm8 operand, the
 /// implicit 1 of the dedicated by-1 opcode, or the CL register.
@@ -127,6 +127,14 @@ class X86IGNILLifter {
                      ignil::Block &out, std::uint32_t &tmp) const;
   void liftSubRegMem(const llvm::MCInst &mc, std::uint64_t addr,
                      ignil::Block &out, std::uint32_t &tmp) const;
+  // reg op= [mem] for an XOR, AND or OR `op`, with the rr forms' flags.
+  void liftLogicRegMem(const llvm::MCInst &mc, std::uint64_t addr,
+                       ignil::Block &out, std::uint32_t &tmp,
+                       ignil::Opcode op) const;
+  // [mem] op= reg-or-imm, as liftLogicRegMem.
+  void liftLogicMem(const llvm::MCInst &mc, std::uint64_t addr,
+                    ignil::Block &out, std::uint32_t &tmp,
+                    ignil::Opcode op) const;
   void liftXor(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftAnd(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -135,14 +143,31 @@ class X86IGNILLifter {
               std::uint32_t &tmp) const;
   void liftPush(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                 std::uint32_t &tmp) const;
+  // PUSH [mem]: load, then as liftPush.
+  void liftPushMem(const llvm::MCInst &mc, std::uint64_t addr,
+                   ignil::Block &out, std::uint32_t &tmp) const;
   void liftPop(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
+  // POP [mem]: as liftPop, then the store.
+  void liftPopMem(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                  std::uint32_t &tmp) const;
   // POPFQ/PUSHFQ: pop RFLAGS off / push RFLAGS onto the stack, spreading the
   // popped value across (or gathering) the individual modeled flag registers.
   void liftPopf(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                 std::uint32_t &tmp) const;
   void liftPushf(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                  std::uint32_t &tmp) const;
+  // PUSHAD: push EAX, ECX, EDX, EBX, the original ESP, EBP, ESI and EDI.
+  void liftPusha(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                 std::uint32_t &tmp) const;
+  // POPAD: pop them back in reverse, skipping the saved ESP.
+  void liftPopa(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                std::uint32_t &tmp) const;
+  // PUSH / POP of a segment register (32-bit), e.g. `push ss`.
+  void liftPushSeg(const llvm::MCInst &mc, std::uint64_t addr,
+                   ignil::Block &out, std::uint32_t &tmp) const;
+  void liftPopSeg(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+                  std::uint32_t &tmp) const;
   void liftLea(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftCmp(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -157,9 +182,20 @@ class X86IGNILLifter {
                   ignil::Block &out, std::uint32_t &tmp) const;
   void liftTest(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                 std::uint32_t &tmp) const;
+  // The target of a branch `offset` bytes past the end of the instruction at
+  // `addr`, wrapped to 32 bits outside 64-bit mode.
+  std::uint64_t pcRelTarget(std::uint64_t addr, std::uint8_t insnSize,
+                            std::int64_t offset) const;
   void liftJcc(const llvm::MCInst &mc, std::uint64_t addr,
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;
+  // LOOP: ECX (RCX in 64-bit mode) -= 1, then CJMP while it is non-zero.
+  // With an address-size prefix the counter is CX (ECX in 64-bit mode).
+  void liftLoop(const llvm::MCInst &mc, std::uint64_t addr,
+                std::uint8_t insnSize, bool addressSizePrefix,
+                ignil::Block &out, std::uint32_t &tmp) const;
+  // Whether `insn` carries a 0x67 among its legacy prefixes.
+  static bool hasAddressSizePrefix(const Instruction &insn);
   void liftJmp(const llvm::MCInst &mc, std::uint64_t addr,
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;
@@ -282,10 +318,10 @@ class X86IGNILLifter {
   // op[1]=src(tied=dst); the count is CL masked to 5 bits (6 for 64-bit).
   // A zero count leaves every flag untouched, so CF/ZF/SF are merged with
   // their old value under an isZero mask; OF (count==1 only), PF and AF are
-  // UNDEF.
+  // UNDEF. With memWidth the destination is memory (op[0..4]).
   void liftShiftCL(const llvm::MCInst &mc, std::uint64_t addr,
-                   ignil::Block &out, std::uint32_t &tmp,
-                   ignil::Opcode shift) const;
+                   ignil::Block &out, std::uint32_t &tmp, ignil::Opcode shift,
+                   std::optional<ignil::Width> memWidth = std::nullopt) const;
   // CBW/CWDE/CDQE sign-extend within RAX; CWD/CDQ/CQO sign-fill (R/E)DX
   // from the top bit of (R/E)AX. No operands, no flags.
   void liftAccExtend(std::uint64_t addr, ignil::Block &out,
@@ -323,9 +359,11 @@ class X86IGNILLifter {
   // CF = the bit rotated into the far end (gated, left untouched for a zero
   // count), OF defined only for a 1-bit rotate and otherwise UNDEF. SF/ZF/PF/AF
   // are not touched at all - a rotate does not disturb them. op[0]=dst(out),
-  // op[1]=src(tied=dst), [op[2]=imm8] for the ri form.
+  // op[1]=src(tied=dst), [op[2]=imm8] for the ri form. With memWidth the
+  // destination is memory (op[0..4], [op[5]=imm8]).
   void liftRotate(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
-                  std::uint32_t &tmp, bool left, ShiftCount count) const;
+                  std::uint32_t &tmp, bool left, ShiftCount count,
+                  std::optional<ignil::Width> memWidth = std::nullopt) const;
   // RCL/RCR by imm8 or by the implicit 1 (the CL forms stay unlifted: a
   // variable rotate through the carry is a (width+1)-bit rotation that does
   // not fit a 64-bit temp). With the count known at lift time, the result is a
@@ -365,8 +403,11 @@ class X86IGNILLifter {
   // liftBt, only CF is written; the other flags are left unchanged (ZF is
   // documented unchanged, the rest undefined - keeping them is one legal
   // outcome). op[0]=dst(out), op[1]=src(tied=dst), op[2]=bit index(reg/imm8).
+  // With memWidth the destination is memory (op[0..4], op[5]=imm8 only; a
+  // register index would address a bit string).
   void liftBitModify(const llvm::MCInst &mc, std::uint64_t addr,
-                     ignil::Block &out, std::uint32_t &tmp, BitOp op) const;
+                     ignil::Block &out, std::uint32_t &tmp, BitOp op,
+                     std::optional<ignil::Width> memWidth = std::nullopt) const;
   // CMOVcc r,r: dst = cond ? src : dst. IGNIL has no select, so the result is
   // (src & m) | (dst & ~m) with m = all-ones when the condition holds. No
   // flags. op[0]=dst(out), op[1]=src1(tied=dst, the kept value), op[2]=src2
@@ -404,6 +445,9 @@ class X86IGNILLifter {
   // registers (LLVM lists both as defs, the tied uses follow).
   void liftXchg(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                 std::uint32_t &tmp) const;
+  // XCHG [mem], r: swap a register with memory (no flags).
+  void liftXchgMem(const llvm::MCInst &mc, std::uint64_t addr,
+                   ignil::Block &out, std::uint32_t &tmp) const;
   // BSWAP r32/r64: reverse the byte order (no flags). Built from
   // shift/and/or since IGNIL has no byte-swap primitive.
   void liftBswap(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -544,11 +588,11 @@ class X86IGNILLifter {
   unsigned opMov64ri_{}, opMov32ri_{}, opMov64ri32_{};
   unsigned opMov64rm_{}, opMov32rm_{}, opMov16rm_{}, opMov8rm_{};
   unsigned opMov64mr_{}, opMov32mr_{}, opMov16mr_{}, opMov8mr_{};
-  unsigned opMov64mi_{}, opMov32mi_{};
+  unsigned opMov64mi_{}, opMov32mi_{}, opMov8mi_{};
   unsigned opLea64r_{}, opLea32r_{};
   unsigned opAdd64rr_{}, opAdd32rr_{};
   unsigned opAdd64ri_{}, opAdd32ri_{}, opAdd64ri8_{}, opAdd32ri8_{};
-  unsigned opAdd64mr_{}, opAdd32mr_{};
+  unsigned opAdd64mr_{}, opAdd32mr_{}, opAdd8mr_{};
   unsigned opAdd64mi_{}, opAdd32mi_{}, opAdd64mi8_{}, opAdd32mi8_{};
   unsigned opAdd64rm_{}, opAdd32rm_{};
   unsigned opSub64rr_{}, opSub32rr_{};
@@ -557,35 +601,43 @@ class X86IGNILLifter {
   unsigned opSub64mi_{}, opSub32mi_{}, opSub64mi8_{}, opSub32mi8_{};
   unsigned opSub64rm_{}, opSub32rm_{};
   unsigned opXor64rr_{}, opXor32rr_{};
+  unsigned opXor32rm_{}, opXor32mi_{}, opXor32mr_{};
   unsigned opXor32ri_{}, opXor64ri_{}, opXor32ri8_{}, opXor64ri8_{};
   unsigned opAnd64rr_{}, opAnd32rr_{};
+  unsigned opAnd32mr_{};
   unsigned opAnd32ri_{}, opAnd64ri_{}, opAnd32ri8_{}, opAnd64ri8_{};
   unsigned opOr64rr_{}, opOr32rr_{};
   unsigned opOr32ri_{}, opOr64ri_{}, opOr32ri8_{}, opOr64ri8_{};
   unsigned opPush64r_{}, opPop64r_{};
   unsigned opPush32r_{}, opPop32r_{};
-  unsigned opPopf64_{}, opPushf64_{};
+  unsigned opPush32rmm_{}, opPop32rmm_{};
+  unsigned opPopf64_{}, opPopf32_{}, opPushf64_{}, opPushf32_{};
+  unsigned opPusha32_{}, opPopa32_{};
+  unsigned opPushSS32_{}, opPopSS32_{};
   unsigned opCmp64rr_{}, opCmp32rr_{};
   unsigned opCmp64ri_{}, opCmp32ri_{}, opCmp64ri8_{}, opCmp32ri8_{};
   unsigned opCmp64rm_{}, opCmp32rm_{};
   unsigned opCmp64mr_{}, opCmp32mr_{};
   unsigned opCmp64mi_{}, opCmp32mi_{}, opCmp64mi8_{}, opCmp32mi8_{};
+  unsigned opCmp8mi_{};
   unsigned opTest64rr_{}, opTest32rr_{};
   unsigned opTest32ri_{}, opTest64ri_{};
   unsigned opJmp64r_{}, opJmp32r_{}; // indirect
   unsigned opJmp64m_{}, opJmp32m_{}; // indirect memory jump
   unsigned opCall64m_{}, opCall32m_{}; // indirect memory call
   unsigned opJmp_{}; // direct
-  unsigned opCall64r_{}; // indirect
-  unsigned opCall_{}; // direct
-  unsigned opRet64_{}, opRetL_{};
-  unsigned opRetI64_{}, opRetIL_{}; // ret N  (callee-cleanup variant)
+  unsigned opLoop_{};
+  unsigned opCall64r_{}, opCall32r_{}; // indirect
+  unsigned opCall_{}, opCall32_{}; // direct
+  unsigned opRet64_{}, opRet32_{};
+  unsigned opRetI64_{}, opRetI32_{}; // ret N  (callee-cleanup variant)
   unsigned opLeave64_{}, opLeave_{}; // leave (decomposed to mov rsp,rbp / pop rbp)
   unsigned opSar32ri_{}, opSar64ri_{};
   unsigned opImul64rri32_{}, opImul64rri8_{}, opImul32rri_{}, opImul32rri8_{};
   unsigned opImul32rr_{}, opImul64rr_{};
   unsigned opLea64_32r_{};
   unsigned opInc32r_{}, opInc64r_{}, opDec32r_{}, opDec64r_{};
+  unsigned opInc32r_alt_{}, opDec32r_alt_{}; // 0x40+r / 0x48+r, 32-bit only
   unsigned opNeg32r_{}, opNeg64r_{};
   unsigned opShl32ri_{}, opShl64ri_{}, opShr32ri_{}, opShr64ri_{};
   unsigned opSar32r1_{}, opSar64r1_{}, opShl32r1_{}, opShl64r1_{},
@@ -599,9 +651,10 @@ class X86IGNILLifter {
           opSar16r1_{};
   unsigned opShl8rCL_{}, opShl16rCL_{}, opShl32rCL_{}, opShl64rCL_{};
   unsigned opShr8rCL_{}, opShr16rCL_{}, opShr32rCL_{}, opShr64rCL_{};
+  unsigned opShr32mCL_{};
   unsigned opSar8rCL_{}, opSar16rCL_{}, opSar32rCL_{}, opSar64rCL_{};
   unsigned opCbw_{}, opCwde_{}, opCdqe_{}, opCwd_{}, opCdq_{}, opCqo_{};
-  unsigned opStc_{}, opClc_{}, opCmc_{};
+  unsigned opStc_{}, opClc_{}, opCmc_{}, opCld_{};
   unsigned opSetccr_{};
   unsigned opBt16ri8_{}, opBt32ri8_{}, opBt64ri8_{};
   unsigned opBt16rr_{}, opBt32rr_{}, opBt64rr_{};
@@ -612,6 +665,7 @@ class X86IGNILLifter {
   unsigned opRor8ri_{}, opRor16ri_{}, opRor32ri_{}, opRor64ri_{};
   unsigned opRor8r1_{}, opRor16r1_{}, opRor32r1_{}, opRor64r1_{};
   unsigned opRor8rCL_{}, opRor16rCL_{}, opRor32rCL_{}, opRor64rCL_{};
+  unsigned opRor32mCL_{};
   // Rotate through carry, imm8 and by-1 forms only (see liftRotateCarry).
   unsigned opRcl8ri_{}, opRcl16ri_{}, opRcl32ri_{}, opRcl64ri_{};
   unsigned opRcl8r1_{}, opRcl16r1_{}, opRcl32r1_{}, opRcl64r1_{};
@@ -629,6 +683,7 @@ class X86IGNILLifter {
   unsigned opBts16ri8_{}, opBts32ri8_{}, opBts64ri8_{};
   unsigned opBts16rr_{}, opBts32rr_{}, opBts64rr_{};
   unsigned opBtr16ri8_{}, opBtr32ri8_{}, opBtr64ri8_{};
+  unsigned opBtr32mi8_{};
   unsigned opBtr16rr_{}, opBtr32rr_{}, opBtr64rr_{};
   unsigned opBtc16ri8_{}, opBtc32ri8_{}, opBtc64ri8_{};
   unsigned opBtc16rr_{}, opBtc32rr_{}, opBtc64rr_{};
@@ -662,7 +717,9 @@ class X86IGNILLifter {
           opCmp16ri8_{};
   unsigned opTest8rr_{}, opTest16rr_{}, opTest8ri_{}, opTest16ri_{};
   unsigned opInc8r_{}, opInc16r_{}, opDec8r_{}, opDec16r_{};
+  unsigned opInc16r_alt_{}, opDec16r_alt_{}; // 66 40+r / 66 48+r, 32-bit only
   unsigned opXchg8rr_{}, opXchg16rr_{}, opXchg32rr_{}, opXchg64rr_{};
+  unsigned opXchg32rm_{}, opXchg8rm_{};
   unsigned opBswap32r_{}, opBswap64r_{};
   unsigned opShld16rrCL_{}, opShld32rrCL_{}, opShld64rrCL_{}, opShrd16rrCL_{},
           opShrd32rrCL_{}, opShrd64rrCL_{};
@@ -726,6 +783,10 @@ class X86IGNILLifter {
           regEDX_{}, regRDX_{};
   // CPUID/RDTSCP also define EBX and ECX.
   ignil::Reg regEBX_{}, regECX_{};
+  // PUSHAD/POPAD also save and restore ESI and EDI.
+  ignil::Reg regESI_{}, regEDI_{};
+  // LOOP's counter in 64-bit mode, and with an address-size prefix.
+  ignil::Reg regRCX_{}, regCX_{};
 };
 
 } // namespace x86

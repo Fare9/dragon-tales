@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <iostream>
 #include <set>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -1822,4 +1823,583 @@ TEST_CASE("IGNIL lifting - RCL/RCR by CL and accumulator XCHG",
     REQUIRE(ib != nullptr);
     REQUIRE(ib->unlifted().empty());
   }
+}
+
+// -----------------------------------------------------------------------
+// i386 forms
+// -----------------------------------------------------------------------
+
+TEST_CASE("IGNIL lifting - i386 ret (RET32)", "[ignil][x86_32]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xc3, // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::RET));
+}
+
+TEST_CASE("IGNIL lifting - i386 ret imm16 (RETI32)", "[ignil][x86_32]") {
+  // ret 4
+  const std::vector<std::uint8_t> bytes = {0xc2, 0x04, 0x00};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::RET));
+}
+
+TEST_CASE("IGNIL lifting - i386 call rel32 (CALLpcrel32)", "[ignil][x86_32]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xe8, 0x00, 0x00, 0x00, 0x00, // call $+5
+          0x58, // pop eax
+          0xc3, // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  const auto &ops = ib->ops();
+  auto callIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::CALL;
+  });
+  REQUIRE(callIt != ops.end());
+  const auto *target = std::get_if<dragon::ignil::Const>(&callIt->srcs[0]);
+  REQUIRE(target != nullptr);
+  REQUIRE(target->value == 0x1005);
+}
+
+TEST_CASE("IGNIL lifting - i386 call reg (CALL32r)", "[ignil][x86_32]") {
+  // call edx; ret
+  const std::vector<std::uint8_t> bytes = {0xff, 0xd2, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  const auto &ops = ib->ops();
+  auto callIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::CALL;
+  });
+  REQUIRE(callIt != ops.end());
+  const auto *target = std::get_if<dragon::ignil::Reg>(&callIt->srcs[0]);
+  REQUIRE(target != nullptr);
+  REQUIRE(target->name == "EDX");
+  REQUIRE(target->width == 32);
+}
+
+TEST_CASE("IGNIL lifting - i386 pushfd (PUSHF32)", "[ignil][x86_32]") {
+  // pushfd; ret
+  const std::vector<std::uint8_t> bytes = {0x9c, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  const auto &ops = ib->ops();
+  auto subIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::SUB;
+  });
+  REQUIRE(subIt != ops.end());
+  const auto *sp = std::get_if<dragon::ignil::Reg>(&subIt->srcs[0]);
+  REQUIRE(sp != nullptr);
+  REQUIRE(sp->name == "ESP");
+  const auto *size = std::get_if<dragon::ignil::Const>(&subIt->srcs[1]);
+  REQUIRE(size != nullptr);
+  REQUIRE(size->value == 4);
+}
+
+TEST_CASE("IGNIL lifting - i386 popfd (POPF32)", "[ignil][x86_32]") {
+  // popfd; ret
+  const std::vector<std::uint8_t> bytes = {0x9d, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  const auto &ops = ib->ops();
+  auto addIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::ADD;
+  });
+  REQUIRE(addIt != ops.end());
+  const auto *sp = std::get_if<dragon::ignil::Reg>(&addIt->srcs[0]);
+  REQUIRE(sp != nullptr);
+  REQUIRE(sp->name == "ESP");
+  const auto *size = std::get_if<dragon::ignil::Const>(&addIt->srcs[1]);
+  REQUIRE(size != nullptr);
+  REQUIRE(size->value == 4);
+}
+
+TEST_CASE("IGNIL lifting - i386 pushad (PUSHA32)", "[ignil][x86_32]") {
+  // pushad; ret
+  const std::vector<std::uint8_t> bytes = {0x60, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  const auto &ops = ib->ops();
+  REQUIRE(std::count_if(ops.begin(), ops.end(), [](const auto &op) {
+            return op.opcode == dragon::ignil::Opcode::STORE;
+          }) == 8);
+  // The saved ESP is its value before the instruction.
+  REQUIRE(std::any_of(ops.begin(), ops.end(), [](const auto &op) {
+    if (op.opcode != dragon::ignil::Opcode::STORE)
+      return false;
+    const auto *value = std::get_if<dragon::ignil::Reg>(&op.srcs[1]);
+    return value && value->name == "ESP";
+  }));
+}
+
+TEST_CASE("IGNIL lifting - i386 popad (POPA32)", "[ignil][x86_32]") {
+  // popad; ret
+  const std::vector<std::uint8_t> bytes = {0x61, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  const auto &ops = ib->ops();
+  REQUIRE(std::count_if(ops.begin(), ops.end(), [](const auto &op) {
+            return op.opcode == dragon::ignil::Opcode::LOAD;
+          }) == 7);
+  // The saved ESP is discarded.
+  REQUIRE(std::count_if(ops.begin(), ops.end(), [](const auto &op) {
+            const auto *dst = op.dst ? std::get_if<dragon::ignil::Reg>(&*op.dst)
+                                     : nullptr;
+            return dst && dst->name == "ESP";
+          }) == 1);
+}
+
+TEST_CASE("IGNIL lifting - i386 push ss (PUSHSS32)", "[ignil][x86_32]") {
+  // push ss; ret
+  const std::vector<std::uint8_t> bytes = {0x16, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::UNDEF));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  const auto &ops = ib->ops();
+  auto subIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::SUB;
+  });
+  REQUIRE(subIt != ops.end());
+  const auto *sp = std::get_if<dragon::ignil::Reg>(&subIt->srcs[0]);
+  REQUIRE(sp != nullptr);
+  REQUIRE(sp->name == "ESP");
+  const auto *size = std::get_if<dragon::ignil::Const>(&subIt->srcs[1]);
+  REQUIRE(size != nullptr);
+  REQUIRE(size->value == 4);
+}
+
+TEST_CASE("IGNIL lifting - i386 pop ss (POPSS32)", "[ignil][x86_32]") {
+  // pop ss; ret
+  const std::vector<std::uint8_t> bytes = {0x17, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE_FALSE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  const auto &ops = ib->ops();
+  auto addIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::ADD;
+  });
+  REQUIRE(addIt != ops.end());
+  const auto *sp = std::get_if<dragon::ignil::Reg>(&addIt->srcs[0]);
+  REQUIRE(sp != nullptr);
+  REQUIRE(sp->name == "ESP");
+  const auto *size = std::get_if<dragon::ignil::Const>(&addIt->srcs[1]);
+  REQUIRE(size != nullptr);
+  REQUIRE(size->value == 4);
+}
+
+TEST_CASE("IGNIL lifting - i386 dec reg short form (DEC32r_alt)",
+          "[ignil][x86_32]") {
+  // dec edx (0x48+r); ret
+  const std::vector<std::uint8_t> bytes = {0x4a, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SUB));
+}
+
+TEST_CASE("IGNIL lifting - i386 inc/dec reg short forms (INC32r_alt, "
+          "INC16r_alt, DEC16r_alt)",
+          "[ignil][x86_32]") {
+  for (const auto &[bytes, opcode]:
+       std::vector<std::pair<std::vector<std::uint8_t>, dragon::ignil::Opcode>>{
+               {{0x40, 0xc3}, dragon::ignil::Opcode::ADD}, // inc eax; ret
+               {{0x66, 0x41, 0xc3}, dragon::ignil::Opcode::ADD}, // inc cx; ret
+               {{0x66, 0x4a, 0xc3}, dragon::ignil::Opcode::SUB}, // dec dx; ret
+       }) {
+    auto dis = makeDisassembler(dragon::Architecture::X86_32);
+    auto g = makeGraph(dragon::Architecture::X86_32);
+    dis.disassemble(bytes, 0x1000, g);
+
+    const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted().empty());
+    REQUIRE(hasOpcode(*ib, opcode));
+  }
+}
+
+TEST_CASE("IGNIL lifting - i386 branch targets wrap at 4 GB",
+          "[ignil][x86_32]") {
+  // call -0x2000 at 0x1000 lands at 0xfffff005, not 0xfffffffffffff005.
+  const std::vector<std::uint8_t> callBytes = {0xe8, 0x00, 0xe0, 0xff, 0xff,
+                                               0xc3};
+  // je -0x2000 at 0x1000 (JCC_4).
+  const std::vector<std::uint8_t> jccBytes = {0x0f, 0x84, 0x00, 0xe0,
+                                              0xff, 0xff, 0xc3};
+  for (const auto &[bytes, opcode, target]:
+       std::vector<std::tuple<std::vector<std::uint8_t>, dragon::ignil::Opcode,
+                              std::uint64_t>>{
+               {callBytes, dragon::ignil::Opcode::CALL, 0xfffff005},
+               {jccBytes, dragon::ignil::Opcode::CJMP, 0xfffff006},
+       }) {
+    auto dis = makeDisassembler(dragon::Architecture::X86_32);
+    auto g = makeGraph(dragon::Architecture::X86_32);
+    dis.disassemble(bytes, 0x1000, g);
+
+    const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+    REQUIRE(ib != nullptr);
+    const auto &ops = ib->ops();
+    const auto it = std::find_if(ops.begin(), ops.end(), [&](const auto &op) {
+      return op.opcode == opcode;
+    });
+    REQUIRE(it != ops.end());
+    const auto &dst = it->srcs[opcode == dragon::ignil::Opcode::CALL ? 0 : 1];
+    const auto *c = std::get_if<dragon::ignil::Const>(&dst);
+    REQUIRE(c != nullptr);
+    REQUIRE(c->value == target);
+  }
+}
+
+TEST_CASE("IGNIL lifting - i386 cld (CLD)", "[ignil][x86_32]") {
+  // cld; ret
+  const std::vector<std::uint8_t> bytes = {0xfc, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  const auto &ops = ib->ops();
+  REQUIRE(std::any_of(ops.begin(), ops.end(), [](const auto &op) {
+    if (op.opcode != dragon::ignil::Opcode::COPY || !op.dst)
+      return false;
+    const auto *dst = std::get_if<dragon::ignil::Reg>(&*op.dst);
+    const auto *value = std::get_if<dragon::ignil::Const>(&op.srcs[0]);
+    return dst && dst->name == "DF" && value && value->value == 0;
+  }));
+}
+
+TEST_CASE("IGNIL lifting - i386 add byte [mem], reg (ADD8mr)",
+          "[ignil][x86_32]") {
+  // add byte [ebx+0x10], al; ret
+  const std::vector<std::uint8_t> bytes = {0x00, 0x43, 0x10, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  const auto &ops = ib->ops();
+  auto loadIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::LOAD;
+  });
+  REQUIRE(loadIt != ops.end());
+  REQUIRE(dragon::ignil::widthOf(*loadIt->dst) == 8);
+}
+
+TEST_CASE("IGNIL lifting - i386 mov byte [mem], imm (MOV8mi)",
+          "[ignil][x86_32]") {
+  // mov byte [ebx+0x10], 0xf0; ret
+  const std::vector<std::uint8_t> bytes = {0xc6, 0x43, 0x10, 0xf0, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  const auto &ops = ib->ops();
+  auto storeIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::STORE;
+  });
+  REQUIRE(storeIt != ops.end());
+  REQUIRE(dragon::ignil::widthOf(storeIt->srcs[1]) == 8);
+}
+
+TEST_CASE("IGNIL lifting - i386 cmp byte [mem], imm (CMP8mi)",
+          "[ignil][x86_32]") {
+  // cmp byte [edx], 0; ret
+  const std::vector<std::uint8_t> bytes = {0x80, 0x3a, 0x00, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE_FALSE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  const auto &ops = ib->ops();
+  auto loadIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::LOAD;
+  });
+  REQUIRE(loadIt != ops.end());
+  REQUIRE(dragon::ignil::widthOf(*loadIt->dst) == 8);
+}
+
+TEST_CASE("IGNIL lifting - i386 xor reg, [mem] (XOR32rm)", "[ignil][x86_32]") {
+  // xor eax, [edx]; ret
+  const std::vector<std::uint8_t> bytes = {0x33, 0x02, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::XOR));
+  REQUIRE_FALSE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+}
+
+TEST_CASE("IGNIL lifting - i386 xor [mem], imm (XOR32mi)", "[ignil][x86_32]") {
+  // xor dword [esp], 0xb53d; ret
+  const std::vector<std::uint8_t> bytes = {0x81, 0x34, 0x24, 0x3d,
+                                           0xb5, 0x00, 0x00, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::XOR));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+}
+
+TEST_CASE("IGNIL lifting - i386 xor [mem], reg (XOR32mr)", "[ignil][x86_32]") {
+  // xor dword [edi], eax; ret
+  const std::vector<std::uint8_t> bytes = {0x31, 0x07, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::XOR));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+}
+
+TEST_CASE("IGNIL lifting - i386 and [mem], reg (AND32mr)", "[ignil][x86_32]") {
+  // and dword [edx], eax; ret
+  const std::vector<std::uint8_t> bytes = {0x21, 0x02, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::AND));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+}
+
+TEST_CASE("IGNIL lifting - i386 push [mem] (PUSH32rmm)", "[ignil][x86_32]") {
+  // push dword [edx]; ret
+  const std::vector<std::uint8_t> bytes = {0xff, 0x32, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  // The operand is read before ESP moves.
+  const auto &ops = ib->ops();
+  auto loadIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::LOAD;
+  });
+  auto subIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::SUB;
+  });
+  REQUIRE(loadIt != ops.end());
+  REQUIRE(subIt != ops.end());
+  REQUIRE(loadIt < subIt);
+}
+
+TEST_CASE("IGNIL lifting - i386 pop [mem] (POP32rmm)", "[ignil][x86_32]") {
+  // pop dword [esp+4]; ret
+  const std::vector<std::uint8_t> bytes = {0x8f, 0x44, 0x24, 0x04, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  // The destination address uses ESP after the pop has moved it.
+  const auto &ops = ib->ops();
+  auto spIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    const auto *dst =
+            op.dst ? std::get_if<dragon::ignil::Reg>(&*op.dst) : nullptr;
+    return dst && dst->name == "ESP";
+  });
+  auto storeIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::STORE;
+  });
+  REQUIRE(spIt != ops.end());
+  REQUIRE(storeIt != ops.end());
+  REQUIRE(spIt < storeIt);
+}
+
+TEST_CASE("IGNIL lifting - i386 xchg [mem], reg (XCHG32rm)",
+          "[ignil][x86_32]") {
+  // xchg [esi], esp; ret
+  const std::vector<std::uint8_t> bytes = {0x87, 0x26, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+}
+
+TEST_CASE("IGNIL lifting - i386 xchg byte [mem], reg (XCHG8rm)",
+          "[ignil][x86_32]") {
+  // xchg byte [edx], al; ret
+  const std::vector<std::uint8_t> bytes = {0x86, 0x02, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  const auto &ops = ib->ops();
+  auto loadIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::LOAD;
+  });
+  REQUIRE(loadIt != ops.end());
+  REQUIRE(dragon::ignil::widthOf(*loadIt->dst) == 8);
+}
+
+TEST_CASE("IGNIL lifting - i386 ror [mem], cl (ROR32mCL)", "[ignil][x86_32]") {
+  // ror dword [esp+4], cl; ret
+  const std::vector<std::uint8_t> bytes = {0xd3, 0x4c, 0x24, 0x04, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+}
+
+TEST_CASE("IGNIL lifting - i386 shr [mem], cl (SHR32mCL)", "[ignil][x86_32]") {
+  // shr dword [edx], cl; ret
+  const std::vector<std::uint8_t> bytes = {0xd3, 0x2a, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::SHR));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+}
+
+TEST_CASE("IGNIL lifting - i386 btr [mem], imm (BTR32mi8)", "[ignil][x86_32]") {
+  // btr dword [ebx+8], 6; ret
+  const std::vector<std::uint8_t> bytes = {0x0f, 0xba, 0x73, 0x08, 0x06, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::LOAD));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+}
+
+TEST_CASE("IGNIL lifting - i386 loop (LOOP)", "[ignil][x86_32]") {
+  const std::vector<std::uint8_t> bytes = {
+          0xe2, 0x02, // loop 0x1004
+          0x90, // nop
+          0x90, // nop
+          0xc3, // ret
+  };
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::CJMP));
+  // ECX is decremented; no flag is read or written.
+  const auto &ops = ib->ops();
+  REQUIRE(std::any_of(ops.begin(), ops.end(), [](const auto &op) {
+    const auto *dst =
+            op.dst ? std::get_if<dragon::ignil::Reg>(&*op.dst) : nullptr;
+    return dst && dst->name == "ECX";
+  }));
+  REQUIRE(std::none_of(ops.begin(), ops.end(), [](const auto &op) {
+    return std::any_of(op.srcs.begin(), op.srcs.end(), [](const auto &src) {
+      const auto *reg = std::get_if<dragon::ignil::Reg>(&src);
+      return reg && reg->name == "OF";
+    });
+  }));
 }

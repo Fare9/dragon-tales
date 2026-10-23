@@ -81,11 +81,28 @@ if(DRAGON_USE_UNICORN)
     # IR, so this stays test-only rather than a libdragon dependency.
     llvm_map_components_to_libnames(LLVM_JIT_LIBS orcjit native)
     target_link_libraries(dragon_tests PRIVATE PkgConfig::UNICORN ${LLVM_JIT_LIBS})
+
+    # MSVC lacks the compiler-rt i128 helpers (__udivti3, ...) that the
+    # 64-bit DIV/IDIV tests' JIT code calls.
+    if(MSVC)
+        find_file(DRAGON_COMPILER_RT_BUILTINS clang_rt.builtins-x86_64.lib
+            HINTS "${LLVM_LIBRARY_DIR}/clang/${LLVM_VERSION_MAJOR}/lib/windows"
+            DOC "clang_rt.builtins-x86_64.lib for the 64-bit DIV/IDIV semantic tests"
+        )
+        if(DRAGON_COMPILER_RT_BUILTINS)
+            target_compile_definitions(dragon_tests PRIVATE
+                DRAGON_TEST_COMPILER_RT_BUILTINS="${DRAGON_COMPILER_RT_BUILTINS}")
+        else()
+            message(STATUS "clang_rt.builtins-x86_64.lib not found - the 64-bit "
+                           "DIV/IDIV semantic tests cannot link; set "
+                           "DRAGON_COMPILER_RT_BUILTINS to it")
+        endif()
+    endif()
 endif()
 
 target_include_directories(dragon_tests
         PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/include
 )
 
 include(CTest)

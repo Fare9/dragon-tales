@@ -15,7 +15,7 @@ target_include_directories(libdragon_c
     PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     PRIVATE
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
 
 target_link_libraries(libdragon_c

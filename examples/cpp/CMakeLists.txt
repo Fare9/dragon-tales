@@ -3,8 +3,8 @@ add_executable(ignil_lifting ignil_lifting.cpp)
 target_link_libraries(ignil_lifting PRIVATE dragon::libdragon)
 
 target_include_directories(ignil_lifting PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/lib
+        ${PROJECT_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/lib
         ${LLVM_INCLUDE_DIRS}
 )
 
@@ -13,7 +13,7 @@ add_executable(backward_slicing backward_slicing.cpp)
 target_link_libraries(backward_slicing PRIVATE dragon::libdragon)
 
 target_include_directories(backward_slicing PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/include
         ${LLVM_INCLUDE_DIRS}
 )
 
@@ -22,7 +22,7 @@ add_executable(arm64_backward_slicing arm64_backward_slicing.cpp)
 target_link_libraries(arm64_backward_slicing PRIVATE dragon::libdragon)
 
 target_include_directories(arm64_backward_slicing PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/include
         ${LLVM_INCLUDE_DIRS}
 )
 
@@ -31,7 +31,7 @@ add_executable(llvmir_lifting llvmir_lifting.cpp)
 target_link_libraries(llvmir_lifting PRIVATE dragon::libdragon)
 
 target_include_directories(llvmir_lifting PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/include
         ${LLVM_INCLUDE_DIRS}
 )
 
@@ -42,7 +42,7 @@ add_executable(dead_store_elimination dead_store_elimination.cpp)
 target_link_libraries(dead_store_elimination PRIVATE dragon::libdragon)
 
 target_include_directories(dead_store_elimination PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/include
         ${LLVM_INCLUDE_DIRS}
 )
 
@@ -53,7 +53,7 @@ add_executable(dead_store_elimination_arm64 dead_store_elimination_arm64.cpp)
 target_link_libraries(dead_store_elimination_arm64 PRIVATE dragon::libdragon)
 
 target_include_directories(dead_store_elimination_arm64 PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/include
         ${LLVM_INCLUDE_DIRS}
 )
 
@@ -65,7 +65,7 @@ if(DRAGON_USE_Z3)
     target_link_libraries(symbolic_execution PRIVATE dragon::libdragon z3::libz3)
 
     target_include_directories(symbolic_execution PRIVATE
-            ${CMAKE_SOURCE_DIR}/include
+            ${PROJECT_SOURCE_DIR}/include
             ${LLVM_INCLUDE_DIRS}
     )
 
@@ -74,7 +74,7 @@ if(DRAGON_USE_Z3)
     target_link_libraries(z3_path_discovery PRIVATE dragon::libdragon z3::libz3)
 
     target_include_directories(z3_path_discovery PRIVATE
-            ${CMAKE_SOURCE_DIR}/include
+            ${PROJECT_SOURCE_DIR}/include
             ${LLVM_INCLUDE_DIRS}
     )
 endif()
@@ -89,7 +89,7 @@ if(DRAGON_USE_UNICORN)
     target_link_libraries(toy_vm_devirtualization PRIVATE dragon::libdragon)
 
     target_include_directories(toy_vm_devirtualization PRIVATE
-            ${CMAKE_SOURCE_DIR}/include
+            ${PROJECT_SOURCE_DIR}/include
             ${LLVM_INCLUDE_DIRS}
     )
 
@@ -107,7 +107,7 @@ if(DRAGON_USE_UNICORN)
     target_link_libraries(toy_vm_handler_recovery PRIVATE dragon::libdragon)
 
     target_include_directories(toy_vm_handler_recovery PRIVATE
-            ${CMAKE_SOURCE_DIR}/include
+            ${PROJECT_SOURCE_DIR}/include
             ${LLVM_INCLUDE_DIRS}
     )
 

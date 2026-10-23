@@ -308,6 +308,12 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
                    ? v
                    : builder.CreateBitCast(v, builder.getDoubleTy());
   };
+  // A 32-bit address is unsigned, but a GEP sign-extends its index.
+  auto memAddress = [&](llvm::Value *addr) {
+    auto *indexTy = module_->getDataLayout().getIndexType(memPtr->getType());
+    return builder.CreateGEP(builder.getInt8Ty(), memPtr,
+                             builder.CreateZExtOrBitCast(addr, indexTy));
+  };
 
   switch (op.opcode) {
     // --- Data movement ---
@@ -315,16 +321,12 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       emit(r0());
       break;
 
-    case ignil::Opcode::LOAD: {
-      auto *ptr = builder.CreateGEP(builder.getInt8Ty(), memPtr, r0());
-      emit(builder.CreateLoad(dstTy(), ptr));
+    case ignil::Opcode::LOAD:
+      emit(builder.CreateLoad(dstTy(), memAddress(r0())));
       break;
-    }
-    case ignil::Opcode::STORE: {
-      auto *ptr = builder.CreateGEP(builder.getInt8Ty(), memPtr, r0());
-      builder.CreateStore(r1(), ptr);
+    case ignil::Opcode::STORE:
+      builder.CreateStore(r1(), memAddress(r0()));
       break;
-    }
 
     // --- Arithmetic ---
     case ignil::Opcode::ADD:
@@ -493,7 +495,7 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
                                std::format("fn_{:x}", ci->getZExtValue()), fnTy)
                         .getCallee();
       } else {
-        callee = target; // indirect call
+        callee = builder.CreateIntToPtr(target, ptrTy); // indirect call
       }
       builder.CreateCall(fnTy, callee, {memPtr});
       break;
@@ -606,8 +608,17 @@ void dragon::llvmlifter::LLVMLifter::mergeIntoParent(
     return;
 
   for (auto &[bigWidth, slot]: it->second) {
-    if (bigWidth <= width)
+    if (bigWidth == width)
       continue;
+
+    // A narrower slot is the low bits of the new value (`mov ecx, 0xffff`
+    // then `inc cx` must read CX = 0xffff, not the stale CX slot).
+    if (bigWidth < width) {
+      builder.CreateStore(
+              builder.CreateTrunc(value, llvm::IntegerType::get(*ctx_, bigWidth)),
+              slot);
+      continue;
+    }
 
     auto *bigTy = llvm::IntegerType::get(*ctx_, bigWidth);
 

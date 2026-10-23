@@ -7,7 +7,7 @@ if(DRAGON_USE_Z3)
     target_link_libraries(obfush_constant_recovery PRIVATE dragon::libdragon z3::libz3)
 
     target_include_directories(obfush_constant_recovery PRIVATE
-            ${CMAKE_SOURCE_DIR}/include
+            ${PROJECT_SOURCE_DIR}/include
             ${LLVM_INCLUDE_DIRS}
     )
 endif()
@@ -22,7 +22,7 @@ if(DRAGON_USE_UNICORN)
     target_link_libraries(obfush_full_recovery PRIVATE dragon::libdragon)
 
     target_include_directories(obfush_full_recovery PRIVATE
-            ${CMAKE_SOURCE_DIR}/include
+            ${PROJECT_SOURCE_DIR}/include
             ${LLVM_INCLUDE_DIRS}
     )
 

@@ -1,7 +1,7 @@
 #pragma once
 
-// Emulation-based semantic round-trip: run raw x86-64 bytes under Unicorn to
-// get "expected" CPU state, run the same bytes through dragon-tales'
+// Emulation-based semantic round-trip: run raw x86 bytes (64- or 32-bit) under
+// Unicorn to get "expected" CPU state, run the same bytes through dragon-tales'
 // Disassembler -> X86IGNILLifter -> LLVMLifter -> ORC JIT to get "actual"
 // state, and let the caller diff them.
 //
@@ -33,13 +33,15 @@
 // performs (see the comment in X86IGNILLifter.cpp::liftRet) - the lifted
 // function returns via a plain LLVM `ret void` once IGNIL RET is reached,
 // so RSP on that side never sees the pop. To stay comparable, runUnicorn
-// subtracts the 8 bytes back off its own final RSP reading before
-// returning, undoing the sentinel pop's effect on that one register.
+// subtracts the return address size (8 bytes, 4 in 32-bit) back off its own
+// final RSP reading before returning, undoing the sentinel pop's effect on
+// that one register.
 
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 
+#include <llvm/ExecutionEngine/Orc/ExecutionUtils.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/IRReader/IRReader.h>
 #include <llvm/Support/SourceMgr.h>
@@ -139,10 +141,12 @@ struct RoundTripResult {
 // something either lifter path is responsible for reproducing - mask it
 // out of both sides before comparing, same idea as maskUnmodeledFlags.
 inline void maskSentinelSlot(std::vector<std::uint8_t> &mem,
-                             const RegBuf &initialRegs) {
+                             const RegBuf &initialRegs,
+                             Architecture arch = Architecture::X86_64) {
   const std::uint64_t initialSP = getReg64(initialRegs, x86off::RSP);
   const std::uint64_t offset = initialSP - kMemBase;
-  for (std::uint64_t i = 0; i < 8 && offset + i < mem.size(); ++i)
+  const std::uint64_t slotSize = arch == Architecture::X86_32 ? 4 : 8;
+  for (std::uint64_t i = 0; i < slotSize && offset + i < mem.size(); ++i)
     mem[offset + i] = 0;
 }
 
@@ -171,6 +175,29 @@ inline const std::array<std::pair<int, std::uint32_t>, 16> &gprRegMap() {
   return map;
 }
 
+// The 32-bit registers live in the low half of the same IGNIL slots as their
+// 64-bit parents (EAX in RAX's), so one RegBuf layout serves both modes.
+inline const std::array<std::pair<int, std::uint32_t>, 8> &gprRegMap32() {
+  static const std::array<std::pair<int, std::uint32_t>, 8> map = {{
+          {UC_X86_REG_EAX, x86off::RAX},
+          {UC_X86_REG_ECX, x86off::RCX},
+          {UC_X86_REG_EDX, x86off::RDX},
+          {UC_X86_REG_EBX, x86off::RBX},
+          {UC_X86_REG_ESP, x86off::RSP},
+          {UC_X86_REG_EBP, x86off::RBP},
+          {UC_X86_REG_ESI, x86off::RSI},
+          {UC_X86_REG_EDI, x86off::RDI},
+  }};
+  return map;
+}
+
+inline std::span<const std::pair<int, std::uint32_t>>
+gprRegMap(Architecture arch) {
+  if (arch == Architecture::X86_32)
+    return gprRegMap32();
+  return gprRegMap();
+}
+
 inline void requireUc(uc_err err, const char *what) {
   if (err != UC_ERR_OK)
     throw std::runtime_error(std::string(what) + ": " + uc_strerror(err));
@@ -182,14 +209,18 @@ inline void requireUc(uc_err err, const char *what) {
 // actually executed, just used as a PC value for uc_emu_start to stop at.
 constexpr std::uint64_t kReturnSentinel = 0x7fff0000ULL;
 
-// Runs `code` on real (emulated) x86-64 hardware via Unicorn. Every path
+// Runs `code` on real (emulated) x86 hardware via Unicorn. Every path
 // through `code` must eventually execute a `ret` - see the file header
 // comment for how that's turned into a well-defined stopping point.
 inline RoundTripResult runUnicorn(std::span<const std::uint8_t> code,
                                   const RegBuf &initialRegs,
-                                  const std::vector<std::uint8_t> &initialMem) {
+                                  const std::vector<std::uint8_t> &initialMem,
+                                  Architecture arch = Architecture::X86_64) {
+  const bool is32 = arch == Architecture::X86_32;
+  const std::uint64_t ptrBytes = is32 ? 4 : 8;
   uc_engine *uc = nullptr;
-  detail::requireUc(uc_open(UC_ARCH_X86, UC_MODE_64, &uc), "uc_open");
+  detail::requireUc(uc_open(UC_ARCH_X86, is32 ? UC_MODE_32 : UC_MODE_64, &uc),
+                    "uc_open");
 
   constexpr std::uint64_t kCodePageSize = 0x1000;
   detail::requireUc(uc_mem_map(uc, kCodeBase, kCodePageSize, UC_PROT_ALL), "map code");
@@ -200,7 +231,7 @@ inline RoundTripResult runUnicorn(std::span<const std::uint8_t> code,
     detail::requireUc(uc_mem_write(uc, kMemBase, initialMem.data(), initialMem.size()),
                       "write initial mem");
 
-  for (auto [ucReg, offset]: detail::gprRegMap()) {
+  for (auto [ucReg, offset]: detail::gprRegMap(arch)) {
     std::uint64_t value = getReg64(initialRegs, offset);
     detail::requireUc(uc_reg_write(uc, ucReg, &value), "write gpr");
   }
@@ -217,15 +248,15 @@ inline RoundTripResult runUnicorn(std::span<const std::uint8_t> code,
   // RSP at the end, even though both sides handled push/pop internally
   // consistently.
   const std::uint64_t initialSP = getReg64(initialRegs, x86off::RSP);
-  detail::requireUc(uc_mem_write(uc, initialSP, &kReturnSentinel, sizeof(kReturnSentinel)),
+  detail::requireUc(uc_mem_write(uc, initialSP, &kReturnSentinel, ptrBytes),
                     "write ret sentinel");
 
   {
     uc_err err = uc_emu_start(uc, kCodeBase, kReturnSentinel, 0, 0);
     if (err != UC_ERR_OK) {
       std::uint64_t pc = 0, sp = 0;
-      uc_reg_read(uc, UC_X86_REG_RIP, &pc);
-      uc_reg_read(uc, UC_X86_REG_RSP, &sp);
+      uc_reg_read(uc, is32 ? UC_X86_REG_EIP : UC_X86_REG_RIP, &pc);
+      uc_reg_read(uc, is32 ? UC_X86_REG_ESP : UC_X86_REG_RSP, &sp);
       throw std::runtime_error(std::string("uc_emu_start: ") + uc_strerror(err) +
                                std::format(" at RIP=0x{:x} RSP=0x{:x}", pc, sp));
     }
@@ -233,14 +264,15 @@ inline RoundTripResult runUnicorn(std::span<const std::uint8_t> code,
 
   RoundTripResult result;
   result.mem.resize(kMemSize);
-  for (auto [ucReg, offset]: detail::gprRegMap()) {
+  for (auto [ucReg, offset]: detail::gprRegMap(arch)) {
     std::uint64_t value = 0;
     detail::requireUc(uc_reg_read(uc, ucReg, &value), "read gpr");
     setReg64(result.regs, offset, value);
   }
   // Undo the sentinel `ret`'s pop so RSP stays comparable with the lifted
   // side, which never modeled it (see file header comment).
-  setReg64(result.regs, x86off::RSP, getReg64(result.regs, x86off::RSP) - 8);
+  setReg64(result.regs, x86off::RSP,
+           getReg64(result.regs, x86off::RSP) - ptrBytes);
 
   std::uint64_t eflagsOut = 0;
   detail::requireUc(uc_reg_read(uc, UC_X86_REG_EFLAGS, &eflagsOut), "read eflags");
@@ -256,7 +288,8 @@ inline RoundTripResult runUnicorn(std::span<const std::uint8_t> code,
 inline RoundTripResult runLifted(std::span<const std::uint8_t> code,
                                  const RegBuf &initialRegs,
                                  const std::vector<std::uint8_t> &initialMem,
-                                 std::uint64_t entryAddr = kCodeBase) {
+                                 std::uint64_t entryAddr = kCodeBase,
+                                 Architecture arch = Architecture::X86_64) {
   static std::once_flag jitInitFlag;
   std::call_once(jitInitFlag, [] {
     llvm::InitializeNativeTarget();
@@ -267,11 +300,11 @@ inline RoundTripResult runLifted(std::span<const std::uint8_t> code,
   cfg.disassemblyStrategy = dragon::DisassemblyStrategy::LINEAR_SWEEP;
   cfg.syntax = dragon::Syntax::INTEL;
 
-  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
-  dragon::Graph g(dragon::Architecture::X86_64, cfg);
+  dragon::Disassembler dis(arch, cfg);
+  dragon::Graph g(arch, cfg);
   dis.disassemble(std::vector<std::uint8_t>(code.begin(), code.end()), entryAddr, g);
 
-  dragon::llvmlifter::LLVMLifter llvml(dragon::Architecture::X86_64, "semantic_rt");
+  dragon::llvmlifter::LLVMLifter llvml(arch, "semantic_rt");
 
   bool lifted = false;
   for (auto &fn: g.functions()) {
@@ -297,6 +330,37 @@ inline RoundTripResult runLifted(std::span<const std::uint8_t> code,
     throw std::runtime_error("runLifted: LLJITBuilder failed: " +
                              llvm::toString(jitOrErr.takeError()));
   auto jit = std::move(*jitOrErr);
+
+#ifdef DRAGON_TEST_COMPILER_RT_BUILTINS
+  // i128 division calls compiler-rt helpers, which MSVC processes lack. The
+  // archive's /GS objects also need the stack cookie, defined in JIT memory
+  // to stay within RIP-relative reach.
+  {
+    auto builtins = llvm::orc::StaticLibraryDefinitionGenerator::Load(
+            jit->getObjLinkingLayer(), DRAGON_TEST_COMPILER_RT_BUILTINS);
+    if (!builtins)
+      throw std::runtime_error(
+              "runLifted: loading compiler-rt builtins failed: " +
+              llvm::toString(builtins.takeError()));
+    jit->getMainJITDylib().addGenerator(std::move(*builtins));
+
+    static constexpr std::string_view kGsIR =
+            "@__security_cookie = global i64 3141592653589793\n"
+            "define void @__security_check_cookie(i64 %cookie) {\n"
+            "  ret void\n"
+            "}\n";
+    auto gsCtx = std::make_unique<llvm::LLVMContext>();
+    auto gsMod = llvm::parseIR(llvm::MemoryBufferRef(kGsIR, "gs"), err, *gsCtx);
+    if (!gsMod)
+      throw std::runtime_error("runLifted: parseIR(gs) failed: " +
+                               err.getMessage().str());
+    if (auto e = jit->addIRModule(llvm::orc::ThreadSafeModule(
+                std::move(gsMod),
+                llvm::orc::ThreadSafeContext(std::move(gsCtx)))))
+      throw std::runtime_error("runLifted: addIRModule(gs) failed: " +
+                               llvm::toString(std::move(e)));
+  }
+#endif
 
   llvm::orc::ThreadSafeContext tsCtx(std::move(ctx));
   llvm::orc::ThreadSafeModule tsm(std::move(mod), tsCtx);
