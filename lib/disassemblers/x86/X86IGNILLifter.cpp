@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include <llvm/MC/MCInst.h>
+#include <llvm/Support/raw_ostream.h>
 
 // Authoritative IGNIL register address space for the x86 lifter.
 // Entries are defined in x86registers.def via the REG(name, offset, width)
@@ -193,7 +194,6 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"TEST32ri", &X86IGNILLifter::opTest32ri_},
           {"JMP64r", &X86IGNILLifter::opJmp64r_},
           {"JMP_1", &X86IGNILLifter::opJmp_},
-          {"JMP", &X86IGNILLifter::opJmp_},
           {"LOOP", &X86IGNILLifter::opLoop_},
           {"JMP64m", &X86IGNILLifter::opJmp64m_},
           {"JMP32m", &X86IGNILLifter::opJmp32m_},
@@ -551,6 +551,15 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
     else if (auto sx = movsxByName.find(name); sx != movsxByName.end())
       movsxForms_.emplace(i, sx->second);
   }
+
+#ifndef NDEBUG
+  // A name this LLVM does not have leaves its field 0 and the instruction
+  // silently unlifted (RETL/RETIL were renamed RET32/RETI32). Say so.
+  for (const auto &entry: kOpcodeFields)
+    if (!nameToOpc.contains(entry.first))
+      llvm::errs() << "X86IGNILLifter: no LLVM opcode named " << entry.first
+                   << "\n";
+#endif
 
   for (const auto &[rev, base]: kRevAliases) {
     auto r = nameToOpc.find(rev), b = nameToOpc.find(base);
