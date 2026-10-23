@@ -630,7 +630,7 @@ class X86IGNILLifter {
   unsigned opImul32rr_{}, opImul64rr_{};
   unsigned opLea64_32r_{};
   unsigned opInc32r_{}, opInc64r_{}, opDec32r_{}, opDec64r_{};
-  unsigned opDec32r_alt_{}; // 0x48+r, 32-bit only
+  unsigned opInc32r_alt_{}, opDec32r_alt_{}; // 0x40+r / 0x48+r, 32-bit only
   unsigned opNeg32r_{}, opNeg64r_{};
   unsigned opShl32ri_{}, opShl64ri_{}, opShr32ri_{}, opShr64ri_{};
   unsigned opSar32r1_{}, opSar64r1_{}, opShl32r1_{}, opShl64r1_{},
@@ -710,6 +710,7 @@ class X86IGNILLifter {
           opCmp16ri8_{};
   unsigned opTest8rr_{}, opTest16rr_{}, opTest8ri_{}, opTest16ri_{};
   unsigned opInc8r_{}, opInc16r_{}, opDec8r_{}, opDec16r_{};
+  unsigned opInc16r_alt_{}, opDec16r_alt_{}; // 66 40+r / 66 48+r, 32-bit only
   unsigned opXchg8rr_{}, opXchg16rr_{}, opXchg32rr_{}, opXchg64rr_{};
   unsigned opXchg32rm_{}, opXchg8rm_{};
   unsigned opBswap32r_{}, opBswap64r_{};

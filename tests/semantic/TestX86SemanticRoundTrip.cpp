@@ -1001,6 +1001,36 @@ TEST_CASE("Semantic round-trip - a sub-register read sees the parent's write",
   requireStatesMatch(expected, actual, initialRegs);
 }
 
+TEST_CASE("Semantic round-trip - i386 inc/dec short forms",
+          "[semantic][x86_32]") {
+  // INC/DEC leave CF alone: stc first so a stray CF write shows up.
+  const std::vector<std::uint8_t> code = {
+          0x55, // push ebp
+          0x89, 0xe5, // mov ebp, esp
+          0xb8, 0xff, 0xff, 0xff, 0x7f, // mov eax, 0x7FFFFFFF
+          0xb9, 0xff, 0xff, 0x00, 0x00, // mov ecx, 0xFFFF
+          0x31, 0xd2, // xor edx, edx
+          0xf9, // stc
+          0x40, // inc eax (INC32r_alt): OF set
+          0x66, 0x41, // inc cx (INC16r_alt): wraps to 0
+          0x66, 0x4a, // dec dx (DEC16r_alt): 0xFFFF, SF set
+          0x5d, // pop ebp
+          0xc3, // ret
+  };
+  constexpr auto arch = dragon::Architecture::X86_32;
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+
+  auto expected = runUnicorn(code, initialRegs, initialMem, arch);
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase, arch);
+
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 0x80000000);
+  REQUIRE(getReg64(actual.regs, x86off::RCX) == 0);
+  REQUIRE(getReg64(actual.regs, x86off::RDX) == 0xffff);
+  REQUIRE(actual.regs[x86off::CF] == 1);
+  requireStatesMatch(expected, actual, initialRegs, arch);
+}
+
 TEST_CASE("Semantic round-trip - i386 cld clears DF", "[semantic][x86_32]") {
   // popfd sets DF only.
   const std::vector<std::uint8_t> code = {

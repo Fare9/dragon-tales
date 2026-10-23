@@ -221,6 +221,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"INC32r", &X86IGNILLifter::opInc32r_},
           {"INC64r", &X86IGNILLifter::opInc64r_},
           {"DEC32r", &X86IGNILLifter::opDec32r_},
+          {"INC32r_alt", &X86IGNILLifter::opInc32r_alt_},
           {"DEC32r_alt", &X86IGNILLifter::opDec32r_alt_},
           {"DEC64r", &X86IGNILLifter::opDec64r_},
           {"NEG32r", &X86IGNILLifter::opNeg32r_},
@@ -433,6 +434,8 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"TEST16ri", &X86IGNILLifter::opTest16ri_},
           {"INC16r", &X86IGNILLifter::opInc16r_},
           {"DEC16r", &X86IGNILLifter::opDec16r_},
+          {"INC16r_alt", &X86IGNILLifter::opInc16r_alt_},
+          {"DEC16r_alt", &X86IGNILLifter::opDec16r_alt_},
           {"XCHG8rr", &X86IGNILLifter::opXchg8rr_},
           {"XCHG16rr", &X86IGNILLifter::opXchg16rr_},
           {"XCHG32rr", &X86IGNILLifter::opXchg32rr_},
@@ -964,7 +967,7 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftImulRR(*mc, addr, out, tempId);
   else if (opc == opLea64_32r_)
     liftLeaTrunc32(*mc, addr, out, tempId);
-  else if (opc == opInc32r_ || opc == opInc64r_)
+  else if (opc == opInc32r_ || opc == opInc32r_alt_ || opc == opInc64r_)
     liftInc(*mc, addr, out, tempId);
   else if (opc == opDec32r_ || opc == opDec32r_alt_ || opc == opDec64r_)
     liftDec(*mc, addr, out, tempId);
@@ -1005,9 +1008,9 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opTest8rr_ || opc == opTest16rr_ || opc == opTest8ri_ ||
            opc == opTest16ri_)
     liftTest(*mc, addr, out, tempId);
-  else if (opc == opInc8r_ || opc == opInc16r_)
+  else if (opc == opInc8r_ || opc == opInc16r_ || opc == opInc16r_alt_)
     liftInc(*mc, addr, out, tempId);
-  else if (opc == opDec8r_ || opc == opDec16r_)
+  else if (opc == opDec8r_ || opc == opDec16r_ || opc == opDec16r_alt_)
     liftDec(*mc, addr, out, tempId);
   else if (opc == opXchg8rr_ || opc == opXchg16rr_ || opc == opXchg32rr_ ||
            opc == opXchg64rr_)
