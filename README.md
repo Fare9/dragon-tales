@@ -14,7 +14,8 @@ Features:
 - **SwitchDetector** — recognize a jump-table indirect-branch pattern from a sliced jump target and read its concrete case targets
 - **FLIRT-compatible signature matching** — identify known functions from `.pat` signature databases
 - **Trace lifting** — lift an arbitrary linear instruction sequence (e.g. a captured execution trace) straight to IGNIL, bypassing CFG/function/block-validity analysis entirely
-- **Binary loader** — parse an ELF or PE/COFF file (or in-memory bytes) straight into a `LoadedImage`: sections at their virtual addresses with R/W/X permissions, entry point, image base, symbols with import/export flags, and the architecture auto-detected from the header (no need to name it). `loader::disassembleImage` goes from a file to a populated `Graph` in one call. Built on LLVM's `llvm::object`, so no extra dependency
+- **Binary loader** — parse an ELF or PE/COFF file (or in-memory bytes) straight into a `LoadedImage`: sections and ELF `PT_LOAD` segments at their virtual addresses with R/W/X permissions, entry point, image base, symbols with import/export flags, and the architecture auto-detected from the header (no need to name it). `loader::disassembleImage` goes from a file to a populated `Graph` in one call. Built on LLVM's `llvm::object`, so no extra dependency
+- **`disassembler` CLI** — a command-line tool that loads an ELF or PE binary and dumps disassembly, useful for quick inspection and scripting
 - C shim (`dragon_c.h`) and Python API (cffi) covering most of the feature set above (a few C++-only corners — pattern-matching DSL templates, architecture-specific instruction classification helpers, and similar — are documented as such in `docs/cpp_api.md`)
 
 ## Requirements
@@ -209,11 +210,12 @@ include/        C++ public headers
     analysis/SwitchDetector.hpp      — recognizes jump-table dispatch patterns and reads their targets
     sigs/SignatureDB.hpp             — loaded collection of FLIRT .pat signatures
     sigs/SignatureMatcher.hpp        — matches signatures against raw bytes
-    loader/Loader.hpp                — parse an ELF/PE file into a LoadedImage (sections, symbols, entry)
+    loader/Loader.hpp                — parse an ELF/PE file into a LoadedImage (sections, segments, symbols, entry)
     loader/ImageDisassembler.hpp     — disassembleImage(): a LoadedImage straight to a populated Graph
 lib/            C++ implementation
 c_shim/         C API (dragon_c.h + libdragon_c.so)
 python/         Python API (cffi, wraps the C shim)
+tool/           CLI tools (disassembler, opcode_audit)
 tests/          Catch2 test suite
 docs/           API documentation and examples
 ```
