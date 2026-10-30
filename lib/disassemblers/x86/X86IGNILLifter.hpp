@@ -131,10 +131,11 @@ class X86IGNILLifter {
   void liftLogicRegMem(const llvm::MCInst &mc, std::uint64_t addr,
                        ignil::Block &out, std::uint32_t &tmp,
                        ignil::Opcode op) const;
-  // [mem] op= reg-or-imm, as liftLogicRegMem.
+  // [mem] op= reg-or-imm, as liftLogicRegMem. `opWidth` is the memory
+  // operand's width: an immediate form has no register to read it from.
   void liftLogicMem(const llvm::MCInst &mc, std::uint64_t addr,
-                    ignil::Block &out, std::uint32_t &tmp,
-                    ignil::Opcode op) const;
+                    ignil::Block &out, std::uint32_t &tmp, ignil::Opcode op,
+                    ignil::Width opWidth) const;
   void liftXor(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftAnd(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -601,7 +602,7 @@ class X86IGNILLifter {
   unsigned opSub64mi_{}, opSub32mi_{}, opSub64mi8_{}, opSub32mi8_{};
   unsigned opSub64rm_{}, opSub32rm_{};
   unsigned opXor64rr_{}, opXor32rr_{};
-  unsigned opXor32rm_{}, opXor32mi_{}, opXor32mr_{};
+  unsigned opXor32rm_{}, opXor32mi_{}, opXor32mr_{}, opXor8mi_{};
   unsigned opXor32ri_{}, opXor64ri_{}, opXor32ri8_{}, opXor64ri8_{};
   unsigned opAnd64rr_{}, opAnd32rr_{};
   unsigned opAnd32mr_{};
