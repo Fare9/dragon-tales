@@ -151,6 +151,20 @@ dis = dragon.Disassembler(dragon.Architecture.X86_64, cfg)
 graph = dis.disassemble(code, 0x1000)
 ```
 
+### Analysis: blocks, functions and IGNIL
+
+`disassemble()` gives you the flat instruction listing. `analyze()` takes the
+same arguments but goes further — it runs block and function discovery and
+lifts each block to IGNIL, so the `Graph` it returns has everything the
+backward slicer, the LLVM lifter and symbolic execution need.
+
+```python
+graph = dis.analyze(code, base_address=0x1000)
+```
+
+Use `disassemble()` when you only want the listing; use `analyze()` whenever a
+later step needs blocks, functions or IGNIL.
+
 ### Trace lifting
 
 `Disassembler.lift_trace()` lifts an arbitrary linear sequence of
@@ -253,6 +267,86 @@ raw = asm.assemble("nop\nret\n")
 
 ---
 
+## Loading a binary
+
+`LoadedImage` parses an ELF or PE/COFF file — or in-memory bytes — into its
+sections and segments at their virtual addresses, the entry point, the image
+base, the symbol table, and the architecture, all detected from the header.
+You never name the architecture: it comes from the file.
+
+```python
+img = dragon.LoadedImage.load_file('a.out')
+print(hex(img.image_base), 'arch', img.architecture)
+print('entry', hex(img.entry) if img.entry is not None else None)
+
+for s in img.sections():
+    print(s)        # <Section '.text' @0x1139 size=0x1a2 r-x>
+
+graph = img.disassemble()       # every executable section -> a populated Graph
+print(len(graph), 'instructions')
+```
+
+Load from bytes you already hold with `LoadedImage.load_bytes(data)`. Both
+classmethods raise `ValueError` with the loader's message on failure, and the
+image is a context manager:
+
+```python
+with dragon.LoadedImage.load_file('a.out') as img:
+    graph = img.disassemble()
+```
+
+### Sections, segments and symbols
+
+`sections()` and `segments()` both return `Section` objects (`name`,
+`address`, `virtual_size`, `readable`, `writable`, `executable`, `data`).
+Sections are the linker's view; segments are the ELF `PT_LOAD` regions the
+system loader actually maps, named `LOAD0`, `LOAD1`, … — the only layout left
+to work with once a protector strips the section headers. `segments()` is
+empty for PE.
+
+```python
+for seg in img.segments():
+    print(seg)      # <Section 'LOAD0' @0x400000 size=0x1000 r-x>
+
+for sym in img.symbols():
+    if sym.exported:
+        print(hex(sym.address), sym.name, sym.kind)
+```
+
+`read_virtual(address, size)` reads straight out of the mapped address space,
+or returns `None` if the range is unmapped — handy for following a pointer the
+disassembler turned up without caring which section it lands in.
+
+```python
+data = img.read_virtual(img.image_base, 4)
+print(data.hex() if data else 'unmapped')
+```
+
+### disassemble()
+
+`disassemble(config=None)` disassembles every executable section into a
+`Graph` built for the detected architecture, so a file reaches analysis in one
+call. Pass a `Configuration` to control syntax or strategy; omit it for the
+defaults.
+
+| Member | Type | Notes |
+|---|---|---|
+| `LoadedImage.load_file(path)` | `LoadedImage` | Classmethod; raises `ValueError` on failure |
+| `LoadedImage.load_bytes(data)` | `LoadedImage` | Classmethod; raises `ValueError` on failure |
+| `format` | `Format` | `ELF`, `PE`, or `UNKNOWN` |
+| `architecture` | `Architecture` | Detected from the header |
+| `is_64bit` | `bool` | |
+| `image_base` | `int` | |
+| `entry` | `int` or `None` | `None` when the image has no entry point |
+| `sections()` | `list[Section]` | |
+| `segments()` | `list[Section]` | ELF `PT_LOAD` regions; empty for PE |
+| `symbols()` | `list[Symbol]` | |
+| `read_virtual(address, size)` | `bytes` or `None` | `None` if the range is unmapped |
+| `disassemble(config=None)` | `Graph` | Every executable section |
+
+`Section` and `Symbol` are plain data objects; `Format` and `SymbolKind` are
+the enums listed under [Enum reference](#enum-reference).
+
 ---
 
 ## IGNIL blocks
@@ -300,6 +394,49 @@ print(simplified.to_string())
 
 `simplified` is a new, independently owned `IGNILBlock` — `ib` is left
 untouched and both must be cleaned up independently (context manager or GC).
+
+### Dead-store elimination
+
+`dead_store_eliminate(arch, live_out=None)` removes dead register and flag
+stores by byte-precise backward liveness: a value written to a register that
+is overwritten before it is ever read, and is not live on exit, is dropped.
+Unlike `simplify()` this *does* remove `Reg`-defining ops — which is what
+collapses VM-protector junk — so an instruction whose only live effect was the
+removed write disappears entirely. Side-effecting ops
+(`STORE`/`CALL`/`JMP`/`CJMP`/`RET`) are never removed.
+
+```python
+cleaned, removed = ib.dead_store_eliminate(dragon.Architecture.X86_64)
+print(f"{removed} ops removed")
+print(cleaned.to_string())
+```
+
+`arch` selects the register file used to resolve which bytes a 32-bit write
+zero-extends over, so pass the architecture the block was lifted for.
+`live_out` is an iterable of `(offset, width)` pairs — the first two fields of
+the `x86` / `arm` descriptors — naming the registers observable after the
+block. `None` (the default) assumes everything is live on exit, which removes a
+store only when it is provably overwritten within the block and so needs no ABI
+knowledge; passing a precise list (e.g. just the ABI return and callee-saved
+registers for a `RET`-terminated block) allows more aggressive elimination,
+with correctness then resting on the list being sound. The returned block is
+new and independently owned.
+
+### Instructions with no semantics
+
+`unlifted()` returns the machine addresses of the instructions the lifter had
+no semantics for, in order. Their results are `UNDEF`, so nothing downstream is
+silently wrong — but an `UNDEF` that later dies is invisible, and an
+instruction whose only effect is a memory write leaves no op at all. Check it
+when the block has to be a complete account of the code, e.g. before trusting a
+symbolic run of it. `simplify()` and `dead_store_eliminate()` carry the list
+over.
+
+```python
+missing = ib.unlifted()
+if missing:
+    print('no semantics for:', [hex(a) for a in missing])
+```
 
 ---
 
@@ -738,6 +875,88 @@ for w in result.warnings:
   a trace from `lift_trace()`, whose interior terminators must be stepped
   over.
 
+### Concrete readback and OPAQUE ops
+
+`concrete_register(reg)` and `concrete_memory(address, width)` return a plain
+`int` when the location holds a literal, or `None` when it is still symbolic —
+the cheap form of `evaluate(read_register(reg))` for a value expected to be
+concrete, with no expression handle and no solver. `write_register(reg, expr)`
+and `write_memory(address, expr)` store an expression rather than a host
+integer (`write_memory` is little-endian, as wide as the expression).
+
+An OPAQUE op — `CPUID`, `RDTSC`, `RDTSCP` — has a determinate value IGNIL
+cannot express, so by default `run()` turns its results into fresh variables.
+Pin them to keep a concolic trace concrete through an anti-tamper check:
+
+```python
+# CPUID(leaf=1, sub=0) -> fixed EAX/EBX/ECX/EDX
+ex.set_concrete_cpuid(1, 0, 0x000906EA, 0, 0x7FFAFBFF, 0xBFEBFBFF)
+```
+
+`set_concrete_opaque(kind, selector, results)` is the general form for the
+other kinds (`OPAQUE_CPUID`, `OPAQUE_RDTSC`, `OPAQUE_RDTSCP`), where `selector`
+identifies the invocation from its operands.
+
+### Snapshots and diffing
+
+Copying state is far cheaper than rebuilding it, so an analysis that runs many
+blocks from one seeded machine should seed once and rewind. `snapshot()`
+returns a `SymState`, and `restore()` puts it back:
+
+```python
+with dragon.SymbolicExecutor() as ex:
+    ex.symbolize_memory(0x4000, 16, 'input')
+    ex.set_register(x86.RDI, 0x4000)
+    seeded = ex.snapshot()
+
+    for block in blocks:
+        ex.restore(seeded)
+        ex.run(block)
+        ...
+```
+
+`diff(before)` reports every register and memory location whose value differs
+from a snapshot, as a list of `StateDelta` (`kind` is `'reg'` or `'mem'`, `key`
+the register offset or address, `width` in bits, `value` the `SymExpr` now
+held). A run of bytes that came from one written value is reported as that
+single value, so a 64-bit store is one delta and not eight.
+
+```python
+seeded = ex.snapshot()
+ex.run(block)
+for d in ex.diff(seeded):
+    print(d.kind, hex(d.key), d.width, d.value)
+```
+
+`SymState.merge(incoming, tag)` joins another snapshot into this one, turning
+every location the two disagree on into a fresh variable named after `tag`, and
+returns the symbolised locations as a `StateDelta` list — an empty list is the
+fixed-point signal for a worklist exploration. `set_fresh_tag(tag)` sets the
+suffix for the variables `run()` invents for loads it cannot resolve, so the
+same block run in two contexts can keep its fresh names apart.
+
+### Unresolved accesses
+
+When a symbolic address has more satisfying values than
+`max_address_solutions`, the access cannot be expanded: the load produces a
+fresh variable and the store is dropped, each with a warning.
+`RunResult.unresolved` lists them as `UnresolvedAccess` objects (`is_store`,
+`op_address`, `width`, `address`, `value`).
+
+### Exporting an expression
+
+Besides `to_string()`, a `SymExpr` can leave the library:
+
+```python
+print(expr.as_int())      # int if it folds to a <=64-bit literal, else None
+print(expr.to_smt2())     # a complete SMT-LIB 2 script, declarations included
+z3_term = expr.to_z3()    # a z3py term (needs the z3-solver package)
+```
+
+`to_smt2()` emits a self-contained script another Z3 binding can parse back
+without being told the free variables; `to_z3()` does exactly that and hands
+back the term.
+
 ### API summary
 
 | Symbol | Description |
@@ -756,12 +975,22 @@ for w in result.warnings:
 | `evaluate(expr)` → `int \| None` | Value, only if it is forced to exactly one |
 | `enumerate(expr, max)` → `(list, bool)` | Distinct values, and whether that list is complete |
 | `solve(goal)` → `Solution \| None` | A satisfying assignment |
+| `write_register(reg, expr)` / `write_memory(addr, expr)` | Store an expression, not a host int |
+| `concrete_register(reg)` / `concrete_memory(addr, width)` → `int \| None` | Literal value, or `None` if symbolic |
+| `set_concrete_cpuid(leaf, sub, eax, ebx, ecx, edx)` | Pin a CPUID OPAQUE result |
+| `set_concrete_opaque(kind, selector, results)` | Pin any OPAQUE result |
+| `set_fresh_tag(tag)` | Suffix for auto-invented load variables |
+| `snapshot()` → `SymState` / `restore(state)` | Copy / rewind the whole machine state |
+| `diff(before)` → `list[StateDelta]` | Locations changed since a snapshot |
 | `reset()` | Clear register, memory and constraint state |
 | `RunResult.successors` | `Successor(address, taken, condition)` list |
 | `RunResult.complete` | True only if that list is exhaustive |
 | `RunResult.warnings` | `SymWarning(address, message)` list |
+| `RunResult.unresolved` | `UnresolvedAccess(is_store, op_address, width, address, value)` list |
 | `RunResult.ops_executed` / `.solver_queries` / `.addresses_concretized` | Run statistics |
 | `Solution.value(name)` / `.values()` / `.bytes(region)` | Read the model back |
+| `SymState.merge(incoming, tag)` → `list[StateDelta]` | Join another snapshot; `[]` is the fixed point |
+| `SymExpr.as_int()` / `.to_smt2()` / `.to_z3()` | Fold to a literal / SMT-LIB 2 / z3py term |
 
 Constructor options, all deferring to the library default when omitted:
 `solver_timeout_ms` (5000), `max_address_solutions` (64),
@@ -781,6 +1010,13 @@ lifted x86-64.
 | `dragon.Syntax` | `INTEL`, `ATT` |
 | `dragon.Strategy` | `LINEAR_SWEEP`, `RECURSIVE_TRAVERSAL` |
 | `dragon.SliceExprType` | `CONST`, `SYM_REG`, `BINOP`, `UNARYOP`, `LOAD`, `UNDEF` |
-| `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF`, `FADD`, `FSUB`, `FMUL`, `FDIV`, `SITOFP`, `FPTOSI` (42 values) |
+| `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF`, `FADD`, `FSUB`, `FMUL`, `FDIV`, `SITOFP`, `FPTOSI`, `OPAQUE` (43 values) |
+| `dragon.Format` | `UNKNOWN`, `ELF`, `PE` |
+| `dragon.SymbolKind` | `UNKNOWN`, `FUNCTION`, `OBJECT`, `SECTION`, `FILE` |
+| `dragon.SymExecStatus` | `OK`, `MALFORMED_OP`, `UNSUPPORTED_OP`, `SOLVER_FAILURE` |
+| `dragon.SymExit` | `FALLTHROUGH`, `JUMP`, `CONDITIONAL_JUMP`, `CALL`, `RETURN`, `ERROR` |
 | `dragon.SwitchCandidate` | `table_base`, `entry_size`, `num_cases`, `index_reg_offset`, `index_reg_width` (plain data, not an enum) |
 | `dragon.SimplifyStats` | `constants_folded`, `identities_applied`, `ops_removed`, `iterations`, `changed` (plain data, not an enum) |
+| `dragon.Section` | `name`, `address`, `virtual_size`, `readable`, `writable`, `executable`, `data` (plain data, not an enum) |
+| `dragon.Symbol` | `name`, `address`, `size`, `kind`, `imported`, `exported` (plain data, not an enum) |
+| `dragon.StateDelta` | `kind`, `key`, `width`, `value`, `is_register` (plain data, not an enum) |

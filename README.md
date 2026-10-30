@@ -194,31 +194,18 @@ cmake --build build --config Release
 ## Structure
 
 ```
-include/        C++ public headers
-  dragon/
-    lifters/ignil/IGNIL.hpp          — IGNIL value types, opcodes, Block
-    lifters/ignil/IGNILSimplify.hpp  — peephole simplifier (constant folding, identities, dead-Temp elimination)
-    lifters/ignil/SymbolicExecutor.hpp — symbolic execution of IGNIL over Z3 (solving, branch/jump-target recovery)
-    lifters/ignil/x86/x86IGNILRegs.hpp — x86/x86-64 register constants (offsets, widths, names)
-    lifters/ignil/arm/armIGNILRegs.hpp — AArch64 register constants (offsets, widths, names)
-    lifters/llvm/LLVMLifter.hpp      — lifts a Function or a single IGNIL block to LLVM IR
-    analysis/SliceExpr.hpp           — expression tree produced by the backward slicer
-    analysis/SliceExprMatch.hpp      — template-based structural pattern matcher over SliceExpr trees
-    analysis/SliceExprZ3.hpp         — lowers a SliceExpr to a Z3 bitvector expression
-    analysis/ValueEnumerator.hpp     — enumerate or uniquely solve a SliceExpr's possible values via Z3
-    analysis/BackwardSlicer.hpp      — backward slicer over IGNIL CFGs
-    analysis/SwitchDetector.hpp      — recognizes jump-table dispatch patterns and reads their targets
-    sigs/SignatureDB.hpp             — loaded collection of FLIRT .pat signatures
-    sigs/SignatureMatcher.hpp        — matches signatures against raw bytes
-    loader/Loader.hpp                — parse an ELF/PE file into a LoadedImage (sections, segments, symbols, entry)
-    loader/ImageDisassembler.hpp     — disassembleImage(): a LoadedImage straight to a populated Graph
+include/        C++ public headers (dragon/)
 lib/            C++ implementation
 c_shim/         C API (dragon_c.h + libdragon_c.so)
 python/         Python API (cffi, wraps the C shim)
 tool/           CLI tools (disassembler, opcode_audit)
 tests/          Catch2 test suite
-docs/           API documentation and examples
+docs/           API documentation, examples, and the manual
 ```
+
+The public headers live under `include/dragon/`, grouped by area
+(`disassembler/`, `lifters/`, `analysis/`, `loader/`, `sigs/`). See the
+[API documentation](#documentation) below for the full surface.
 
 ## Documentation
 

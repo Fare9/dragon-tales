@@ -5,15 +5,33 @@
 ```
 include/dragon/Architecture.hpp
 include/dragon/Configuration.hpp
-include/dragon/disassembler/Disassembler.hpp
-include/dragon/assembler/Assembler.hpp
-include/dragon/disassembler/Graph.hpp
+include/dragon/disassembler/Disassembler.hpp        disassembly + trace lifting
+include/dragon/disassembler/Graph.hpp               CFG container
 include/dragon/disassembler/Instruction.hpp
 include/dragon/disassembler/BasicBlock.hpp
 include/dragon/disassembler/Function.hpp
+include/dragon/assembler/Assembler.hpp              assembly
+include/dragon/loader/Loader.hpp                    ELF/PE parsing
+include/dragon/loader/ImageDisassembler.hpp         file -> Graph
+include/dragon/lifters/ignil/IGNIL.hpp              IGNIL types and ops
+include/dragon/lifters/ignil/IGNILSimplify.hpp      peephole + dead-store elimination
+include/dragon/lifters/ignil/SymbolicExecutor.hpp   symbolic execution over Z3
+include/dragon/lifters/llvm/LLVMLifter.hpp          IGNIL -> LLVM IR
+include/dragon/analysis/BackwardSlicer.hpp          backward slicing
+include/dragon/analysis/SliceExpr.hpp               sliced-expression tree
+include/dragon/analysis/SliceExprMatch.hpp          structural matchers
+include/dragon/analysis/SliceExprZ3.hpp             SliceExpr -> Z3
+include/dragon/analysis/ValueEnumerator.hpp         enumerate/solve values
+include/dragon/analysis/ArgumentRecovery.hpp        function-signature recovery
+include/dragon/analysis/SwitchDetector.hpp          jump-table recovery
+include/dragon/sigs/SignatureDB.hpp                 FLIRT .pat signatures
+include/dragon/sigs/SignatureMatcher.hpp
 ```
 
-Link against `libdragon`.
+Link against `libdragon`. The x86/AArch64 register-constant headers
+(`lifters/ignil/{x86,arm}/…IGNILRegs.hpp`) are listed in their own sections
+below. The Z3 and symbolic-execution surface requires a build with
+`-DDRAGON_USE_Z3=ON`.
 
 ---
 
@@ -188,6 +206,136 @@ if (fn.isValid()) {
 
 ---
 
+## Loader
+
+`dragon::loader::LoadedImage` parses an ELF or PE/COFF file (or a blob of its
+bytes) into an owned image the rest of dragon can analyse — sections and ELF
+`PT_LOAD` segments at their virtual addresses with R/W/X permissions, the entry
+point, image base, symbols with import/export flags, and the architecture
+auto-detected from the header. The parse is delegated to LLVM's `llvm::object`
+(already a dependency), and everything is copied out into plain std structures,
+so a `LoadedImage` carries no LLVM types on its surface.
+
+```cpp
+#include <dragon/loader/Loader.hpp>
+
+std::string error;
+auto image = dragon::loader::LoadedImage::loadFile("a.out", &error);
+if (!image) {
+    std::cerr << "load failed: " << error << "\n";   // one-line reason
+    return 1;
+}
+
+// loadBytes copies an in-memory blob instead, same return contract:
+//   auto image = dragon::loader::LoadedImage::loadBytes(std::move(bytes), &error);
+```
+
+Both factories return `std::nullopt` on any failure (not found, unreadable, not
+an object file, truncated); the optional `error` out-parameter receives a
+one-line reason.
+
+### Image-level facts
+
+The architecture comes from the header, so a caller never has to name it by
+hand — `Disassembler`, `Graph` and `disassembleImage` all take it directly.
+
+```cpp
+image->format();         // dragon::loader::Format::ELF / PE / Unknown
+image->architecture();   // dragon::Architecture (Unknown if not modelled)
+image->is64Bit();        // bool
+image->imageBase();      // uint64_t (PE ImageBase; lowest ELF PT_LOAD addr)
+image->hasVirtualLayout(); // false for a relocatable .o/.obj (sections at 0)
+
+if (auto entry = image->entryPoint())   // std::optional<uint64_t>
+    std::cout << "entry 0x" << std::hex << *entry << "\n";
+// nullopt for a format with no entry (relocatable object, or a DLL/.so
+// without one).
+```
+
+`dragon::loader::formatName(format)` returns a human-readable `"elf"`, `"pe"`
+or `"unknown"`.
+
+### Sections and segments
+
+```cpp
+for (const dragon::loader::Section& s : image->sections()) {
+    std::cout << s.name << "  @0x" << std::hex << s.address
+              << " size=0x" << s.virtualSize
+              << (s.readable   ? " r" : " -")
+              << (s.writable   ? "w"  : "-")
+              << (s.executable ? "x"  : "-") << "\n";
+}
+
+// The section whose mapped range covers an address, or nullptr.
+const dragon::loader::Section* sec = image->sectionContaining(*image->entryPoint());
+
+// Executable sections in address order — the ones worth disassembling. Falls
+// back to executable segments when an ELF's section headers were stripped.
+for (const dragon::loader::Section* s : image->executableSections()) { /* ... */ }
+```
+
+A `Section` whose `virtualSize` is non-zero but whose `bytes` are empty is a
+BSS-style section — `s.isBss()` is true, and `readVirtual` zero-fills it.
+`s.contains(addr)` tests the mapped range.
+
+`segments()` returns the ELF `PT_LOAD` program headers as `Section`s named
+`"LOAD0"`, `"LOAD1"`, …, with `address`/`virtualSize` set to `p_vaddr`/`p_memsz`
+and `bytes` the `p_filesz` file bytes. This is what the system loader really
+maps, and the only layout left when a packer strips the section headers. Empty
+for PE and relocatable objects.
+
+```cpp
+// Read across whatever section (or, failing that, segment) covers addr,
+// zero-filling any BSS tail. nullopt if addr is unmapped or the run would
+// leave the covering section/segment.
+if (auto bytes = image->readVirtual(0x401000, 16)) { /* use *bytes */ }
+```
+
+### Symbols
+
+```cpp
+for (const dragon::loader::Symbol& s : image->symbols())
+    std::cout << s.name << " @0x" << std::hex << s.address
+              << (s.imported ? " [import]" : "")
+              << (s.exported ? " [export]" : "") << "\n";
+
+image->definedSymbols();   // std::vector<const Symbol*>, imports excluded
+image->imports();          // undefined externals the image expects
+image->exports();          // defined globals visible to other modules
+
+// The function-typed symbol defined exactly at addr, or nullptr — used to
+// seed and name recovered functions.
+const dragon::loader::Symbol* fn = image->functionAt(0x401000);
+```
+
+Each `Symbol` carries `name`, `address`, `size`, a `SymbolKind`
+(`Function`, `Object`, `Section`, `File`, `Unknown`), and the `imported` /
+`exported` flags. An `imported` symbol's `address` is not meaningful.
+
+### Straight to a Graph
+
+`disassembleImage` is the payoff: a file on disk to a populated `Graph` in one
+call, with no manual architecture or base-address bookkeeping. Every executable
+section is disassembled at its own virtual address, so cross-section calls and
+jumps resolve; the entry point and every function-typed symbol are registered
+as function starts.
+
+```cpp
+#include <dragon/loader/ImageDisassembler.hpp>
+
+dragon::Configuration config;                           // defaults are fine
+dragon::Graph graph = dragon::loader::disassembleImage(*image, config);
+// graph now holds blocks/functions/IGNIL for every executable section,
+// exactly like the graphs built by hand above — feed it straight to
+// BackwardSlicer, LLVMLifter, etc.
+```
+
+It returns an empty `Graph` (architecture `Unknown`) for an image whose
+architecture dragon does not model; check `image->architecture()` first when
+that matters.
+
+---
+
 ## Assembler
 
 ```cpp
@@ -309,6 +457,53 @@ std::cout << "folded=" << stats.constantsFolded
 // Or, if the stats aren't needed:
 dragon::ignil::Block quiet = dragon::ignil::simplifyBlock(block);
 ```
+
+### Dead-store elimination
+
+`ignil::deadStoreEliminate` (same header) removes dead register/flag stores
+from a single block, byte-precisely: a value written to a register or flag that
+is overwritten before it is ever read — and is not live on exit — carries no
+information, so its producing op can be dropped. Unlike `simplifyBlock`'s
+dead-*Temp* elimination, this also removes dead *Reg* stores, which is what
+collapses the junk-instruction noise VM protectors emit (walls of
+`rcl`/`shld`/`setcc` writing registers that are immediately popped over). The
+register address space is treated as a flat byte array, so overlapping
+sub-registers alias correctly.
+
+```cpp
+#include <dragon/lifters/ignil/IGNILSimplify.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
+
+dragon::ignil::Block block = dis.liftTrace(trace);
+
+// Conservative: no live-out set means "assume everything is live on exit", so
+// a store is removed only when provably overwritten within this block before
+// any read. Always sound, needs no ABI knowledge.
+dragon::ignil::Block cleaned = dragon::ignil::deadStoreEliminate(block);
+
+// Precise: name exactly the registers live on exit (e.g. a RET-terminated
+// block whose live-out is the ABI return + callee-saved registers). Anything
+// else is dead at exit and may be eliminated more aggressively — correctness
+// then rests on the caller supplying a sound live-out set.
+std::vector<dragon::ignil::Reg> liveOut = { dragon::x86::RAX };
+dragon::ignil::Block tight = dragon::ignil::deadStoreEliminate(block, liveOut);
+
+// Stats-reporting overload (reports opsRemoved):
+dragon::ignil::SimplifyStats stats;
+dragon::ignil::Block s = dragon::ignil::deadStoreEliminate(block, liveOut, stats);
+```
+
+`DeadStoreOptions` tunes the removal model:
+
+| Field | Meaning |
+|---|---|
+| `zeroExtendOn32BitWrite` | Model the x86-64/AArch64 rule that a 32-bit write clears its parent register (default `true`). Required for *correctness* of the removal decision; turn off only for a target where a 32-bit write is a merge. |
+| `registerFile` | The target's maximal registers, so a 32-bit write's parent — and the byte range it zero-extends over — resolves exactly. Pass `dragon::x86::registerFile()` or `dragon::arm::registerFile()`. Matters for any block that can touch FP/SIMD lane views (e.g. AArch64 `S0` is a 32-bit view of the 128-bit `V0`); left empty, an 8-byte parent is assumed. |
+
+Block-local and semantics-preserving: side-effecting ops
+(`STORE`/`CALL`/`JMP`/`CJMP`/`RET`) are never removed, and a store is dropped
+only when *every* byte it clobbers is dead. Dead Temps are dropped too,
+subsuming the Temp DCE in `simplifyBlock`.
 
 ### x86 register constants
 
@@ -465,6 +660,70 @@ print(expr);
 | `UnaryOp` | `op`, `operand` | Unary operation |
 | `Load` | `addr`, `width` | Memory read |
 | `Undef` | — | Unresolvable value |
+
+---
+
+## Argument recovery
+
+`dragon::analysis::recoverSignature` is the forward counterpart to the backward
+slicer: the slicer asks what one value depends on, argument recovery asks what a
+whole function *consumes and produces*. The core is a live-variable analysis
+over the function's IGNIL CFG — a register read along some path from the entry
+before it is written is *live-in*, i.e. the function expects a caller to have
+set it. Intersecting the live-in set with the target's calling convention yields
+the argument list; the convention's return register, if the body ever writes it,
+yields the return value.
+
+```cpp
+#include <dragon/analysis/ArgumentRecovery.hpp>
+#include <dragon/disassembler/Function.hpp>
+
+// A tiny x86-64 function: mov eax, edi ; add eax, esi ; ret
+//   (reads EDI and ESI, returns through EAX)
+dragon::Function fn(&graph, 0x1000);
+
+dragon::analysis::FunctionSignature sig =
+    dragon::analysis::recoverSignature(fn, graph, dragon::Architecture::X86_64);
+
+std::cout << dragon::analysis::toString(sig, 0x1000) << "\n";
+// i32 sub_1000(i32 RDI, i32 RSI)
+
+for (const auto& arg : sig.arguments)          // RecoveredArgument
+    std::cout << "arg " << arg.index << ": " << arg.reg.name << "\n";
+
+if (sig.returnsVoid())
+    std::cout << "returns void\n";
+else
+    std::cout << "returns " << sig.returnValue->name << "\n";
+```
+
+`liveInRegisters(fn, graph)` exposes the raw live-in register-offset set if you
+want it (RSP/RBP/flags appear there too and are filtered out of the signature).
+Widths are read off the IGNIL — a function that only ever touches `EDI` reports
+an `i32` argument, not `i64`.
+
+What it recovers is the common integer/pointer ABI shape, deliberately not every
+corner of it. Documented limits:
+
+- **Integer class only** — floating-point/vector (XMM/SIMD) arguments,
+  register-passed structs, and stack-passed arguments beyond the register count
+  are not recovered.
+- **Register-offset granularity** — a read of `EDI` counts as a use of the `RDI`
+  slot; sub-register width is consulted only to size the result.
+- **Arguments are the contiguous convention prefix** up to the highest live-in
+  argument register.
+- **Two conventions modelled** — x86-64 System V and AArch64 AAPCS64. An
+  unmodelled architecture (or an invalid function) yields an all-void,
+  no-argument signature.
+
+| Symbol | Description |
+|---|---|
+| `recoverSignature(fn, graph, arch)` → `FunctionSignature` | Recover the prototype |
+| `liveInRegisters(fn, graph)` → `set<uint32_t>` | Raw live-in register offsets |
+| `toString(sig, address)` → `string` | A C-like prototype string |
+| `FunctionSignature::arguments` | `vector<RecoveredArgument>` (`reg`, `index`) |
+| `FunctionSignature::returnValue` | `optional<ignil::Reg>` (nullopt for void) |
+| `FunctionSignature::returnsVoid()` | Convenience predicate |
 
 ---
 
@@ -888,7 +1147,8 @@ Recognition is two-phase:
 ```cpp
 #include <dragon/analysis/SwitchDetector.hpp>
 
-// graph must come from Disassembler::analyze()
+// graph must be populated by disassemble(bytes, baseAddr, graph) or
+// loader::disassembleImage, so its IGNIL blocks exist
 dragon::BackwardSlicer slicer{5};
 dragon::slice::Expr jumpTarget =
     slicer.slice(ignil::Value{reg}, blockAddr, graph);
@@ -924,3 +1184,76 @@ if (sw) {
 |---|---|
 | `detectPossibleSwitch(expr, blockAddr, graph)` → `optional<SwitchCandidate>` | Returns nullopt when the expression does not match the jump-table pattern |
 | `readTableTargets(sw, bytes, baseAddr)` → `vector<uint64_t>` | Reads `numCases` entries from the byte buffer; returns empty when out of range or `numCases == 0` |
+
+---
+
+## FLIRT signature matching
+
+The `dragon::sigs` namespace identifies known library functions from IDA
+FLIRT-compatible `.pat` signature databases (the text format produced by
+IDA/FLAIR's `sigmake`/`pelf` tools). A `SignatureDB` holds a loaded collection;
+`SignatureMatcher` matches it against raw bytes.
+
+```cpp
+#include <dragon/sigs/SignatureDB.hpp>
+#include <dragon/sigs/SignatureMatcher.hpp>
+
+dragon::sigs::SignatureDB db;
+db.loadDirectory("sigs/");                 // every .pat directly inside (non-recursive)
+db.loadFile("sigs/libc.pat");              // or a single file
+std::cout << db.signatureCount() << " signatures loaded\n";
+
+// Match one address — bytes must begin at the candidate function's address.
+if (auto m = dragon::sigs::SignatureMatcher::matchAt(db, bytes, 0x1000))
+    std::cout << "0x" << std::hex << m->address << ": " << m->name << "\n";
+
+// Or sweep a set of entry points over a whole image. Every name a matching
+// signature defines is reported (a module can bundle several functions under
+// one pattern), so one entry point may produce more than one match.
+std::vector<uint64_t> entries = { 0x1000, 0x1200, 0x1500 };
+auto matches = dragon::sigs::SignatureMatcher::matchEntries(
+        db, image, /*imageBase=*/0x1000, entries);
+for (const auto& m : matches)
+    std::cout << "0x" << std::hex << m.address << ": " << m.name
+              << " (len " << std::dec << m.length << ")\n";
+```
+
+Matching runs in order: the leading-byte pattern (wildcards always match), then
+a CRC16 of `crcLength` bytes immediately after it, then `totalLength` (when
+nonzero) gating that enough bytes are available. `SignatureMatcher::computeCRC16`
+exposes the CRC used (reflected CRC-16/ARC, polynomial `0xA001`, init `0xFFFF`,
+no final XOR).
+
+For direct access to the parser, `PatternParser`
+(`<dragon/sigs/PatternParser.hpp>`) parses the `.pat` text itself:
+
+```cpp
+#include <dragon/sigs/PatternParser.hpp>
+
+// A single line → std::optional<Signature> (nullopt for blanks, comments,
+// the `---` module separator, or under-length lines).
+auto sig = dragon::sigs::PatternParser::parseLine(
+        "558bec83ec..5356578b7d08 0a 1234 0042 :0000 _main");
+
+// Or a whole file → std::vector<Signature> (malformed lines skipped; empty
+// vector if the file can't be opened).
+auto sigs = dragon::sigs::PatternParser::parseFile("sigs/libc.pat");
+
+dragon::sigs::SignatureDB db;
+db.addSignatures(std::move(sigs));   // feed parsed signatures in directly
+```
+
+**Types** (`<dragon/sigs/Signature.hpp>`)
+
+| Type | Key fields | Meaning |
+|---|---|---|
+| `PatternByte` | `value`, `wildcard` | One leading-pattern byte, fixed or `..` wildcard |
+| `FunctionRef` | `offset`, `name` | A name at a byte offset inside the signature |
+| `Signature` | `leadingBytes`, `crc16`, `crcLength`, `totalLength`, `publicNames` | One parsed `.pat` line |
+| `SignatureMatch` | `address`, `name`, `length` | A successful match at an address |
+
+Scope: the text `.pat` format only — the proprietary binary `.sig` format is
+not supported. FLIRT's referenced-name cross-references and alternate-branch
+patterns are not implemented, so two signatures with identical leading bytes,
+CRC region and `totalLength` are indistinguishable to the matcher (rare in
+practice, since the CRC-verified region is highly discriminating).

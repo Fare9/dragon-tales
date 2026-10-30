@@ -55,14 +55,29 @@ dragon_disasm_t* dis = dragon_disasm_create(DRAGON_ARCH_RISCV64, config);
 dragon_config_destroy(config);
 ```
 
+### Diagnostic logging
+
+`dragon_config_set_logging` toggles the library's internal diagnostics to
+`stderr` (off by default); `dragon_config_logging` reads the current setting.
+
+```c
+dragon_config_set_logging(config, 1);        // enable
+int on = dragon_config_logging(config);       // query
+```
+
 **API reference**
 
 | Function | Description |
 |---|---|
+| `dragon_config_create(syntax, strategy)` | Create a config; destroy with `dragon_config_destroy` |
+| `dragon_config_syntax(c)` | Get the output syntax (`DRAGON_SYNTAX_INTEL` / `DRAGON_SYNTAX_ATT`) |
+| `dragon_config_strategy(c)` | Get the disassembly strategy |
 | `dragon_config_set_cpu(c, "cortex-a8")` | Set CPU name |
 | `dragon_config_cpu(c)` | Get current CPU name (`""` = generic) |
 | `dragon_config_set_features(c, "+v4t")` | Set feature string |
 | `dragon_config_features(c)` | Get current feature string |
+| `dragon_config_set_logging(c, enabled)` | Enable (`1`) or disable (`0`) diagnostics to `stderr` |
+| `dragon_config_logging(c)` | Get the current logging flag |
 
 ---
 
@@ -129,6 +144,36 @@ void print_bytes(const dragon_instruction_t* insn, void* user) {
 }
 ```
 
+### Instruction accessors
+
+A `dragon_instruction_t` is a borrowed pointer into the graph's listing — it
+needs no destroy and stays valid while the owning graph is alive. The
+mnemonic, operands, disassembly and pattern strings it returns are also
+borrowed (owned by the instruction); do not free them.
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_instruction_address(i)` | `uint64_t` | Machine address |
+| `dragon_instruction_size(i)` | `uint8_t` | Encoded length in bytes |
+| `dragon_instruction_mnemonic(i)` | `const char*` (borrowed) | E.g. `"mov"` |
+| `dragon_instruction_operands(i)` | `const char*` (borrowed) | Operand text only |
+| `dragon_instruction_disassembly(i)` | `const char*` (borrowed) | Full `mnemonic operands` text |
+| `dragon_instruction_pattern(i)` | `const char*` (borrowed) | Normalized pattern string |
+| `dragon_instruction_bytes(i, out_len)` | `const uint8_t*` (borrowed) | Raw encoded bytes |
+| `dragon_instruction_chromosome_mask(i, out_len)` | `const uint8_t*` (borrowed) | Per-byte "variable vs. fixed" mask used by signature matching |
+| `dragon_instruction_is_block_start(i)` | `int` (0/1) | Begins a basic block |
+| `dragon_instruction_is_function_start(i)` | `int` (0/1) | Begins a function |
+| `dragon_instruction_is_prologue(i)` | `int` (0/1) | Part of a recognized prologue |
+| `dragon_instruction_is_return(i)` | `int` (0/1) | A return |
+| `dragon_instruction_is_call(i)` | `int` (0/1) | A call |
+| `dragon_instruction_is_jump(i)` | `int` (0/1) | A branch |
+| `dragon_instruction_is_conditional(i)` | `int` (0/1) | A conditional branch |
+| `dragon_instruction_is_trap(i)` | `int` (0/1) | A trap/`int3`-style instruction |
+| `dragon_instruction_has_indirect_target(i)` | `int` (0/1) | Branches/calls through a register or memory |
+| `dragon_instruction_edges(i)` | `size_t` | Number of outgoing control-flow edges |
+| `dragon_instruction_each_branch(i, cb, user)` | — | Callback `(uint64_t addr, void* user)` per branch target |
+| `dragon_instruction_each_callee(i, cb, user)` | — | Callback `(uint64_t addr, void* user)` per call target |
+
 ### Recursive traversal
 
 ```c
@@ -137,6 +182,134 @@ dragon_config_t* config = dragon_config_create(DRAGON_SYNTAX_INTEL,
 dragon_disasm_t* dis = dragon_disasm_create(DRAGON_ARCH_X86_64, config);
 dragon_config_destroy(config);
 ```
+
+### Disassemble vs. analyze
+
+`dragon_disasm_disassemble` only decodes instructions. `dragon_disasm_analyze`
+decodes *and* runs architecture-specific analysis — basic-block and function
+discovery, plus IGNIL lifting — returning a fully populated graph. Use it
+whenever you need blocks, functions, or IGNIL blocks (the backward slicer and
+LLVM lifter both require it). Both take the same arguments and both return a
+graph the caller must destroy.
+
+```c
+dragon_graph_t* graph = dragon_disasm_analyze(dis, code, sizeof(code), 0x1000);
+// graph now has instructions, blocks, functions, and IGNIL blocks
+dragon_graph_destroy(graph);
+```
+
+---
+
+## Loader
+
+`dragon_loader_t` parses an ELF or PE/COFF image — from a file or from bytes
+already in memory — and exposes its sections, ELF `PT_LOAD` segments, symbols,
+entry point and image base, with the architecture auto-detected from the
+header. `dragon_loader_disassemble` goes straight from a loaded image to a
+populated graph without having to carve out a `.text` blob or name the
+architecture.
+
+Both constructors return `NULL` on failure; when `err` is non-NULL a
+NUL-terminated reason of at most `err_cap` bytes is written. The loader owns
+every name, section-bytes and segment-bytes pointer it hands out — all are
+borrowed and valid only while the loader is alive. Destroy it with
+`dragon_loader_destroy`.
+
+```c
+char err[256];
+dragon_loader_t* ld = dragon_load_file("a.out", err, sizeof(err));
+if (!ld) { fprintf(stderr, "load failed: %s\n", err); return 1; }
+
+printf("format=%d arch=%d 64-bit=%d image_base=0x%llx\n",
+       dragon_loader_format(ld), dragon_loader_architecture(ld),
+       dragon_loader_is_64bit(ld),
+       (unsigned long long)dragon_loader_image_base(ld));
+
+if (dragon_loader_has_entry(ld))
+    printf("entry=0x%llx\n", (unsigned long long)dragon_loader_entry(ld));
+
+// Sections (name borrowed; permission/placement out-params may be NULL)
+for (size_t i = 0; i < dragon_loader_section_count(ld); ++i) {
+    uint64_t addr, vsize; int r, w, x;
+    const char* name = dragon_loader_section(ld, i, &addr, &vsize, &r, &w, &x);
+    printf("  %-16s 0x%llx (%llu bytes) %c%c%c\n", name,
+           (unsigned long long)addr, (unsigned long long)vsize,
+           r ? 'r' : '-', w ? 'w' : '-', x ? 'x' : '-');
+}
+
+// Symbols
+for (size_t i = 0; i < dragon_loader_symbol_count(ld); ++i) {
+    uint64_t addr, size; dragon_symbol_kind_t kind; int imp, exp;
+    const char* name = dragon_loader_symbol(ld, i, &addr, &size, &kind, &imp, &exp);
+    printf("  %s @0x%llx kind=%d%s%s\n", name, (unsigned long long)addr,
+           kind, imp ? " [import]" : "", exp ? " [export]" : "");
+}
+
+// Straight to a populated graph (config may be NULL for defaults)
+dragon_graph_t* graph = dragon_loader_disassemble(ld, NULL);
+printf("%zu instructions\n", dragon_graph_size(graph));
+
+dragon_graph_destroy(graph);
+dragon_loader_destroy(ld);
+```
+
+### Sections vs. segments
+
+`dragon_loader_section_*` reports the section headers; `dragon_loader_segment_*`
+reports ELF `PT_LOAD` segments — what the system loader actually maps (named
+`"LOAD0"`, `"LOAD1"`, …), and the only layout left when a protector strips the
+section headers. The segment accessors follow the same conventions as the
+section accessors; PE images have no segments, so `dragon_loader_segment_count`
+returns 0 for them.
+
+```c
+for (size_t i = 0; i < dragon_loader_segment_count(ld); ++i) {
+    uint64_t addr, vsize; int r, w, x;
+    dragon_loader_segment(ld, i, &addr, &vsize, &r, &w, &x);
+
+    size_t len;
+    const uint8_t* bytes = dragon_loader_segment_bytes(ld, i, &len);
+    // ... bytes[0..len) are the segment's file contents (borrowed) ...
+}
+```
+
+### Reading the virtual address space
+
+`dragon_loader_read_virtual` copies up to `cap` bytes from the image's virtual
+address space into `out`, returning the number of bytes written — or 0 if the
+range `[addr, addr+cap)` is unmapped. Handy for following a pointer discovered
+during analysis without tracking which section it lands in.
+
+```c
+uint8_t buf[16];
+size_t n = dragon_loader_read_virtual(ld, 0x401000, buf, sizeof(buf));
+```
+
+**API summary**
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_load_file(path, err, err_cap)` | **owned** `dragon_loader_t*` | NULL on failure; reason written to `err` |
+| `dragon_load_bytes(bytes, len, err, err_cap)` | **owned** `dragon_loader_t*` | Loads an image already in memory |
+| `dragon_loader_destroy(l)` | — | |
+| `dragon_loader_format(l)` | `dragon_format_t` | `UNKNOWN` / `ELF` / `PE` |
+| `dragon_loader_architecture(l)` | `dragon_architecture_t` | Detected from the header |
+| `dragon_loader_is_64bit(l)` | `int` (0/1) | |
+| `dragon_loader_has_entry(l)` / `dragon_loader_entry(l)` | `int` / `uint64_t` | `entry` is valid only when `has_entry` is 1 |
+| `dragon_loader_image_base(l)` | `uint64_t` | |
+| `dragon_loader_section_count(l)` | `size_t` | |
+| `dragon_loader_section(l, i, out_addr, out_vsize, out_r, out_w, out_x)` | `const char*` (borrowed) | NULL for an out-of-range index; out-params may be NULL |
+| `dragon_loader_section_bytes(l, i, out_len)` | `const uint8_t*` (borrowed) | File bytes of the section |
+| `dragon_loader_segment_count(l)` | `size_t` | 0 for PE |
+| `dragon_loader_segment(l, i, out_addr, out_vsize, out_r, out_w, out_x)` | `const char*` (borrowed) | ELF `PT_LOAD` segments (`"LOAD0"`, …) |
+| `dragon_loader_segment_bytes(l, i, out_len)` | `const uint8_t*` (borrowed) | File bytes of the segment |
+| `dragon_loader_symbol_count(l)` | `size_t` | |
+| `dragon_loader_symbol(l, i, out_addr, out_size, out_kind, out_imported, out_exported)` | `const char*` (borrowed) | NULL for an out-of-range index; out-params may be NULL |
+| `dragon_loader_read_virtual(l, addr, out, cap)` | `size_t` | Bytes written, or 0 if unmapped |
+| `dragon_loader_disassemble(l, config)` | **owned** `dragon_graph_t*` | Disassembles every executable section; `config` may be NULL |
+
+`dragon_symbol_kind_t` is `DRAGON_SYMBOL_UNKNOWN`, `_FUNCTION`, `_OBJECT`,
+`_SECTION` or `_FILE`.
 
 ---
 
@@ -171,6 +344,59 @@ if (dragon_function_valid(fn)) {
 }
 dragon_function_destroy(fn);
 ```
+
+`dragon_graph_get_instruction` and `dragon_graph_get_ignil_block` return
+borrowed pointers (no destroy, valid while the graph lives), whereas
+`dragon_graph_get_block` and `dragon_graph_get_function` return heap-allocated
+views the caller must destroy with `dragon_block_destroy` /
+`dragon_function_destroy`.
+
+An empty graph can also be created directly with `dragon_graph_create(arch)` —
+useful as a container the trace lifter or other producers fill in — and must
+be destroyed the same way.
+
+**Graph API summary**
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_graph_create(arch)` | **owned** `dragon_graph_t*` | Empty graph for `arch` |
+| `dragon_graph_destroy(g)` | — | |
+| `dragon_graph_size(g)` | `size_t` | Instruction count |
+| `dragon_graph_empty(g)` | `int` (0/1) | |
+| `dragon_graph_get_instruction(g, addr)` | `const dragon_instruction_t*` (borrowed) | NULL if none at `addr` |
+| `dragon_graph_get_block(g, addr)` | **owned** `dragon_block_t*` | Destroy with `dragon_block_destroy` |
+| `dragon_graph_get_function(g, addr)` | **owned** `dragon_function_t*` | Destroy with `dragon_function_destroy` |
+| `dragon_graph_get_ignil_block(g, addr)` | `const dragon_ignil_block_t*` (borrowed) | NULL if none at `addr` |
+| `dragon_graph_each_instruction(g, cb, user)` | — | Callback `(const dragon_instruction_t*, void*)` |
+| `dragon_graph_each_block_address(g, cb, user)` | — | Callback `(uint64_t addr, void*)` |
+| `dragon_graph_each_function_address(g, cb, user)` | — | Callback `(uint64_t addr, void*)` |
+
+**BasicBlock API summary**
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_block_destroy(b)` | — | |
+| `dragon_block_valid(b)` | `int` (0/1) | |
+| `dragon_block_start_address(b)` | `uint64_t` | |
+| `dragon_block_terminator_address(b)` | `uint64_t` | Address of the block's last instruction |
+| `dragon_block_size(b)` | `size_t` | Instruction count |
+| `dragon_block_byte_size(b)` | `size_t` | Size in bytes |
+| `dragon_block_each_instruction(b, cb, user)` | — | Callback `(const dragon_instruction_t*, void*)` |
+| `dragon_block_each_successor(b, cb, user)` | — | Callback `(uint64_t addr, void*)` |
+
+**Function API summary**
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_function_destroy(f)` | — | |
+| `dragon_function_valid(f)` | `int` (0/1) | |
+| `dragon_function_start_address(f)` | `uint64_t` | |
+| `dragon_function_num_blocks(f)` | `size_t` | |
+| `dragon_function_num_instructions(f)` | `size_t` | |
+| `dragon_function_edges(f)` | `size_t` | CFG edge count |
+| `dragon_function_byte_size(f)` | `size_t` | |
+| `dragon_function_cyclomatic_complexity(f)` | `size_t` | |
+| `dragon_function_each_block(f, cb, user)` | — | Callback `(const dragon_block_t*, void*)` |
 
 ---
 
@@ -329,6 +555,78 @@ dragon_ignil_block_destroy(block);
 | Function | Returns | Notes |
 |---|---|---|
 | `dragon_ignil_simplify_block(b, max_iterations, out_folded, out_identities, out_removed, out_iterations)` | **owned** `dragon_ignil_block_t*` | Every `out_*` pointer may be NULL; `max_iterations = 0` selects the default (8) |
+
+### Unlifted instructions
+
+A block is a faithful account of the code only if the lifter had semantics for
+every instruction in it. `dragon_ignil_block_unlifted` reports the machine
+addresses of the instructions it did not: their register and flag results are
+`UNDEF`, but an `UNDEF` that later dies is invisible and a memory-only effect
+leaves no op at all, so a consumer that needs completeness must check this
+list. It writes at most `cap` addresses to `out` (which may be NULL when `cap`
+is 0) and returns the full count — call it once with `cap == 0` to size the
+array.
+
+```c
+size_t n = dragon_ignil_block_unlifted(ib, NULL, 0);
+if (n) {
+    uint64_t* addrs = malloc(n * sizeof(uint64_t));
+    dragon_ignil_block_unlifted(ib, addrs, n);
+    for (size_t i = 0; i < n; ++i)
+        printf("unlifted @0x%llx\n", (unsigned long long)addrs[i]);
+    free(addrs);
+}
+```
+
+### Dead-store elimination
+
+`dragon_ignil_dead_store_eliminate` removes dead register and flag stores by
+byte-precise backward liveness: a value written to a register that is
+overwritten before it is ever read, and is not live on exit, carries no
+information, so the op producing it is dropped. Overlapping sub-registers alias
+correctly (writing `AX` kills `AL` and `AH` but leaves the rest of `RAX`
+live). Unlike `dragon_ignil_simplify_block` this *does* remove `Reg`-defining
+ops — which is what collapses VM-protector junk — and a machine instruction
+whose only live effect was the removed write disappears entirely. Side-effecting
+ops (`STORE`/`CALL`/`JMP`/`CJMP`/`RET`) are never removed, and a store is
+dropped only when every byte it clobbers is dead.
+
+`arch` selects the register file used to resolve which bytes a 32-bit write
+zero-extends over — pass the architecture the block was lifted for. `live_out`
+names the registers observable after the block:
+
+- `NULL` (with `live_out_count` 0) means "assume everything is live on exit":
+  a store is removed only when provably overwritten within this block before
+  any read, which needs no ABI knowledge and is always safe.
+- a non-NULL array means precisely those registers are live out, enabling more
+  aggressive elimination (e.g. a `RET`-terminated block whose live-out is the
+  ABI return register plus the callee-saved set). Correctness then rests on the
+  caller supplying a sound live-out set.
+
+```c
+// Everything live on exit — always safe, no ABI knowledge needed.
+size_t removed;
+dragon_ignil_block_t* lean = dragon_ignil_dead_store_eliminate(
+    ib, DRAGON_ARCH_X86_64, NULL, 0, &removed);
+
+// Or: only RAX (offset 0, width 64) is live out.
+dragon_ignil_reg_t live_out[] = { { 0, 64 } };
+dragon_ignil_block_t* leaner = dragon_ignil_dead_store_eliminate(
+    ib, DRAGON_ARCH_X86_64, live_out, 1, &removed);
+
+dragon_ignil_block_destroy(lean);
+dragon_ignil_block_destroy(leaner);
+```
+
+`dragon_ignil_reg_t` names one register in the IGNIL register address space —
+`offset` is its byte position, `width` its bit width — the same convention the
+backward slicer uses (`RAX` is `{0, 64}`, `EAX` `{0, 32}`, `AL` `{0, 8}`,
+`AH` `{1, 8}`).
+
+| Function | Returns | Notes |
+|---|---|---|
+| `dragon_ignil_block_unlifted(b, out, cap)` | `size_t` | Full count; writes at most `cap` addresses (`out` may be NULL when `cap` is 0) |
+| `dragon_ignil_dead_store_eliminate(b, arch, live_out, live_out_count, out_ops_removed)` | **owned** `dragon_ignil_block_t*` | `live_out` NULL means "all live"; `out_ops_removed` may be NULL |
 
 ---
 
@@ -612,6 +910,104 @@ opts.stop_at_terminator = -1;      // trace mode: step over interior jumps
 dragon_symexec_t* ex = dragon_symexec_create(&opts);
 ```
 
+### Writing values back and reading them concretely
+
+`dragon_symexec_set_register` / `dragon_symexec_map_memory` seed *host
+integers* / *concrete blobs*. To write an *expression* into the machine
+state — the output of a previous computation, say — use
+`dragon_symexec_write_register` and `dragon_symexec_write_memory` (the memory
+form stores little-endian, as many bytes as the expression is wide).
+
+For the reverse — pulling a value back out when you expect it to be
+concrete — `dragon_symexec_concrete_register` and
+`dragon_symexec_concrete_memory` are the cheap form of read-then-evaluate: no
+expression handle, no solver. Each returns 1 and writes `*out` when the value
+is a literal of at most 64 bits, and 0 (leaving `*out` alone) when it is
+symbolic or wider.
+
+```c
+uint64_t rax;
+if (dragon_symexec_concrete_register(ex, /*RAX*/ 0, 64, &rax))
+    printf("RAX = 0x%llx\n", (unsigned long long)rax);
+```
+
+### Fresh-variable tags and concrete opaques
+
+When a run meets a load it cannot resolve it invents a fresh variable named
+after the op's address and position, so running one block in two contexts
+hands out the same names. `dragon_symexec_set_fresh_tag` appends a per-context
+suffix that keeps them apart (NULL or `""` restores the untagged names).
+
+`dragon_symexec_set_concrete_opaque` makes an `OPAQUE` op (`CPUID`=0,
+`RDTSC`=1, `RDTSCP`=2) return fixed `results` instead of a symbol, so a
+concolic trace stays concrete through an anti-tamper `CPUID`. `selector`
+identifies the invocation from its operands — for `CPUID` it is
+`(leaf << 32) | (subleaf & 0xffffffff)`, for `RDTSC`/`RDTSCP` it is 0 — and
+`results` are the per-result-index values (for `CPUID`: `EAX`, `EBX`, `ECX`,
+`EDX`). Only matching ops are concretised; everything else keeps the default
+symbolic behaviour.
+
+```c
+uint64_t cpuid1[] = { 0x000306c3, 0, 0x7ffafbbf, 0xbfebfbff };
+dragon_symexec_set_concrete_opaque(ex, /*CPUID*/ 0, /*leaf 1*/ 1ull << 32,
+                                   cpuid1, 4);
+```
+
+### Snapshots and merging
+
+Copying the machine state is far cheaper than rebuilding it, so an analysis
+that runs many blocks from the same seeded start should seed once, snapshot,
+and restore before each block rather than create a fresh executor every time.
+`dragon_symexec_snapshot` returns an owned `dragon_symstate_t` (which keeps its
+executor alive by itself, exactly as an expression handle does);
+`dragon_symexec_restore` replaces the executor's state wholesale from a
+snapshot taken on that same executor.
+
+```c
+dragon_symstate_t* base = dragon_symexec_snapshot(ex);
+// ... run a block, inspect ...
+dragon_symexec_restore(ex, base);   // back to the seeded start
+dragon_symstate_destroy(base);
+```
+
+`dragon_symstate_merge` joins one snapshot into another: every register or
+memory byte the two disagree on becomes, in the target, a fresh variable named
+after a tag, and the call returns those symbolised locations as a diff list
+(see below). An empty result means the incoming state added nothing — the
+fixed-point test of a worklist exploration. Both snapshots must come from the
+same executor.
+
+### Diffing state
+
+`dragon_symexec_diff` reports everything whose value differs from an earlier
+snapshot, coalesced into the widest runs that came from one written value — the
+batch form of reading every candidate location back and comparing. Each entry
+is a register (`kind == 0`, `key` is an IGNIL register-space byte offset) or a
+memory location (`kind == 1`, `key` is an address), with the run's `width` in
+bits; `dragon_symdiff_value` hands back an owned expression handle for it.
+
+```c
+dragon_symstate_t* before = dragon_symexec_snapshot(ex);
+dragon_symexec_run(ex, block);
+
+dragon_symdiff_t* d = dragon_symexec_diff(ex, before);
+for (size_t i = 0; i < dragon_symdiff_count(d); ++i) {
+    int kind; uint64_t key; uint8_t width;
+    dragon_symdiff_entry(d, i, &kind, &key, &width);
+    dragon_symexpr_t* val = dragon_symdiff_value(d, i);
+    char* s = dragon_symexpr_to_string(val);
+    printf("%s %llu (%u bits) = %s\n", kind ? "mem" : "reg",
+           (unsigned long long)key, width, s);
+    dragon_cstr_free(s);
+    dragon_symexpr_destroy(val);
+}
+dragon_symdiff_destroy(d);
+dragon_symstate_destroy(before);
+```
+
+`dragon_symstate_merge` returns the same `dragon_symdiff_t` type; destroy it
+with `dragon_symdiff_destroy` either way.
+
 ### Building expressions
 
 There is no way to pass a Z3 expression across a C boundary, so the shim
@@ -636,6 +1032,22 @@ Operators `DRAGON_SYMOP_ADD` … `DRAGON_SYMOP_XOR` take and return bitvectors;
 (`ULT`/`ULE`/`UGT`/`UGE` unsigned, `SLT`/`SLE`/`SGT`/`SGE` signed);
 `DRAGON_SYMOP_BOOL_AND`/`BOOL_OR`/`IMPLIES` take and return booleans.
 `dragon_symexpr_not` is boolean negation.
+
+Beyond `dragon_symexpr_to_string`, an expression can be inspected without the
+solver: `dragon_symexpr_width` gives a bitvector's width in bits (0 for a
+boolean), `dragon_symexpr_is_bool` distinguishes the two, and
+`dragon_symexpr_as_u64` writes `*out` and returns 1 when the expression folds
+to a literal of at most 64 bits (the cheap "is this already constant?" check,
+no solver query). `dragon_symexpr_to_smt2` renders a complete, self-contained
+SMT-LIB 2 script — declarations included — that another Z3 binding can parse
+back without being told what the free variables are; free it with
+`dragon_cstr_free`.
+
+```c
+uint64_t v;
+if (dragon_symexpr_as_u64(rax, &v))
+    printf("already concrete: 0x%llx\n", (unsigned long long)v);
+```
 
 ### Solver queries
 
@@ -715,6 +1127,45 @@ for (size_t i = 0; i < dragon_symrun_warning_count(run); ++i) {
 really is the complete set of reachable addresses. Otherwise the warnings say
 what had to be left open.
 
+`dragon_symrun_stats` reports how much work the run did — ops executed, solver
+queries issued, and addresses concretized — through three `size_t` out-params,
+any of which may be NULL.
+
+`dragon_symrun_status` returns a `dragon_symexec_status_t`
+(`DRAGON_SYMEXEC_OK`, `_MALFORMED_OP`, `_UNSUPPORTED_OP`, `_SOLVER_FAILURE`)
+and `dragon_symrun_exit` a `dragon_symexec_exit_t` describing how the block
+left off (`DRAGON_SYMEXIT_FALLTHROUGH`, `_JUMP`, `_CONDITIONAL_JUMP`, `_CALL`,
+`_RETURN`, `_ERROR`). `dragon_symrun_error` returns NULL on success, otherwise
+a heap string to free with `dragon_cstr_free`.
+
+### Unresolved accesses
+
+When a `LOAD` or `STORE` has an address with too many satisfying values to
+expand, the run leaves it open: the `LOAD` produces a fresh variable and the
+`STORE` is dropped, each with a warning. A caller rebuilding code from the run
+needs the access itself, which `dragon_symrun_unresolved_*` provides. Each
+entry reports whether it is a store, the machine address of the op, and the
+access width, plus owned expression handles for the address and for the value
+stored (or the variable standing in for the value loaded).
+
+```c
+for (size_t i = 0; i < dragon_symrun_unresolved_count(run); ++i) {
+    int is_store; uint64_t op_addr; uint8_t width;
+    dragon_symrun_unresolved(run, i, &is_store, &op_addr, &width);
+
+    dragon_symexpr_t* addr = dragon_symrun_unresolved_address(run, i);
+    dragon_symexpr_t* val  = dragon_symrun_unresolved_value(run, i);
+    char* as = dragon_symexpr_to_string(addr);
+    char* vs = dragon_symexpr_to_string(val);
+    printf("%s @0x%llx (%u bits): [%s] %s %s\n",
+           is_store ? "store" : "load", (unsigned long long)op_addr, width,
+           as, is_store ? "<-" : "->", vs);
+    dragon_cstr_free(as); dragon_cstr_free(vs);
+    dragon_symexpr_destroy(addr);
+    dragon_symexpr_destroy(val);
+}
+```
+
 ### API summary
 
 | Function | Description |
@@ -724,14 +1175,23 @@ what had to be left open.
 | `dragon_symexec_symbolize_register(e, off, width, name)` | Bind it to a fresh variable |
 | `dragon_symexec_map_memory(e, addr, data, len)` | Map a concrete blob |
 | `dragon_symexec_symbolize_memory(e, addr, size, name)` | Per-byte variables for a region |
+| `dragon_symexec_write_register/write_memory(e, …, x)` | Write an expression into the state |
+| `dragon_symexec_concrete_register/concrete_memory(e, …, out)` | Cheap literal read (1 if concrete) |
 | `dragon_symexec_assume(e, cond)` | Constrain the rest of the run |
+| `dragon_symexec_set_fresh_tag(e, tag)` | Suffix for unresolved-load variable names |
+| `dragon_symexec_set_concrete_opaque(e, kind, selector, results, n)` | Fixed result for a `CPUID`/`RDTSC` op |
+| `dragon_symexec_snapshot(e)` / `dragon_symexec_restore(e, s)` | Save/restore machine state |
+| `dragon_symstate_merge(into, incoming, tag)` / `dragon_symstate_destroy` | Join states; destroy a snapshot |
+| `dragon_symexec_diff(e, before)` | Locations changed since a snapshot |
+| `dragon_symdiff_count/entry/value/destroy` | Read a diff list |
 | `dragon_symexec_const/read_register/read_memory` | Leaf expressions |
 | `dragon_symexpr_binop(op, a, b)` / `_not(a)` | Build expressions; NULL on a sort mismatch |
-| `dragon_symexpr_to_string/width/is_bool/destroy` | Inspect and free an expression |
+| `dragon_symexpr_to_string/to_smt2/width/is_bool/as_u64/destroy` | Inspect and free an expression |
 | `dragon_symexec_run(e, block)` | Execute a block; state persists |
 | `dragon_symrun_status/exit/complete/error/stats` | What the run did |
 | `dragon_symrun_successor_count/successor/successor_condition` | Reachable addresses |
-| `dragon_symrun_warning_count/warning` | What was left unresolved |
+| `dragon_symrun_unresolved_count/unresolved/unresolved_address/unresolved_value` | Loads/stores left open |
+| `dragon_symrun_warning_count/warning` / `dragon_symrun_destroy` | Warnings; free the run |
 | `dragon_symexec_proves/is_satisfiable` | Tri-state: 1 yes, 0 no, -1 unknown |
 | `dragon_symexec_evaluate(e, x, out)` | Value, only if forced to exactly one |
 | `dragon_symexec_enumerate(e, x, out, max, exhaustive)` | Distinct satisfying values |
