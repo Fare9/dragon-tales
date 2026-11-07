@@ -2231,6 +2231,27 @@ TEST_CASE("IGNIL lifting - i386 xor [mem], reg (XOR32mr)", "[ignil][x86_32]") {
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
 }
 
+TEST_CASE("IGNIL lifting - i386 xor byte [mem], imm (XOR8mi)",
+          "[ignil][x86_32]") {
+  // xor byte [eax], 0x9f; ret
+  const std::vector<std::uint8_t> bytes = {0x80, 0x30, 0x9f, 0xc3};
+  auto dis = makeDisassembler(dragon::Architecture::X86_32);
+  auto g = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  REQUIRE(ib->unlifted().empty());
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::XOR));
+  REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::STORE));
+  const auto &ops = ib->ops();
+  auto loadIt = std::find_if(ops.begin(), ops.end(), [](const auto &op) {
+    return op.opcode == dragon::ignil::Opcode::LOAD;
+  });
+  REQUIRE(loadIt != ops.end());
+  REQUIRE(dragon::ignil::widthOf(*loadIt->dst) == 8);
+}
+
 TEST_CASE("IGNIL lifting - i386 and [mem], reg (AND32mr)", "[ignil][x86_32]") {
   // and dword [edx], eax; ret
   const std::vector<std::uint8_t> bytes = {0x21, 0x02, 0xc3};

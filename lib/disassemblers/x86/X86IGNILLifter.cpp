@@ -147,6 +147,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"XOR32rm", &X86IGNILLifter::opXor32rm_},
           {"XOR32mi", &X86IGNILLifter::opXor32mi_},
           {"XOR32mr", &X86IGNILLifter::opXor32mr_},
+          {"XOR8mi", &X86IGNILLifter::opXor8mi_},
           {"AND64rr", &X86IGNILLifter::opAnd64rr_},
           {"AND32rr", &X86IGNILLifter::opAnd32rr_},
           {"AND64ri32", &X86IGNILLifter::opAnd64ri_},
@@ -904,9 +905,11 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opXor32rm_)
     liftLogicRegMem(*mc, addr, out, tempId, ignil::Opcode::XOR);
   else if (opc == opXor32mi_ || opc == opXor32mr_)
-    liftLogicMem(*mc, addr, out, tempId, ignil::Opcode::XOR);
+    liftLogicMem(*mc, addr, out, tempId, ignil::Opcode::XOR, 32);
+  else if (opc == opXor8mi_)
+    liftLogicMem(*mc, addr, out, tempId, ignil::Opcode::XOR, 8);
   else if (opc == opAnd32mr_)
-    liftLogicMem(*mc, addr, out, tempId, ignil::Opcode::AND);
+    liftLogicMem(*mc, addr, out, tempId, ignil::Opcode::AND, 32);
   else if (opc == opXor64rr_ || opc == opXor32rr_ || opc == opXor64ri_ ||
            opc == opXor32ri_ || opc == opXor64ri8_ || opc == opXor32ri8_)
     liftXor(*mc, addr, out, tempId);
@@ -1484,17 +1487,14 @@ void dragon::x86::X86IGNILLifter::liftLogicRegMem(const llvm::MCInst &mc,
                  });
 }
 
-void dragon::x86::X86IGNILLifter::liftLogicMem(const llvm::MCInst &mc,
-                                               std::uint64_t addr,
-                                               ignil::Block &out,
-                                               std::uint32_t &tmp,
-                                               ignil::Opcode op) const {
+void dragon::x86::X86IGNILLifter::liftLogicMem(
+        const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+        std::uint32_t &tmp, ignil::Opcode op, ignil::Width opWidth) const {
   // RMW: op[0..4]=mem, op[5]=reg-or-imm rhs.
   const ignil::Width ptrWidth =
           (architecture_ == Architecture::X86_64) ? 64 : 32;
 
   ignil::Value rhs;
-  ignil::Width opWidth = 32; // only 32-bit immediate forms are registered
   const auto &srcOp = mc.getOperand(5);
   if (srcOp.isImm()) {
     rhs = ignil::Const{static_cast<std::uint64_t>(srcOp.getImm()), opWidth};
@@ -1504,8 +1504,6 @@ void dragon::x86::X86IGNILLifter::liftLogicMem(const llvm::MCInst &mc,
       logger_.log("Error liftLogicMem in addr {:#x} no src", addr);
       return;
     }
-    // The register is as wide as the memory operand.
-    opWidth = srcReg->width;
     rhs = *srcReg;
   }
 
